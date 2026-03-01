@@ -178,7 +178,7 @@ def activated_delete_ducts(self):
 
 
 #=================================================
-# D. Commands
+# C. Commands
 #=================================================
 
 if FreeCAD.GuiUp:
