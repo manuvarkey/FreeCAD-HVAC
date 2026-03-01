@@ -1,0 +1,93 @@
+<?xml
+    version = '1.0'
+    encoding = 'UTF-8'
+    standalone = 'no'
+?>
+<package
+    format = '1'
+    xmlns = 'https://wiki.freecad.org/Package_Metadata'
+>
+
+    <!--[ Versions ]―――――――――――――――――――――――――――――――――――――――――――――――――――――――――-->
+
+    <freecadmin>1.0.0</freecadmin>
+    <version>2026.02.28</version>
+    <date>2026.02.28</date>
+
+    <!--[ Dependencies - Python ]――――――――――――――――――――――――――――――――――――――――――――-->
+
+
+
+    <!--[ Dependencies - Addons ]――――――――――――――――――――――――――――――――――――――――――――-->
+
+
+
+    <!--[ Info ]―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――-->
+
+    <description>Workbench to design HVAC Ducts.</description>
+    <name>Solar</name>
+
+    <!--[ Tags ]―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――-->
+
+    <tag>Design</tag>
+    <tag>HVAC</tag>
+    <tag>Dimensioning</tag>
+
+    <!--[ Maintainers ]――――――――――――――――――――――――――――――――――――――――――――――――――――――-->
+
+    <maintainer
+        email = 'fco.rosa@yahoo.com.br'
+    >Francisco Rosa
+        email = ''
+    >Manu Varkey
+    </maintainer>
+
+    <!--[ Authors ]――――――――――――――――――――――――――――――――――――――――――――――――――――――――――-->
+
+    <author
+        email = 'fco.rosa@yahoo.com.br'
+    >Francisco Rosa</author>
+
+    <!--[ Licenses ]―――――――――――――――――――――――――――――――――――――――――――――――――――――――――-->
+
+    <license
+        file = 'LICENSE'
+    >LGPL-2.1-or-later</license>
+
+    <!--[ Icon ]―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――-->
+
+    <icon>freecad/HVAC/icons/Logo.svg</icon>
+
+    <!--[ Urls ]―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――-->
+
+    <url
+        type = 'documentation'
+    >https://github.com/Francisco-Rosa/HVAC/Documentation</url>
+
+    <url
+        type = 'discussion'
+    >https://forum.freecad.org/viewtopic.php?t=102900</url>
+
+    <url
+        branch = 'main'
+        type = 'repository'
+    >https://github.com/Francisco-Rosa/HVAC</url>
+
+    <url
+        type = 'bugtracker'
+    >https://github.com/Francisco-Rosa/HVAC/issues</url>
+
+    <url
+        type = 'readme'
+    >https://github.com/Francisco-Rosa/HVAC/blob/main/Resources/Documents/Overview.md</url>
+
+    <!--[ Content ]――――――――――――――――――――――――――――――――――――――――――――――――――――――――――-->
+
+    <content>
+        <workbench>
+            <subdirectory>.</subdirectory>
+            <classname>HVAC</classname>
+        </workbench>
+    </content>
+
+</package>
