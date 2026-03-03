@@ -48,30 +48,32 @@ class HVAC(Gui.Workbench):
         It is executed once in a FreeCAD session followed by the Activated function.
         """
         # import here all the needed files that create your FreeCAD commands
-        import freecad.HVAC.Ducts
+        import freecad.HVAC.DuctNetwork
 
-        self.toolbar_commands = ['CreateDucts',
-                                'ModifyDucts',
-                                'DeleteDucts',
+        self.toolbar_commands = ['HVAC_CreateDuctNetwork',
+                                'HVAC_ModifyDuctNetwork',
+                                "Separator",
+                                'HVAC_DeleteDuctNetwork',
                                 ]
 
-        self.submenu_commands = ['CreateDucts',
-                                 'ModifyDucts',
-                                 'DeleteDucts',
-                                 ]
+        self.submenu_commands = ['HVAC_CreateDuctNetwork',
+                                'HVAC_ModifyDuctNetwork',
+                                "Separator",
+                                'HVAC_DeleteDuctNetwork',
+                                ]
 
-        self.contextmenu_commands = ['CreateDucts',
-                                    'ModifyDucts',
-                                    'DeleteDucts',
-                                    ]
+        self.contextmenu_commands = ['HVAC_CreateDuctNetwork',
+                                'HVAC_ModifyDuctNetwork',
+                                "Separator",
+                                'HVAC_DeleteDuctNetwork',
+                                ]
 
-        self.appendMenu(QT_TRANSLATE_NOOP("Workbench", "HVAC tools"), self.submenu_commands)
-        self.appendToolbar(QT_TRANSLATE_NOOP("Workbench", "HVAC tools"), self.toolbar_commands)
+        self.appendMenu(QT_TRANSLATE_NOOP("Workbench", "HVAC"), self.submenu_commands)
+        self.appendToolbar(QT_TRANSLATE_NOOP("Workbench", "HVAC"), self.toolbar_commands)
 
     def Activated(self):
         """This function is executed whenever the workbench is activated"""
-        FreeCAD.Console.PrintMessage(translate(
-                                     "InitGui","HVAC Workbench loaded") + "\n")
+        FreeCAD.Console.PrintMessage(translate("InitGui","HVAC Workbench loaded") + "\n")
         return
 
     def Deactivated(self):
@@ -80,7 +82,7 @@ class HVAC(Gui.Workbench):
 
     def ContextMenu(self, recipient):
         """This function is executed whenever the user right-clicks on screen"""
-        self.appendContextMenu(QT_TRANSLATE_NOOP("Workbench", "HVAC tools"), self.toolbar_commands)
+        self.appendContextMenu(QT_TRANSLATE_NOOP("Workbench", "HVAC"), self.toolbar_commands)
 
     def GetClassName(self):
         # This function is mandatory if this is a full Python workbench

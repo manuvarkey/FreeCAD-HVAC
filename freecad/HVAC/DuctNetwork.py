@@ -21,12 +21,12 @@
 #                                                                              #
 ################################################################################
 
-"""This module implements HVAC duct design."""
+"""This module implements HVAC duct description classes."""
 
-import os
 import FreeCAD
 import FreeCADGui as Gui
-import freecad.HVAC.DuctsDialog as DuctsDialog
+import freecad.HVAC.DuctNetworkConfigDialog as DuctNetworkConfigDialog
+import freecad.HVAC.hvaclib as hvaclib
 
 from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
@@ -35,11 +35,11 @@ translate = FreeCAD.Qt.translate
 # A. Main classes
 #=================================================
 
-class Ducts:
+class DuctNetwork:
 
-    """Visualize and configure HVAC ducts in FreeCAD's 3D view."""
+    """Visualize and configure HVAC duct network in FreeCAD's 3D view."""
 
-    def __init__(self,obj):
+    def __init__(self, obj):
         obj.Proxy = self
         self.setProperties(obj)
 
@@ -48,30 +48,33 @@ class Ducts:
         pass
 
 
-class DuctsViewProvider:
+class DuctNetworkViewProvider:
 
-    """A View Provider for the HVAC ducts object"""
+    """A View Provider for the HVAC duct network object"""
 
     def __init__(self, obj):
         obj.Proxy = self
 
     def getIcon(self):
-        __dir__ = os.path.dirname(__file__)
-        return __dir__ + '/icons/DuctsIcon.svg'
+        return hvaclib.get_icon_path("DuctsIcon.svg")
 
 
-class CreateDucts:
+#=================================================
+# A. Command classes
+#=================================================
 
-    """Create HVAC ducts."""
+
+class CommandCreateDuctNetwork:
+
+    """Create HVAC Duct Network."""
 
     def QT_TRANSLATE_NOOP(self, text):
         return text
 
     def GetResources(self):
-        __dir__ = os.path.dirname(__file__)
-        return {'Pixmap': __dir__ + '/icons/CreateDuctsIcon.svg',
-                'MenuText': QT_TRANSLATE_NOOP('CreateDucts', 'Create HVAC ducts'),
-                'ToolTip': QT_TRANSLATE_NOOP('CreateDucts', 'Instructions')}
+        return {'Pixmap': hvaclib.get_icon_path("CreateDuctsIcon.svg"),
+                'MenuText': QT_TRANSLATE_NOOP('HVAC_CreateDuctNetwork', 'Create HVAC Duct Network'),
+                'ToolTip': QT_TRANSLATE_NOOP('HVAC_CreateDuctNetwork', 'Create HVAC Duct Network from Sketch/ Line base Geometries')}
 
     def IsActive(self):
         if Gui.ActiveDocument:
@@ -80,26 +83,25 @@ class CreateDucts:
             return False
 
     def Activated(self):
-        activated_create_ducts(self)
+        create_new_duct_network()
 
 
-class ModifyDucts:
+class CommandModifyDuctNetwork:
 
-    """Modify HVAC ducts."""
+    """Modify HVAC Duct Network."""
 
     def QT_TRANSLATE_NOOP(self, text):
         return text
 
     def GetResources(self):
-        __dir__ = os.path.dirname(__file__)
-        return {'Pixmap': __dir__ + '/icons/ModifyDuctsIcon.svg',
-                'MenuText': QT_TRANSLATE_NOOP('ModifyDucts', 'Modify HVAC ducts'),
-                'ToolTip': QT_TRANSLATE_NOOP('ModifyDucts',  'Instructions')}
+        return {'Pixmap': hvaclib.get_icon_path("ModifyDuctsIcon.svg"),
+                'MenuText': QT_TRANSLATE_NOOP('HVAC_ModifyDuctNetwork', 'Modify HVAC Duct Network'),
+                'ToolTip': QT_TRANSLATE_NOOP('HVAC_ModifyDuctNetwork',  'Modify the selected HVAC Duct Network')}
 
     def IsActive(self):
         if Gui.ActiveDocument:
             try:
-                FreeCAD.ActiveDocument.findObjects(Name = "Ducts")[0].Name
+                FreeCAD.ActiveDocument.findObjects(Name = "DuctNetwork")[0].Name
                 return True
             except:
                 pass
@@ -107,25 +109,25 @@ class ModifyDucts:
             return False
 
     def Activated(self):
-        activated_modify_ducts(self)
+        modify_duct_network()
 
-class DeleteDucts:
 
-    """Delete a selected Sun Analysis."""
+class CommandDeleteDuctNetwork:
+
+    """Delete a selected HVAC Duct Network."""
 
     def QT_TRANSLATE_NOOP(self, text):
         return text
 
     def GetResources(self):
-        __dir__ = os.path.dirname(__file__)
-        return {'Pixmap': __dir__ + '/icons/DeleteDuctsIcon.svg',
+        return {'Pixmap': hvaclib.get_icon_path("DeleteDuctsIcon.svg"),
                 'MenuText': QT_TRANSLATE_NOOP('DeleteDucts', 'Delete HVAC ducts'),
                 'ToolTip': QT_TRANSLATE_NOOP('DeleteDucts', 'Instructions')}
 
     def IsActive(self):
         if Gui.ActiveDocument:
             try:
-                FreeCAD.ActiveDocument.findObjects(Name = "Ducts")[0].Name
+                FreeCAD.ActiveDocument.findObjects(Name = "DuctNetwork")[0].Name
                 return True
             except:
                 pass
@@ -133,39 +135,42 @@ class DeleteDucts:
             return False
 
     def Activated(self):
-        activated_delete_ducts(self)
+        delete_duct_network()
 
-def activated_create_ducts(self):
-    """Create the Ducts"""
+
+#=================================================
+# C. General functions
+#=================================================
+
+
+def create_new_duct_network():
+    """Create new duct network"""
+    # Create new duct netowork and create default folders
     folder = FreeCAD.ActiveDocument.addObject(
              'App::DocumentObjectGroupPython',
-             'Ducts')
-    Ducts(folder)
-    DuctsViewProvider(folder.ViewObject)
-    print("Ducts created!")
-    DuctsDialog.open_ducts_configuration()
+             'DuctNetwork')
+    DuctNetwork(folder)
+    DuctNetworkViewProvider(folder.ViewObject)
+    print("New DuctNetwork created...")
+    # Open duct network settings
+    DuctNetworkConfigDialog.open_duct_network_configuration()
+    # Recompute document
     FreeCAD.ActiveDocument.recompute()
 
-def activated_modify_ducts(self):
-    """Modify the HVAC duct object selected"""
+def modify_duct_network():
+    """Modify the selected HVAC duct network object"""
     pass
 
-def activated_delete_ducts(self):
-    """Delete the HVAC duct object selected"""
+def delete_duct_network():
+    """Delete the selected HVAC duct network object"""
     pass
 
 
 #=================================================
-# B. General functions
-#=================================================
-
-
-
-#=================================================
-# C. Commands
+# D. Register Commands
 #=================================================
 
 if FreeCAD.GuiUp:
-    FreeCAD.Gui.addCommand('CreateDucts', CreateDucts())
-    FreeCAD.Gui.addCommand('ModifyDucts', ModifyDucts())
-    FreeCAD.Gui.addCommand('DeleteDucts', DeleteDucts())
+    FreeCAD.Gui.addCommand('HVAC_CreateDuctNetwork', CommandCreateDuctNetwork())
+    FreeCAD.Gui.addCommand('HVAC_ModifyDuctNetwork', CommandModifyDuctNetwork())
+    FreeCAD.Gui.addCommand('HVAC_DeleteDuctNetwork', CommandDeleteDuctNetwork())

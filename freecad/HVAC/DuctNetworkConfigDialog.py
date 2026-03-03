@@ -23,28 +23,31 @@
 
 """This module implements the Sun Analysis configuration dialog"""
 
-import os
 import FreeCAD
 import FreeCADGui as Gui
 from PySide import QtWidgets
-import freecad.HVAC.Ducts as Ducts
+import freecad.HVAC.DuctNetwork as DuctNetwork
 import freecad.HVAC.hvaclib as hvaclib
 
 translate = FreeCAD.Qt.translate
 
 
-class DuctsConfigurationDialog(QtWidgets.QDialog):
+#=================================================
+# A. Main classes
+#=================================================
 
-    """HVAC ducts configuration dialog"""
+
+class DuctNetworkConfigDialog(QtWidgets.QDialog):
+
+    """HVAC duct network configuration dialog"""
 
     def __init__(self, parent = None):
 
         super().__init__(parent)
 
         # Load the UI
-        ui_file = hvaclib.get_file_path("Ducts.ui")
+        ui_file = hvaclib.get_file_path("DuctNetworkConfigDialog.ui")
         self.ui = Gui.PySideUic.loadUi(ui_file)
-
         self.setWindowTitle(translate("DucsDialog", "HVAC ducts configuration"))
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(self.ui)
@@ -80,9 +83,15 @@ class DuctsConfigurationDialog(QtWidgets.QDialog):
         """Apply button actions"""
         pass
 
-def open_ducts_configuration():
+
+#=================================================
+# C. General functions
+#=================================================
+
+
+def open_duct_network_configuration():
     """Open ducts configuration"""
-    dlg = DuctsConfigurationDialog()
+    dlg = DuctNetworkConfigDialog()
     dlg.get_properties_data()
     if dlg.show_dialog():
         dlg.save_to_propeties()
