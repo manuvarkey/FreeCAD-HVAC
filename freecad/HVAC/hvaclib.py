@@ -25,14 +25,40 @@
 
 import os
 import FreeCAD
-import FreeCADGui
+import FreeCADGui as Gui
 import platform
 translate = FreeCAD.Qt.translate
 preferences = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/HVAC")
 
 WORKBENCH_STATE = 'DEFAULT'
+DUCT_NETWORK_CONTEXT_KEY = "hvac_ductnetwork"
 
 path_hvac = os.path.dirname(__file__)
+
+#------------------------------------------------------------------------------
+# State management
+#------------------------------------------------------------------------------
+def activeHVACNetwork():
+    doc = Gui.ActiveDocument
+
+    if doc is None or doc.ActiveView is None:
+        return None
+    active_network = doc.ActiveView.getActiveObject(DUCT_NETWORK_CONTEXT_KEY)
+
+    if active_network:
+        return active_network
+
+def allHVACNetworks():
+    from freecad.HVAC.DuctNetwork import DuctNetwork
+    doc = Gui.ActiveDocument
+
+    hvac_networks = None
+    if doc is None:
+        return None
+    if hasattr(doc.Document, "Objects"):
+        hvac_networks = [n for n in doc.Document.Objects if hasattr(n, "Proxy") and isinstance(n.Proxy, DuctNetwork)]
+
+    return hvac_networks
 
 #------------------------------------------------------------------------------
 # Detect the operating system...

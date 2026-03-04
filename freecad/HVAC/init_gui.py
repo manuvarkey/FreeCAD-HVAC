@@ -51,18 +51,21 @@ class HVAC(Gui.Workbench):
         import freecad.HVAC.DuctNetwork
 
         self.toolbar_commands = ['HVAC_CreateDuctNetwork',
+                                'HVAC_ActivateDuctNetwork',
                                 'HVAC_ModifyDuctNetwork',
                                 "Separator",
                                 'HVAC_DeleteDuctNetwork',
                                 ]
 
         self.submenu_commands = ['HVAC_CreateDuctNetwork',
+                                'HVAC_ActivateDuctNetwork',
                                 'HVAC_ModifyDuctNetwork',
                                 "Separator",
                                 'HVAC_DeleteDuctNetwork',
                                 ]
 
         self.contextmenu_commands = ['HVAC_CreateDuctNetwork',
+                                'HVAC_ActivateDuctNetwork',
                                 'HVAC_ModifyDuctNetwork',
                                 "Separator",
                                 'HVAC_DeleteDuctNetwork',
@@ -73,7 +76,9 @@ class HVAC(Gui.Workbench):
 
     def Activated(self):
         """This function is executed whenever the workbench is activated"""
-        FreeCAD.Console.PrintMessage(translate("InitGui","HVAC Workbench loaded") + "\n")
+        FreeCAD.Console.PrintMessage(translate("InitGui","HVAC - Workbench loaded") + "\n")
+        self.setWatchers()
+        FreeCAD.Console.PrintMessage(translate("InitGui","HVAC - Workbench - Watchers set") + "\n")
         return
 
     def Deactivated(self):
@@ -83,6 +88,66 @@ class HVAC(Gui.Workbench):
     def ContextMenu(self, recipient):
         """This function is executed whenever the user right-clicks on screen"""
         self.appendContextMenu(QT_TRANSLATE_NOOP("Workbench", "HVAC"), self.toolbar_commands)
+
+    def setWatchers(self):
+
+        class HVACCreateWatcher:
+            """Shows 'Create HVAC Network' when no Duct Network exists in the document."""
+
+            def __init__(self):
+                self.commands = ["HVAC_CreateDuctNetwork"]
+                self.title = translate("HVAC", "Create HVAC Network")
+
+            def shouldShow(self):
+                hvac_networks = hvaclib.allHVACNetworks()
+                if hvac_networks:
+                    return False
+                else:
+                    return True
+
+        class HVACActivateWatcher:
+            """Shows 'Activate HVAC Network' when an HVAC Network exists but is not active."""
+
+            def __init__(self):
+                self.commands = ["HVAC_ActivateDuctNetwork"]
+                self.title = translate("HVAC", "Activate HVAC Network")
+
+            def shouldShow(self):
+                doc = FreeCAD.ActiveDocument
+
+                hvac_networks = hvaclib.allHVACNetworks()
+                hvac_network = hvaclib.activeHVACNetwork()
+                return hvac_networks and (hvac_network is None or hvac_network.Document != doc)
+
+        class HVACBaseWatcher:
+            """Base class for watchers that require an active HVAC Network."""
+
+            def __init__(self):
+                self.hvac_network = None
+
+            def shouldShow(self):
+                doc = FreeCAD.ActiveDocument
+
+                self.hvac_network = hvaclib.activeHVACNetwork()
+                return self.hvac_network is not None and self.hvac_network.Document == doc
+
+        class HVACInsertWatcher(HVACBaseWatcher):
+            """Shows 'Insert Sketch' when an HVAC Network is active."""
+
+            def __init__(self):
+                super().__init__()
+                self.commands = [""]
+                self.title = translate("HVAC", "Insert Sketch")
+
+            def shouldShow(self):
+                return super().shouldShow()
+
+        watchers = [
+            HVACCreateWatcher(),
+            HVACActivateWatcher(),
+            HVACInsertWatcher(),
+        ]
+        Gui.Control.addTaskWatcher(watchers)
 
     def GetClassName(self):
         # This function is mandatory if this is a full Python workbench

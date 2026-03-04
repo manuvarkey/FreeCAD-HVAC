@@ -25,6 +25,7 @@
 
 import FreeCAD
 import FreeCADGui as Gui
+from PySide import QtWidgets
 import freecad.HVAC.DuctNetworkConfigDialog as DuctNetworkConfigDialog
 import freecad.HVAC.hvaclib as hvaclib
 
@@ -39,6 +40,8 @@ class DuctNetwork:
 
     """Visualize and configure HVAC duct network in FreeCAD's 3D view."""
 
+    CONTEXT_KEY = hvaclib.DUCT_NETWORK_CONTEXT_KEY
+
     def __init__(self, obj):
         obj.Proxy = self
         self.setProperties(obj)
@@ -46,6 +49,27 @@ class DuctNetwork:
     def setProperties(self,obj):
         """Gives the object properties to HVAC ducts."""
         pass
+
+    @staticmethod
+    def setActive(obj):
+        """Set this DuctNetwork as the active container in the 3D view."""
+        Gui.ActiveDocument.ActiveView.setActiveObject(DuctNetwork.CONTEXT_KEY, obj)
+
+    @staticmethod
+    def getActive(doc=None):
+        """Get the active DuctNetwork container from the 3D view."""
+        if not App.GuiUp:
+            return None
+        if doc is None:
+            doc = App.ActiveDocument
+        if doc is None or Gui.ActiveDocument is None:
+            return None
+        return Gui.ActiveDocument.ActiveView.getActiveObject(DuctNetwork.CONTEXT_KEY)
+
+    @staticmethod
+    def isDuctNetwork(obj):
+        """Test whether obj is a DuctNetwork FeaturePython object."""
+        return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctNetwork)
 
 
 class DuctNetworkViewProvider:
@@ -60,7 +84,7 @@ class DuctNetworkViewProvider:
 
 
 #=================================================
-# A. Command classes
+# B. Command classes
 #=================================================
 
 
@@ -84,6 +108,49 @@ class CommandCreateDuctNetwork:
 
     def Activated(self):
         create_new_duct_network()
+
+
+class CommandActivateDuctNetwork:
+    def __init__(self):
+        self.task_panel = None
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("ActivateDuctsIcon.svg"),
+            "MenuText": QT_TRANSLATE_NOOP("HVAC_ActivateDuctNetwork", "Activate HVAC Network"),
+            "ToolTip": QT_TRANSLATE_NOOP("HVAC_ActivateDuctNetwork", "Sets a HVAC duct network as the active one for editing."),
+            "CmdType": "ForEdit",
+        }
+
+    def IsActive(self):
+        return True
+        if App.ActiveDocument is None:
+            return False
+
+        # Command is only active if no HVAC network is currently active
+        if hvaclib.activeHVACNetwork() is not None:
+            return False
+
+        # And if there is at least one HVAC network in the document to activate
+
+        doc = App.ActiveDocument
+        if hasattr(doc, "RootObjects"):
+            for obj in doc.RootObjects:
+                if hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctNetwork):
+                    return True
+
+        return False
+
+    def Activated(self):
+        hvac_networks = hvaclib.allHVACNetworks()
+
+        if len(hvac_networks) == 1:
+            # If there's only one, activate it directly without showing a dialog
+            Gui.doCommand(f"Gui.ActiveDocument.setEdit('{hvac_networks[0].Name}')")
+        elif len(hvac_networks) > 1:
+            # If there are multiple, show a task panel to let the user choose
+            self.task_panel = ActivateHVACTaskPanel(hvac_networks)
+            Gui.Control.showDialog(self.task_panel)
 
 
 class CommandModifyDuctNetwork:
@@ -121,8 +188,8 @@ class CommandDeleteDuctNetwork:
 
     def GetResources(self):
         return {'Pixmap': hvaclib.get_icon_path("DeleteDuctsIcon.svg"),
-                'MenuText': QT_TRANSLATE_NOOP('DeleteDucts', 'Delete HVAC ducts'),
-                'ToolTip': QT_TRANSLATE_NOOP('DeleteDucts', 'Instructions')}
+                'MenuText': QT_TRANSLATE_NOOP('HVAC_DeleteDuctNetwork', 'Delete HVAC Duct Network'),
+                'ToolTip': QT_TRANSLATE_NOOP('HVAC_DeleteDuctNetwork', 'Delete the selected HVAC Duct Network')}
 
     def IsActive(self):
         if Gui.ActiveDocument:
@@ -139,21 +206,58 @@ class CommandDeleteDuctNetwork:
 
 
 #=================================================
-# C. General functions
+# C. Task Panel classes
 #=================================================
 
 
-def create_new_duct_network():
+class ActivateHVACTaskPanel:
+    """A basic TaskPanel to create an assembly to activate."""
+
+    def __init__(self, hvac_networks):
+        self.hvac_networks = hvac_networks
+        self.form = QtWidgets.QWidget()
+        self.form.setWindowTitle(translate("HVAC_ActivateDuctNetwork", "Activate HVAC Duct Network"))
+
+        layout = QtWidgets.QVBoxLayout(self.form)
+        label = QtWidgets.QLabel(translate("HVAC_ActivateDuctNetwork", "Select a HVAC Duct Network to Activate:"))
+        self.combo = QtWidgets.QComboBox()
+
+        for net in self.hvac_networks:
+            # Store the user-friendly Label for display, and the internal Name for activation
+            self.combo.addItem(net.Label, net.Name)
+
+        layout.addWidget(label)
+        layout.addWidget(self.combo)
+
+    def accept(self):
+        """Called when the user clicks OK."""
+        selected_name = self.combo.currentData()
+        if selected_name:
+            Gui.doCommand(f"Gui.ActiveDocument.setEdit('{selected_name}')")
+        return True
+
+    def reject(self):
+        """Called when the user clicks Cancel or closes the panel."""
+        return True
+
+
+#=================================================
+# D. General functions
+#=================================================
+
+
+def create_new_duct_network(name="DuctNetwork", set_active=True):
     """Create new duct network"""
     # Create new duct netowork and create default folders
-    folder = FreeCAD.ActiveDocument.addObject(
-             'App::DocumentObjectGroupPython',
-             'DuctNetwork')
+    folder = FreeCAD.ActiveDocument.addObject('App::DocumentObjectGroupPython', name)
     DuctNetwork(folder)
     DuctNetworkViewProvider(folder.ViewObject)
-    print("New DuctNetwork created...")
+    print("HVAC - New DuctNetwork created")
     # Open duct network settings
     DuctNetworkConfigDialog.open_duct_network_configuration()
+    # Set as active network
+    # if set_active:
+    #     DuctNetwork.setActive(folder)  #TODO
     # Recompute document
     FreeCAD.ActiveDocument.recompute()
 
@@ -167,10 +271,11 @@ def delete_duct_network():
 
 
 #=================================================
-# D. Register Commands
+# E. Register Commands
 #=================================================
 
 if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_CreateDuctNetwork', CommandCreateDuctNetwork())
     FreeCAD.Gui.addCommand('HVAC_ModifyDuctNetwork', CommandModifyDuctNetwork())
     FreeCAD.Gui.addCommand('HVAC_DeleteDuctNetwork', CommandDeleteDuctNetwork())
+    FreeCAD.Gui.addCommand('HVAC_ActivateDuctNetwork', CommandActivateDuctNetwork())
