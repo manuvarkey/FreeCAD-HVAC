@@ -40,15 +40,26 @@ class DuctNetwork:
     """Visualize and configure HVAC duct network in FreeCAD's 3D view."""
 
     CONTEXT_KEY = hvaclib.DUCT_NETWORK_CONTEXT_KEY
+    FOLDER_BASE_NAME = "Base"
+    FOLDER_GEOMETRY_NAME = "Geometry"
 
     def __init__(self, obj):
         obj.Proxy = self
         self.setProperties(obj)
 
-    def setProperties(self,obj):
+    def setProperties(self, obj):
         """Gives the object properties to HVAC ducts."""
-        pass
-        
+        doc = obj.Document
+        # Create the sub-folders
+        obj.addProperty("App::PropertyLink", "Base", "HVAC", "Base (internal)")
+        folder_base = doc.addObject("App::DocumentObjectGroupPython", f"{obj.Name}_{self.FOLDER_BASE_NAME}")
+        folder_base.Label = self.FOLDER_BASE_NAME
+        obj.Base = folder_base
+        obj.addProperty("App::PropertyLink", "Geometry", "HVAC", "Geometry (internal)")
+        folder_geometry = doc.addObject("App::DocumentObjectGroupPython", f"{obj.Name}_{self.FOLDER_GEOMETRY_NAME}")
+        folder_geometry.Label = self.FOLDER_GEOMETRY_NAME
+        obj.Geometry = folder_geometry
+
     @staticmethod
     def createObject(name):
         net = FreeCAD.ActiveDocument.addObject('App::DocumentObjectGroupPython', name)
@@ -82,26 +93,59 @@ class DuctNetworkViewProvider:
 
     """A View Provider for the HVAC duct network object"""
 
-    def __init__(self, obj):
-        obj.Proxy = self
+    def __init__(self, vobj):
+        vobj.Proxy = self
+
+    def attach(self, vobj):
+        self.Object = vobj.Object
+
+    def __getstate__(self):
+        # Create a copy of the state and remove the non-serializable object
+        state = self.__dict__.copy()
+        if 'Object' in state:
+            del state['Object']
+        return state
+
+    def __setstate__(self, state):
+        # Restore the state
+        self.__dict__.update(state)
+        # self.Object will be restored later in attach()
 
     def getIcon(self):
         return hvaclib.get_icon_path("DuctsIcon.svg")
-        
+
     def setEdit(self, vobj, mode):
         panel = TaskPanelEditDuctNetwork(vobj.Object)
         Gui.Control.showDialog(panel)
         return True
-        
+
     def unsetEdit(self, vobj, mode):
         Gui.Control.closeDialog()
         return True
-        
+
     def doubleClicked(self, vobj):
         obj = vobj.Object
         # Make it the active network
         activate_duct_network(obj, set_edit=False)
-        return True 
+        return True
+
+    def claimChildren(self):
+        obj = self.Object
+        kids = []
+        try:
+            if obj.Base: kids.append(obj.Base)
+            if obj.Geometry: kids.append(obj.Geometry)
+        except Exception:
+            pass
+        return kids
+
+    def canDropObjects(self):
+        # Returning False prevents users from dragging items into this group via the Tree View
+        return False
+
+    def canDragObjects(self):
+        # Prevents users from dragging the managed folders OUT of the group
+        return False
 
 
 #=================================================
@@ -156,7 +200,7 @@ class CommandActivateDuctNetwork:
     def Activated(self):
         hvac_networks = hvaclib.allHVACNetworks()
         selected_hvac_networks = hvaclib.selectedHVACNetworks()
-        
+
         if len(hvac_networks) == 1:
             # If there's only one, activate it directly without showing a dialog
             activate_duct_network(hvac_networks[0], set_edit=False)
@@ -257,7 +301,7 @@ class TaskPanelActivate:
     def reject(self):
         """Called when the user clicks Cancel or closes the panel."""
         return True
-        
+
 
 class TaskPanelEditDuctNetwork:
     """A basic TaskPanel to edit an HVAC netowrk."""
@@ -292,7 +336,7 @@ def create_new_duct_network(name="DuctNetwork", set_active=True):
     print("HVAC - New DuctNetwork created")
     # Set as active network and enable edit mode
     activate_duct_network(net, set_edit=True)
-    
+
 def activate_duct_network(net, set_edit=False):
     DuctNetwork.setActive(net)
     # Set network to edit mode
