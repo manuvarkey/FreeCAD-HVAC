@@ -310,11 +310,9 @@ class TaskPanelEditDuctNetwork:
         self.form.setWindowTitle(translate("HVAC_EditDuctNetwork", "Edit Network"))
 
         layout = QtWidgets.QVBoxLayout(self.form)
-
         # Label for instructions
         label = QtWidgets.QLabel(translate("HVAC_EditDuctNetwork", "Base Objects in Network (Sketch/ Draft Line):"))
         layout.addWidget(label)
-
         # List view to display selected objects
         self.list_view = QtWidgets.QListWidget()
         self.list_view.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)  # Enable multiple selection
@@ -323,32 +321,58 @@ class TaskPanelEditDuctNetwork:
         # Populate existing objects under Base
         if self.hvac_network.Base:
             for obj in self.hvac_network.Base.OutList:
-                if obj.TypeId == "Sketcher::SketchObject":
+                if self.valid_obj(obj):
                     self.list_view.addItem(obj.Label)
 
-        # Button to enable selection of sketch objects
+        # Button to enable selection of objects
         self.select_button = QtWidgets.QPushButton(translate("HVAC_EditDuctNetwork", "Add Selected"))
-        self.select_button.clicked.connect(self.select_sketch_objects)
+        self.select_button.clicked.connect(self.select_objects)
         layout.addWidget(self.select_button)
 
-        # Button to remove selected sketch objects from the list view
+        # Button to remove selected objects from the list view
         self.remove_button = QtWidgets.QPushButton(translate("HVAC_EditDuctNetwork", "Remove Selected"))
-        self.remove_button.clicked.connect(self.remove_selected_sketch_objects)
+        self.remove_button.clicked.connect(self.remove_selected_objects)
         layout.addWidget(self.remove_button)
 
-    def select_sketch_objects(self):
-        """Enable selection of sketch objects and add them to the list view."""
+    ## Helper methods
+
+    def valid_obj(self, obj):
+        """Return True if the object is valid for selection."""
+        return obj.TypeId == "Sketcher::SketchObject" or \
+               (hasattr(obj, "Proxy") and \
+                hasattr(obj.Proxy, "Type") and \
+                obj.Proxy.Type == "Wire")
+
+    def get_valid_selection(self):
+        """Return a list of valid objects for selection."""
         selected_objects = Gui.Selection.getSelection()
+        return [obj for obj in selected_objects if self.valid_obj(obj)]
+
+    ## Core methods
+
+    def select_objects(self):
+        """Enable selection of objects and add them to the list view."""
+        valid_objects = self.get_valid_selection()
         existing_labels = [self.list_view.item(i).text() for i in range(self.list_view.count())]
-        for obj in selected_objects:
-            if obj.TypeId == "Sketcher::SketchObject" and obj.Label not in existing_labels:
+        for obj in valid_objects:
+            if obj.Label not in existing_labels:
                 self.list_view.addItem(obj.Label)
 
-    def remove_selected_sketch_objects(self):
-        """Remove selected sketch objects from the list view."""
+    def remove_selected_objects(self):
+        """Remove selected objects from the list view."""
+        # Remove based on selected items in QListWidget
         selected_items = self.list_view.selectedItems()
         for item in selected_items:
             self.list_view.takeItem(self.list_view.row(item))
+        # Remove based on selection in 3D view
+        doc = self.hvac_network.Document
+        selected_objects = Gui.Selection.getSelection()
+        for obj in selected_objects:
+            if obj in self.hvac_network.Base.OutList:
+                for i in range(self.list_view.count()):
+                    if self.list_view.item(i).text() == obj.Label:
+                        self.list_view.takeItem(i)
+                        break
 
     def accept(self):
         """Called when the user clicks OK."""
@@ -365,7 +389,7 @@ class TaskPanelEditDuctNetwork:
         # Remove unselected items from Base folder
         existing_labels = [self.list_view.item(i).text() for i in range(self.list_view.count())]
         for obj in self.hvac_network.Base.OutList:
-            if obj.TypeId == "Sketcher::SketchObject" and obj.Label not in existing_labels:
+            if self.valid_obj(obj) and obj.Label not in existing_labels:
                 self.hvac_network.Base.removeObject(obj)
 
         return True
