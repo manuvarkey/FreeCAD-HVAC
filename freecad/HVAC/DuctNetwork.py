@@ -91,6 +91,7 @@ class DuctNetwork:
         # Parse geomtery
         parser = hvaclib.DuctNetworkParser(obj.Base.OutList)
         # Update DuctNetworkData Class
+        print(parser.edge_u_v.values())
         #TODO
 
 

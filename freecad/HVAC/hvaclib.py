@@ -23,12 +23,23 @@
 #*                                                                         *
 #***************************************************************************
 
-import os, platform
+import os, platform, sys
+from dataclasses import dataclass
 import FreeCAD
 import FreeCADGui as Gui
 from PySide import QtGui
 translate = FreeCAD.Qt.translate
 preferences = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/HVAC")
+
+# Enable loading external libraries from the ext_libs directory
+path = os.path.dirname(__file__)
+vendor_path = os.path.join(path, "ext_libs")
+# Add to sys.path if not already there
+if vendor_path not in sys.path:
+    sys.path.append(vendor_path)
+
+# Load external libraries
+import networkx as nx
 
 WORKBENCH_STATE = 'DEFAULT'
 DUCT_NETWORK_CONTEXT_KEY = "hvac_ductnetwork"
@@ -109,14 +120,37 @@ def vec_to_xyz(v):
     """Return (x,y,z) tuple from a FreeCAD.Vector-like object."""
     return (float(v.x), float(v.y), float(v.z))
 
+@dataclass(frozen=True)
+class EdgeRef:
+    """Stable reference to an edge created from (obj_name, local_line_index)."""
+    obj_name: str
+    local_index: int
 
 class DuctNetworkParser:
 
     def __init__(self, objs=None):
-        self.lines_map = {}
-        self.all_lines = []
+
+        # Input line storage
+        self.lines_map = {}   # Obj_Name -> [(sp, ep), ...]
+        self.all_lines = []   # [(sp, ep), ...]
+
+        # Graph storage (generated)
+        self.tol = 1e-6
+        self.node_id_by_key = {}
+        self.node_point = {}      # node_id -> representative point
+        self.edge_u_v = {}        # edge_ref -> (u, v)
+        self.edge_geom = {}       # edge_ref -> (sp, ep)
+        self.obj_edges = {}       # obj_name -> [edge_ref,...]
+
+        # Optional networkx graph (recommended)
+        self.graph = None
+
+        # Build data structures
         if objs:
             self.compile_lines_from_objects(objs)
+        self.build_graph()
+
+    ## Data Parser Methods
 
     def compile_lines_from_objects(self, objs):
         self.lines_map = {}
@@ -175,6 +209,112 @@ class DuctNetworkParser:
                 v2 = e.Vertexes[-1].Point
                 if (v1.sub(v2)).Length > tol:
                     yield (vec_to_xyz(v1), vec_to_xyz(v2))
+
+    ## Graph build utilities
+
+    def _key(self, p):
+        """
+        Collapse points by tolerance using quantization.
+        Points within ~tol map to the same key.
+        """
+        t = float(self.tol)
+        return (
+            int(round(p[0] / t)),
+            int(round(p[1] / t)),
+            int(round(p[2] / t)),
+        )
+
+    def _get_node_id(self, p):
+        k = self._key(p)
+        nid = self.node_id_by_key.get(k)
+        if nid is None:
+            nid = len(self.node_id_by_key) + 1  # start node ids from 1
+            self.node_id_by_key[k] = nid
+            self.node_point[nid] = p
+        return nid
+
+    def build_graph(self, tol=1e-6):
+        """
+        Build a graph where:
+            - nodes = junction points (collapsed by tol)
+            - edges = duct centerlines (your lines)
+        """
+        self.tol = float(tol)
+
+        # reset generated structures
+        self.node_id_by_key.clear()
+        self.node_point.clear()
+        self.edge_u_v.clear()
+        self.edge_geom.clear()
+        self.obj_edges.clear()
+
+        G = nx.Graph()
+
+        for obj_name, lines in self.lines_map.items():
+            for i, (sp, ep) in enumerate(lines):
+                u = self._get_node_id(sp)
+                v = self._get_node_id(ep)
+
+                eref = EdgeRef(obj_name=obj_name, local_index=i)
+                self.edge_u_v[eref] = (u, v)
+                self.edge_geom[eref] = (sp, ep)
+                self.obj_edges.setdefault(obj_name, []).append(eref)
+
+                # Similar pattern to referenced build_graph_model(): add_edge with attributes.
+                G.add_edge(
+                    u, v,
+                    key=eref,
+                    obj=obj_name,
+                    local_index=i,
+                    sp=sp, ep=ep,
+                )
+
+        self.graph = G
+        return G
+
+    ## Convenience queries
+    def node_count(self):
+        return len(self.node_point)
+
+    def edge_count(self):
+        return len(self.edge_u_v)
+
+    def nodes(self):
+        return sorted(self.node_point.keys())
+
+    def node_xyz(self, node_id):
+        return self.node_point[node_id]
+
+    def edges(self):
+        return list(self.edge_u_v.keys())
+
+    def edges_of_obj(self, obj_name):
+        return list(self.obj_edges.get(obj_name, []))
+
+    def edge_nodes(self, eref):
+        return self.edge_u_v[eref]
+
+    def edge_line(self, eref):
+        return self.edge_geom[eref]
+
+    def connected_components(self):
+        """Return connected components as lists of node_ids."""
+        if self.graph is None:
+            raise RuntimeError("Graph not built. Call build_graph() first.")
+        return [sorted(list(c)) for c in nx.connected_components(self.graph)]
+
+    def shortest_path_by_points(self, p1, p2):
+        """
+        Path between two geometric points (snapped by tol).
+        Returns node_id path.
+        """
+        if self.graph is None:
+            raise RuntimeError("Graph not built. Call build_graph() first.")
+
+        n1 = self.node_id_by_key[self._key(p1)]
+        n2 = self.node_id_by_key[self._key(p2)]
+        return nx.shortest_path(self.graph, n1, n2)
+
 
 #------------------------------------------------------------------------------
 # Detect the operating system...
