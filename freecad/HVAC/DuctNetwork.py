@@ -87,6 +87,12 @@ class DuctNetwork:
         """Test whether obj is a DuctNetwork FeaturePython object."""
         return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctNetwork)
 
+    def execute(self, obj):
+        # Parse geomtery
+        parser = hvaclib.DuctNetworkParser(obj.Base.OutList)
+        # Update DuctNetworkData Class
+        #TODO
+
 
 class DuctNetworkViewProvider:
     """A View Provider for the HVAC duct network object"""
@@ -338,10 +344,7 @@ class TaskPanelEditDuctNetwork:
 
     def valid_obj(self, obj):
         """Return True if the object is valid for selection."""
-        return obj.TypeId == "Sketcher::SketchObject" or \
-               (hasattr(obj, "Proxy") and \
-                hasattr(obj.Proxy, "Type") and \
-                obj.Proxy.Type == "Wire")
+        return hvaclib.obj_is_sketch(obj) or hvaclib.obj_is_wire(obj)
 
     def get_valid_selection(self):
         """Return a list of valid objects for selection."""

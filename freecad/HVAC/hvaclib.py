@@ -33,18 +33,17 @@ preferences = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/HVAC")
 WORKBENCH_STATE = 'DEFAULT'
 DUCT_NETWORK_CONTEXT_KEY = "hvac_ductnetwork"
 
-path_hvac = os.path.dirname(__file__)
-
 #------------------------------------------------------------------------------
 # State management
 #------------------------------------------------------------------------------
+
 def activeHVACNetwork():
     doc = Gui.ActiveDocument
 
     if doc is None or doc.ActiveView is None:
         return None
     active_network = doc.ActiveView.getActiveObject(DUCT_NETWORK_CONTEXT_KEY)
-    
+
     if active_network:
         return active_network
 
@@ -57,9 +56,9 @@ def allHVACNetworks():
         return None
     if hasattr(doc.Document, "Objects"):
         hvac_networks = [n for n in doc.Document.Objects if hasattr(n, "Proxy") and isinstance(n.Proxy, DuctNetwork)]
-    
+
     return hvac_networks
-    
+
 def selectedHVACNetworks():
     from freecad.HVAC.DuctNetwork import DuctNetwork
     objs = Gui.Selection.getSelection()
@@ -67,13 +66,120 @@ def selectedHVACNetworks():
         filtered = [o for o in objs if hasattr(o, "Proxy") and isinstance(o.Proxy, DuctNetwork)]
         return filtered
     return None
-    
+
 def refreshState():
     QtGui.QApplication.processEvents()
 
 #------------------------------------------------------------------------------
+# Object query
+#------------------------------------------------------------------------------
+
+def obj_is_sketch(obj):
+    # Robust check for Sketcher objects
+    return hasattr(obj, "TypeId") and (
+        obj.TypeId.startswith("Sketcher::SketchObject")
+        or obj.TypeId.startswith("Sketcher::SketchObjectPython")
+    )
+
+def obj_is_wire(obj):
+    # Draft Wire is usually Part::Feature (or FeaturePython) with Draft properties
+    return (
+        obj.TypeId == "Part::FeaturePython"
+        and hasattr(obj, "Proxy")
+        and hasattr(obj.Proxy, "Type")
+        and getattr(obj.Proxy, "Type") == "Wire"
+    )
+
+def get_obj_name(obj):
+    # Get object name from FreeCAD object
+    return getattr(obj, "Name", "")
+
+def get_obj_by_name(name, doc=None):
+    # Get object by name from FreeCAD document
+    if doc is None:
+        doc = FreeCAD.ActiveDocument
+    obj = doc.getObject(name)
+    return obj
+
+#------------------------------------------------------------------------------
+# Object data manipulation
+#------------------------------------------------------------------------------
+
+def vec_to_xyz(v):
+    """Return (x,y,z) tuple from a FreeCAD.Vector-like object."""
+    return (float(v.x), float(v.y), float(v.z))
+
+
+class DuctNetworkParser:
+
+    def __init__(self, objs=None):
+        self.lines_map = {}
+        self.all_lines = []
+        if objs:
+            self.compile_lines_from_objects(objs)
+
+    def compile_lines_from_objects(self, objs):
+        self.lines_map = {}
+        self.all_lines = []
+        for obj in objs:
+            if obj_is_wire(obj):
+                for sp, ep in self.iter_line_segments_from_shape(obj):
+                    self.parse_obj(obj, sp, ep)
+            elif obj_is_sketch(obj):
+                for sp, ep in self.iter_line_segments_from_sketch(obj):
+                    self.parse_obj(obj, sp, ep)
+        return self.lines_map, self.all_lines
+
+    def parse_obj(self, obj, sp, ep):
+        obj_name = getattr(obj, "Name", None)
+        if obj_name:
+            if obj_name not in self.lines_map:
+                self.lines_map[obj_name] = []
+            self.lines_map[obj_name].append((sp, ep))
+            self.all_lines.append((sp, ep))
+
+    def iter_line_segments_from_sketch(self, sketch_obj, tol=1e-9):
+        """
+        Yield (start_point, end_point) for all LINE segments in a Sketch.
+        Sketch line geo is typically Part.LineSegment.
+        """
+        for geo in getattr(sketch_obj, "Geometry", []) or []:
+            # Accept only straight line segments
+            if hasattr(geo, "StartPoint") and hasattr(geo, "EndPoint"):
+                # Filter out arcs/circles/etc by type
+                # Part.LineSegment usually has TypeId or is instance of Part.LineSegment
+                typeid = getattr(geo, "TypeId", "")
+                if "Line" in typeid or (typeid == "" and geo.__class__.__name__ in ("LineSegment", "Line")):
+                    sp = geo.StartPoint
+                    ep = geo.EndPoint
+                    # Skip degenerate lines
+                    if (sp.sub(ep)).Length > tol:
+                        yield (vec_to_xyz(sp), vec_to_xyz(ep))
+
+    def iter_line_segments_from_shape(self, obj, tol=1e-9):
+        """
+        Yield (start_point, end_point) for all straight edges in obj.Shape.
+        Works for Draft Wire (and many Part-based objects) as long as Shape exists.
+        """
+        shape = getattr(obj, "Shape", None)
+        if shape is None:
+            return
+        for e in getattr(shape, "Edges", []) or []:
+            c = getattr(e, "Curve", None)
+            if c is None:
+                continue
+            typeid = getattr(c, "TypeId", "")
+            # Straight edges typically have Part::GeomLine / GeomLine
+            if "GeomLine" in typeid or c.__class__.__name__ in ("GeomLine",):
+                v1 = e.Vertexes[0].Point
+                v2 = e.Vertexes[-1].Point
+                if (v1.sub(v2)).Length > tol:
+                    yield (vec_to_xyz(v1), vec_to_xyz(v2))
+
+#------------------------------------------------------------------------------
 # Detect the operating system...
 #------------------------------------------------------------------------------
+
 tmp = platform.system()
 tmp = tmp.upper()
 tmp = tmp.split(' ')
