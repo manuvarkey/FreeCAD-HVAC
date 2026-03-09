@@ -436,6 +436,12 @@ def delete_duct_networks(nets):
     doc = FreeCAD.ActiveDocument
     for net in nets:
         if net.Document == doc:
+            # Remove sub-folders if they exist
+            if hasattr(net, "Base") and net.Base:
+                doc.removeObject(net.Base.Name)
+            if hasattr(net, "Geometry") and net.Geometry:
+                doc.removeObject(net.Geometry.Name)
+            # Remove the network itself
             doc.removeObject(net.Name)
     doc.recompute()
     print("HVAC - Deleted selected {} DuctNetwork(s)".format(len(nets)))
