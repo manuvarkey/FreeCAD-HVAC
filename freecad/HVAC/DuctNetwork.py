@@ -201,7 +201,7 @@ class DuctSegment:
     """Derived per-edge duct segment created from network base geometry."""
 
     TYPE = "DuctSegment"
-    SECTION_SHAPES = ["Rectangular", "Circular"]
+    SECTION_SHAPES = hvaclib.DUCT_SECTION_SHAPES
 
     def __init__(self, obj, owner=None, key="", source_obj=None, source_index=0):
         obj.Proxy = self
@@ -225,7 +225,6 @@ class DuctSegment:
     def setProperties(self, obj):
         self._addProperty(obj, "App::PropertyString", "OwnerNetworkName", "HVAC", "Owning duct network")
         self._addProperty(obj, "App::PropertyString", "SegmentKey", "HVAC", "Stable source-based segment key")
-        self._addProperty(obj, "App::PropertyLink", "SourceObject", "HVAC", "Source sketch or draft line")
         self._addProperty(obj, "App::PropertyString", "SourceObjectName", "HVAC", "Internal source object name")
         self._addProperty(obj, "App::PropertyInteger", "SourceIndex", "HVAC", "Zero-based line segment index in the source object")
         self._addProperty(obj, "App::PropertyInteger", "StartNode", "HVAC", "Graph start node id")
@@ -255,7 +254,6 @@ class DuctSegment:
         for prop in (
             "OwnerNetworkName",
             "SegmentKey",
-            "SourceObject",
             "SourceObjectName",
             "SourceIndex",
             "StartNode",
@@ -288,7 +286,6 @@ class DuctSegment:
             obj.OwnerNetworkName = owner.Name
         if key:
             obj.SegmentKey = key
-        obj.SourceObject = source_obj
         obj.SourceObjectName = source_obj.Name if source_obj else ""
         obj.SourceIndex = int(source_index)
         obj.StartNode = int(start_node)
@@ -309,11 +306,16 @@ class DuctSegment:
         end_point = getattr(obj, "EndPoint", None)
         width = getattr(obj, "Width", None)
         height = getattr(obj, "Height", None)
+        diameter = getattr(obj, "Diameter", None)
+        section_shape = getattr(obj, "SectionShape", self.SECTION_SHAPES[0])
         if start_point is None or end_point is None:
             return
         try:
             if start_point.sub(end_point).Length > 0:
-                obj.Shape = hvaclib.create_rectangular_duct_geom(start_point, end_point, width, height)
+                if section_shape == self.SECTION_SHAPES[0]:
+                    obj.Shape = hvaclib.create_rectangular_duct_geom(start_point, end_point, width, height)
+                elif section_shape == self.SECTION_SHAPES[1]:
+                    obj.Shape = hvaclib.create_circular_duct_geom(start_point, end_point, diameter)
         except Exception as e:
             print("HVAC - Error generating geometry \n" + str(e))
 
@@ -1103,7 +1105,3 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_ActivateDuctNetwork', CommandActivateDuctNetwork())
     FreeCAD.Gui.addCommand("HVAC_CreateSketch", CommandCreateSketch())
     FreeCAD.Gui.addCommand("HVAC_CreateLine", CommandCreateLine())
-
-
-
-

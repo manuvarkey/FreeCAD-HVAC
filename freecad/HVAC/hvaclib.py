@@ -42,9 +42,32 @@ if vendor_path not in sys.path:
 # Load external libraries
 import networkx as nx
 
+#------------------------------------------------------------------------------
+# Variables...
+#------------------------------------------------------------------------------
+
+
 WORKBENCH_NAME = 'HVAC'
 WORKBENCH_STATE = 'DEFAULT'
 DUCT_NETWORK_CONTEXT_KEY = "hvac_ductnetwork"
+
+DUCT_SECTION_SHAPES = ["Rectangular", "Circular"]
+
+#------------------------------------------------------------------------------
+# Detect the operating system...
+#------------------------------------------------------------------------------
+
+tmp = platform.system()
+tmp = tmp.upper()
+tmp = tmp.split(' ')
+
+OPERATING_SYSTEM = 'UNKNOWN'
+if "WINDOWS" in tmp:
+    OPERATING_SYSTEM = "WINDOWS"
+elif "LINUX" in tmp:
+    OPERATING_SYSTEM = "LINUX"
+else:
+    OPERATING_SYSTEM = "OTHER"
 
 #------------------------------------------------------------------------------
 # State management
@@ -372,40 +395,65 @@ def create_rectangular_duct_geom(start_point, end_point, width, height):
     direction_unit = FreeCAD.Vector(direction)
     direction_unit.normalize()
 
-
-    # Create box centered on axis
+    # Create box with length along X and cross-section in YZ
+    # Box origin is at (0,0,0) and spans X:[0,length], Y:[0,width], Z:[0,height]
     shape = Part.makeBox(length, width, height)
-    
-    # Shift cross-section so line passes through center
-    # shape.translate(FreeCAD.Vector(0, -width / 2.0, -height / 2.0))
-    
-    # Align box X-axis to direction vector
+
+    # We want the duct centerline to lie along the box X axis at Y=0, Z=0.
+    # Therefore shift the box in its local coordinates by (0, -width/2, -height/2)
+    # Then apply rotation that aligns X to the direction vector and translate to p1.
     rotation = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), direction_unit)
 
-    # Place at start point
-    placement = FreeCAD.Placement(p1, rotation)
-    
+    local_shift = FreeCAD.Vector(0.0, -width / 2.0, -height / 2.0)
+    world_shift = rotation.multVec(local_shift)
+    placement_origin = p1.add(world_shift)
+    placement = FreeCAD.Placement(placement_origin, rotation)
+
     shape_mod = shape.copy()
     shape_mod.transformShape(placement.toMatrix(), True, False)
 
     return shape_mod
 
 
-#------------------------------------------------------------------------------
-# Detect the operating system...
-#------------------------------------------------------------------------------
+def create_circular_duct_geom(start_point, end_point, diameter):
+    """
+    Create a cylindrical duct centered on the line between two points.
 
-tmp = platform.system()
-tmp = tmp.upper()
-tmp = tmp.split(' ')
+    start_point, end_point : (x,y,z)
+    diameter : cross-section diameter
 
-OPERATING_SYSTEM = 'UNKNOWN'
-if "WINDOWS" in tmp:
-    OPERATING_SYSTEM = "WINDOWS"
-elif "LINUX" in tmp:
-    OPERATING_SYSTEM = "LINUX"
-else:
-    OPERATING_SYSTEM = "OTHER"
+    Returns:
+        Part.Shape
+    """
+
+    p1 = FreeCAD.Vector(*start_point)
+    p2 = FreeCAD.Vector(*end_point)
+
+    direction = p2 - p1
+    length = direction.Length
+
+    if length == 0:
+        raise ValueError("Start and end points cannot be identical")
+
+    direction_unit = FreeCAD.Vector(direction)
+    direction_unit.normalize()
+
+    # Convert diameter to radius for cylinder creation
+    radius = float(diameter) / 2.0
+
+    # Create cylinder with axis along Z of height = length
+    cyl = Part.makeCylinder(radius, length)
+
+    # Align cylinder Z-axis to direction vector
+    rotation = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), direction_unit)
+
+    # Place base center at start point
+    placement = FreeCAD.Placement(p1, rotation)
+
+    cyl_mod = cyl.copy()
+    cyl_mod.transformShape(placement.toMatrix(), True, False)
+
+    return cyl_mod
 
 #------------------------------------------------------------------------------
 # Return paths...
