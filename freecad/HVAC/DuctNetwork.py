@@ -56,18 +56,65 @@ class NewSketchObserver:
 
     def finalize(self):
         try:
-            net = self.network_obj
-            if not net or not hasattr(net, "Geometry") or not self.created_sketch:
-                return
-
-            base_folder = net.Base
-            sk = self.created_sketch
-
-            # Avoid duplicate insert
-            if sk not in base_folder.OutList:
-                base_folder.addObject(sk)
+            if self.created_sketch:
+                DuctNetwork.addBaseObject(self.network_obj, self.created_sketch)
         finally:
             # Always remove observer after one use
+            FreeCAD.removeDocumentObserver(self)
+
+
+class NewDraftLineObserver:
+    """Observe Draft line creation and add all created lines to the network
+    after the Draft tool is closed.
+    """
+
+    def __init__(self, network_obj):
+        self.network_obj = network_obj
+        self.doc = network_obj.Document
+        self.created_objects = []
+        self._finished = False
+        self._seen_dialog = False
+
+        self._timer = QtCore.QTimer()
+        self._timer.setInterval(200)
+        self._timer.timeout.connect(self.check_finished)
+        self._timer.start()
+
+    def slotCreatedObject(self, obj):
+        """Called whenever a new object is created in the document."""
+        if self._finished:
+            return
+        if not obj or obj.Document != self.doc:
+            return
+        if obj not in self.created_objects:
+            self.created_objects.append(obj)
+
+    def check_finished(self):
+        """Detect when the Draft command has been exited."""
+        if self._finished:
+            return
+        # Draft Line normally opens a task panel/dialog while active.
+        if Gui.Control.activeDialog():
+            self._seen_dialog = True
+            return
+        # Finalize only after the dialog has appeared once and then closed.
+        if self._seen_dialog:
+            QtCore.QTimer.singleShot(0, self.finalize)
+            return True
+
+    def finalize(self):
+        if self._finished:
+            return
+        self._finished = True
+        self._timer.stop()
+
+        try:
+            for obj in self.created_objects:
+                if hvaclib.obj_is_wire(obj):
+                    DuctNetwork.addBaseObject(self.network_obj, obj)
+        finally:
+            # Switch back workbench to HVAC
+            Gui.activateWorkbench(hvaclib.WORKBENCH_NAME)
             FreeCAD.removeDocumentObserver(self)
 
 
@@ -204,6 +251,86 @@ class DuctNetwork:
         FreeCAD.addDocumentObserver(obs)
         # Launch the built-in sketch creation command
         Gui.runCommand("Sketcher_NewSketch")
+        
+    @staticmethod
+    def createDraftLineInteractive(obj):
+        """
+        Open the standard Draft Line command and, after the user exits the tool,
+        move all newly created Draft line objects under obj.Base.
+        """
+        if not obj or not DuctNetwork.isDuctNetwork(obj):
+            return
+        if FreeCAD.ActiveDocument is None or Gui.ActiveDocument is None:
+            return
+
+        # Make this network active in the 3D view context
+        DuctNetwork.setActive(obj)
+        # Install observer before running the command
+        obs = NewDraftLineObserver(obj)
+        FreeCAD.addDocumentObserver(obs)
+        # Launch the built-in Draft line creation command
+        Gui.activateWorkbench("DraftWorkbench")
+        Gui.runCommand("Draft_Line")
+            
+    @staticmethod
+    def addBaseObject(net, obj):
+        """
+        Add a valid base object to the network Base folder.
+
+        Allowed objects:
+        - Sketch objects
+        - Draft wire/line style objects detected by hvaclib.obj_is_wire()
+
+        Returns:
+            bool: True if object was added, False otherwise.
+        """
+        # Basic validity
+        if not net or not obj:
+            return False
+        if not DuctNetwork.isDuctNetwork(net):
+            return False
+        if not hasattr(net, "Base") or net.Base is None:
+            return False
+        if not hasattr(obj, "Document") or obj.Document is None:
+            return False
+        if net.Document != obj.Document:
+            return False
+        # Allow only supported object types
+        if not (hvaclib.obj_is_sketch(obj) or hvaclib.obj_is_wire(obj)):
+            return False
+        # Already in Base folder
+        if obj in net.Base.OutList:
+            return False
+
+        net.Base.addObject(obj)
+        net.Document.recompute()
+        return True
+        
+        
+    @staticmethod
+    def removeBaseObject(net, obj):
+        """
+        Remove an object from the network Base folder.
+
+        Returns:
+            bool: True if object was removed, False otherwise.
+        """
+        # Basic validity
+        if not net or not obj:
+            return False
+        if not DuctNetwork.isDuctNetwork(net):
+            return False
+        if not hasattr(net, "Base") or net.Base is None:
+            return False
+        if net.Document != getattr(obj, "Document", None):
+            return False
+        # Object is not inside Base
+        if obj not in net.Base.OutList:
+            return False
+
+        net.Base.removeObject(obj)
+        net.Document.recompute()
+        return True
 
     @staticmethod
     def setActive(obj):
@@ -438,6 +565,31 @@ class CommandCreateSketch:
         net = DuctNetwork.getActive()
         if net and DuctNetwork.isDuctNetwork(net):
             DuctNetwork.createSketchInteractive(net)
+            
+            
+class CommandCreateLine:
+    """Interactively adds Draft line objects to the currently active network."""
+
+    def QT_TRANSLATE_NOOP(self, text):
+        return text
+
+    def GetResources(self):
+        return {
+            "Pixmap": "Draft_Line",
+            "MenuText": QT_TRANSLATE_NOOP("HVAC_CreateLine", "New Line"),
+            "ToolTip": QT_TRANSLATE_NOOP(
+                "HVAC_CreateLine",
+                "Create line objects inside the active duct network"
+            ),
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None and DuctNetwork.getActive() is not None
+
+    def Activated(self):
+        net = DuctNetwork.getActive()
+        if net and DuctNetwork.isDuctNetwork(net):
+            DuctNetwork.createDraftLineInteractive(net)
 
 
 #=================================================
@@ -558,14 +710,14 @@ class TaskPanelEditDuctNetwork:
         for item_label in selected_items:
             for obj in doc.Objects:
                 if obj.Label == item_label and obj not in self.hvac_network.Base.OutList:
-                    self.hvac_network.Base.addObject(obj)
+                    DuctNetwork.addBaseObject(self.hvac_network, obj)
                     break
 
         # Remove unselected items from Base folder
         existing_labels = [self.list_view.item(i).text() for i in range(self.list_view.count())]
         for obj in self.hvac_network.Base.OutList:
             if self.valid_obj(obj) and obj.Label not in existing_labels:
-                self.hvac_network.Base.removeObject(obj)
+                DuctNetwork.removeBaseObject(self.hvac_network, obj)
 
         return True
 
@@ -585,13 +737,16 @@ def create_new_duct_network(name="DuctNetwork", set_active=True):
     net = DuctNetwork.createObject(name)
     print("HVAC - New DuctNetwork created")
     # Set as active network and enable edit mode
-    activate_duct_network(net, set_edit=True)
+    activate_duct_network(net, set_edit=False)
 
 def activate_duct_network(net, set_edit=False):
     DuctNetwork.setActive(net)
     # Set network to edit mode
     if set_edit:
         Gui.ActiveDocument.setEdit(net.Name)
+    else:
+      pass
+    hvaclib.refreshState()
 
 def modify_duct_network(net):
     """Modify the selected HVAC duct network object"""
@@ -612,6 +767,7 @@ def delete_duct_networks(nets):
         if hasattr(net, "Geometry") and net.Geometry:
             doc.removeObject(net.Geometry.Name)
         doc.removeObject(net.Name)
+    hvaclib.refreshState()
     print("HVAC - Deleted selected {} DuctNetwork(s)".format(len(nets)))
 
 
@@ -625,3 +781,4 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_DeleteDuctNetwork', CommandDeleteDuctNetwork())
     FreeCAD.Gui.addCommand('HVAC_ActivateDuctNetwork', CommandActivateDuctNetwork())
     FreeCAD.Gui.addCommand("HVAC_CreateSketch", CommandCreateSketch())
+    FreeCAD.Gui.addCommand("HVAC_CreateLine", CommandCreateLine())

@@ -49,13 +49,16 @@ class HVAC(Gui.Workbench):
         """
         # import here all the needed files that create your FreeCAD commands
         import freecad.HVAC.DuctNetwork
-
+        
+        self.watchers = []
+        
         self.toolbar_commands = ['HVAC_CreateDuctNetwork',
                                 'HVAC_ActivateDuctNetwork',
                                 'HVAC_ModifyDuctNetwork',
                                 'HVAC_DeleteDuctNetwork',
                                 "Separator",
-                                'HVAC_CreateSketch'
+                                'HVAC_CreateSketch',
+                                'HVAC_CreateLine'
                                 ]
 
         self.submenu_commands = ['HVAC_CreateDuctNetwork',
@@ -63,7 +66,8 @@ class HVAC(Gui.Workbench):
                                 'HVAC_ModifyDuctNetwork',
                                 'HVAC_DeleteDuctNetwork',
                                 "Separator",
-                                'HVAC_CreateSketch'
+                                'HVAC_CreateSketch',
+                                'HVAC_CreateLine'
                                 ]
 
         self.contextmenu_commands = ['HVAC_CreateDuctNetwork',
@@ -71,7 +75,8 @@ class HVAC(Gui.Workbench):
                                 'HVAC_ModifyDuctNetwork',
                                 'HVAC_DeleteDuctNetwork',
                                 "Separator",
-                                'HVAC_CreateSketch'
+                                'HVAC_CreateSketch',
+                                'HVAC_CreateLine'
                                 ]
 
         self.appendMenu(QT_TRANSLATE_NOOP("Workbench", "HVAC"), self.submenu_commands)
@@ -80,18 +85,30 @@ class HVAC(Gui.Workbench):
     def Activated(self):
         """This function is executed whenever the workbench is activated"""
         FreeCAD.Console.PrintMessage(translate("InitGui","HVAC - Workbench loaded") + "\n")
-        self.setWatchers()
+        self.refreshWatchers()
         FreeCAD.Console.PrintMessage(translate("InitGui","HVAC - Workbench - Watchers set") + "\n")
         return
 
     def Deactivated(self):
         """This function is executed whenever the workbench is deactivated"""
+        try:
+            Gui.Control.clearTaskWatcher()
+        except Exception:
+            pass
+        self.watchers = []
         return
 
     def ContextMenu(self, recipient):
         """This function is executed whenever the user right-clicks on screen"""
         self.appendContextMenu(QT_TRANSLATE_NOOP("Workbench", "HVAC"), self.contextmenu_commands)
 
+    def refreshWatchers(self):
+        try:
+            Gui.Control.clearTaskWatcher()
+        except Exception:
+            pass
+        self.setWatchers()
+        
     def setWatchers(self):
 
         class HVACCreateWatcher:
@@ -138,18 +155,18 @@ class HVAC(Gui.Workbench):
 
             def __init__(self):
                 super().__init__()
-                self.commands = ["HVAC_CreateSketch"]
+                self.commands = ["HVAC_CreateSketch", "HVAC_CreateLine"]
                 self.title = translate("HVAC", "Tools")
 
             def shouldShow(self):
                 return super().shouldShow()
 
-        watchers = [
+        self.watchers = [
             HVACCreateWatcher(),
             HVACActivateWatcher(),
             HVACEditWatcher(),
         ]
-        Gui.Control.addTaskWatcher(watchers)
+        Gui.Control.addTaskWatcher(self.watchers)
 
     def GetClassName(self):
         # This function is mandatory if this is a full Python workbench

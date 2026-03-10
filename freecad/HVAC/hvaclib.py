@@ -27,7 +27,7 @@ import os, platform, sys
 from dataclasses import dataclass
 import FreeCAD
 import FreeCADGui as Gui
-from PySide import QtGui
+from PySide import QtGui, QtCore
 translate = FreeCAD.Qt.translate
 preferences = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/HVAC")
 
@@ -41,6 +41,7 @@ if vendor_path not in sys.path:
 # Load external libraries
 import networkx as nx
 
+WORKBENCH_NAME = 'HVAC'
 WORKBENCH_STATE = 'DEFAULT'
 DUCT_NETWORK_CONTEXT_KEY = "hvac_ductnetwork"
 
@@ -79,7 +80,26 @@ def selectedHVACNetworks():
     return None
 
 def refreshState():
-    QtGui.QApplication.processEvents()
+    if not FreeCAD.GuiUp:
+        return
+    
+    # Recompute document
+    doc = FreeCAD.ActiveDocument
+    if doc:
+        FreeCAD.ActiveDocument.recompute()
+    
+    # Refresh TaskWatchers
+    def _do_refresh():
+        """Refresh HVAC task watchers after commands that change watcher conditions"""
+        try:
+            wb = Gui.activeWorkbench()
+            if wb and hasattr(wb, "refreshWatchers"):
+                wb.refreshWatchers()
+        except Exception:
+            pass
+    
+    QtCore.QTimer.singleShot(0, _do_refresh)
+    
 
 #------------------------------------------------------------------------------
 # Object query
@@ -87,19 +107,25 @@ def refreshState():
 
 def obj_is_sketch(obj):
     # Robust check for Sketcher objects
-    return hasattr(obj, "TypeId") and (
-        obj.TypeId.startswith("Sketcher::SketchObject")
-        or obj.TypeId.startswith("Sketcher::SketchObjectPython")
-    )
+    try:
+        return hasattr(obj, "TypeId") and (
+            obj.TypeId.startswith("Sketcher::SketchObject")
+            or obj.TypeId.startswith("Sketcher::SketchObjectPython")
+        )
+    except:
+        return None
 
 def obj_is_wire(obj):
     # Draft Wire is usually Part::Feature (or FeaturePython) with Draft properties
-    return (
-        obj.TypeId == "Part::FeaturePython"
-        and hasattr(obj, "Proxy")
-        and hasattr(obj.Proxy, "Type")
-        and getattr(obj.Proxy, "Type") == "Wire"
-    )
+    try:
+        return (
+            obj.TypeId == "Part::FeaturePython"
+            and hasattr(obj, "Proxy")
+            and hasattr(obj.Proxy, "Type")
+            and getattr(obj.Proxy, "Type") == "Wire"
+        )
+    except:
+        return None
 
 def get_obj_name(obj):
     # Get object name from FreeCAD object
