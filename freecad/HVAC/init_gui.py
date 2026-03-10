@@ -53,25 +53,25 @@ class HVAC(Gui.Workbench):
         self.toolbar_commands = ['HVAC_CreateDuctNetwork',
                                 'HVAC_ActivateDuctNetwork',
                                 'HVAC_ModifyDuctNetwork',
-                                "Separator",
                                 'HVAC_DeleteDuctNetwork',
-                                "Separator"
+                                "Separator",
+                                'HVAC_CreateSketch'
                                 ]
 
         self.submenu_commands = ['HVAC_CreateDuctNetwork',
                                 'HVAC_ActivateDuctNetwork',
                                 'HVAC_ModifyDuctNetwork',
-                                "Separator",
                                 'HVAC_DeleteDuctNetwork',
-                                "Separator"
+                                "Separator",
+                                'HVAC_CreateSketch'
                                 ]
 
         self.contextmenu_commands = ['HVAC_CreateDuctNetwork',
                                 'HVAC_ActivateDuctNetwork',
                                 'HVAC_ModifyDuctNetwork',
-                                "Separator",
                                 'HVAC_DeleteDuctNetwork',
-                                "Separator"
+                                "Separator",
+                                'HVAC_CreateSketch'
                                 ]
 
         self.appendMenu(QT_TRANSLATE_NOOP("Workbench", "HVAC"), self.submenu_commands)
@@ -138,7 +138,7 @@ class HVAC(Gui.Workbench):
 
             def __init__(self):
                 super().__init__()
-                self.commands = [""]
+                self.commands = ["HVAC_CreateSketch"]
                 self.title = translate("HVAC", "Tools")
 
             def shouldShow(self):

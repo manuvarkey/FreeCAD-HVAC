@@ -31,8 +31,48 @@ import freecad.HVAC.hvaclib as hvaclib
 from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
 
+
 #=================================================
-# A. Main classes
+# A. Helper classes
+#=================================================
+
+
+class NewSketchObserver:
+    """New sketch creation observer"""
+    
+    def __init__(self, network_obj):
+        self.network_obj = network_obj
+        self.doc = network_obj.Document
+        self.created_sketch = None
+
+    def slotCreatedObject(self, obj):
+        # Called when a new object is created in the document
+        if self.created_sketch is not None:
+            return
+        if obj and obj.Document == self.doc and obj.TypeId == "Sketcher::SketchObject":
+            self.created_sketch = obj
+            # Delay grouping slightly so built-in command finishes first
+            QtCore.QTimer.singleShot(0, self.finalize)
+
+    def finalize(self):
+        try:
+            net = self.network_obj
+            if not net or not hasattr(net, "Geometry") or not self.created_sketch:
+                return
+
+            base_folder = net.Base
+            sk = self.created_sketch
+
+            # Avoid duplicate insert
+            if sk not in base_folder.OutList:
+                base_folder.addObject(sk)
+        finally:
+            # Always remove observer after one use
+            FreeCAD.removeDocumentObserver(self)
+
+
+#=================================================
+# B. Main classes
 #=================================================
 
 
@@ -41,16 +81,22 @@ class DuctManagedFolder:
 
     def __init__(self, obj, owner=None, role=""):
         obj.Proxy = self
-        if "OwnerNetwork" not in obj.PropertiesList:
-            obj.addProperty("App::PropertyLink", "OwnerNetwork", "HVAC", "Owning duct network")
+        if "OwnerNetworkName" not in obj.PropertiesList:
+            # Store link as string to avoid cyclic dependency issue
+            obj.addProperty("App::PropertyString", "OwnerNetworkName", "HVAC", "Owning duct network")
         if "FolderRole" not in obj.PropertiesList:
             obj.addProperty("App::PropertyString", "FolderRole", "HVAC", "Internal folder role")
-        obj.OwnerNetwork = owner
+        obj.OwnerNetworkName = owner.Name if owner else ""
         obj.FolderRole = role
 
     def execute(self, obj):
         """Required so the object can clear its touched state on recompute."""
         pass
+        
+    @staticmethod
+    def getOwner(obj):
+        if self.OwnerNetworkName and obj.Document:
+            return obj.Document.getObject(owner_name)
 
     @staticmethod
     def create(doc, name, owner, role):
@@ -80,7 +126,8 @@ class DuctManagedFolderViewProvider:
 
     def onDelete(self, vobj, subelements):
         obj = vobj.Object
-        owner = getattr(obj, "OwnerNetwork", None)
+        #owner = getattr(obj, "OwnerNetwork", None)
+        owner = obj.getOwner(obj)
         # Allow deletion only when the owner network itself is being deleted
         if owner and getattr(owner.Proxy, "_allow_internal_delete", False):
             return True
@@ -138,6 +185,25 @@ class DuctNetwork:
         DuctNetwork(net)
         DuctNetworkViewProvider(net.ViewObject)
         return net
+        
+    @staticmethod
+    def createSketchInteractive(obj):
+        """
+        Open the standard FreeCAD sketch creation panel and,
+        after the sketch is created, move it under obj.Geometry.
+        """
+        if not obj or not DuctNetwork.isDuctNetwork(obj):
+            return
+        if FreeCAD.ActiveDocument is None or Gui.ActiveDocument is None:
+            return
+            
+        # Make this network active in the 3D view context
+        DuctNetwork.setActive(obj)
+        # Install observer before running the command
+        obs = NewSketchObserver(obj)
+        FreeCAD.addDocumentObserver(obs)
+        # Launch the built-in sketch creation command
+        Gui.runCommand("Sketcher_NewSketch")
 
     @staticmethod
     def setActive(obj):
@@ -237,7 +303,7 @@ class DuctNetworkViewProvider:
 
 
 #=================================================
-# B. Command classes
+# C. Command classes
 #=================================================
 
 
@@ -350,10 +416,32 @@ class CommandDeleteDuctNetwork:
         selected_hvac_networks = hvaclib.selectedHVACNetworks()
         if selected_hvac_networks:
             delete_duct_networks(selected_hvac_networks)
+            
+    
+class CommandCreateSketch:
+    """interactively adds a sketch to the currently active network"""
+    
+    def QT_TRANSLATE_NOOP(self, text):
+        return text
+    
+    def GetResources(self):
+        return {
+            "Pixmap": "Sketcher_NewSketch",
+            "MenuText": QT_TRANSLATE_NOOP('HVAC_CreateSketch', 'New Sketch'),
+            "ToolTip": QT_TRANSLATE_NOOP('HVAC_CreateSketch', 'Create a new sketch inside the active duct network')
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None and DuctNetwork.getActive() is not None
+
+    def Activated(self):
+        net = DuctNetwork.getActive()
+        if net and DuctNetwork.isDuctNetwork(net):
+            DuctNetwork.createSketchInteractive(net)
 
 
 #=================================================
-# C. Task Panel classes
+# D. Task Panel classes
 #=================================================
 
 
@@ -487,7 +575,7 @@ class TaskPanelEditDuctNetwork:
 
 
 #=================================================
-# D. General functions
+# E. General functions
 #=================================================
 
 
@@ -528,7 +616,7 @@ def delete_duct_networks(nets):
 
 
 #=================================================
-# E. Register Commands
+# F. Register Commands
 #=================================================
 
 if FreeCAD.GuiUp:
@@ -536,3 +624,4 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_ModifyDuctNetwork', CommandModifyDuctNetwork())
     FreeCAD.Gui.addCommand('HVAC_DeleteDuctNetwork', CommandDeleteDuctNetwork())
     FreeCAD.Gui.addCommand('HVAC_ActivateDuctNetwork', CommandActivateDuctNetwork())
+    FreeCAD.Gui.addCommand("HVAC_CreateSketch", CommandCreateSketch())
