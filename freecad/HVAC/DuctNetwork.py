@@ -136,14 +136,16 @@ class DuctManagedFolder:
         obj.OwnerNetworkName = owner.Name if owner else ""
         obj.FolderRole = role
 
+    def onDocumentRestored(self, obj):
+        obj.Proxy = self
+
     def execute(self, obj):
         """Required so the object can clear its touched state on recompute."""
         pass
-        
+
     @staticmethod
     def getOwner(obj):
-        if self.OwnerNetworkName and obj.Document:
-            return obj.Document.getObject(owner_name)
+        return DuctNetwork.getOwnerNetwork(obj)
 
     @staticmethod
     def create(doc, name, owner, role):
@@ -151,8 +153,8 @@ class DuctManagedFolder:
         DuctManagedFolder(folder, owner=owner, role=role)
         DuctManagedFolderViewProvider(folder.ViewObject)
         return folder
-        
-        
+
+
 class DuctManagedFolderViewProvider:
     def __init__(self, vobj):
         vobj.Proxy = self
@@ -173,8 +175,7 @@ class DuctManagedFolderViewProvider:
 
     def onDelete(self, vobj, subelements):
         obj = vobj.Object
-        #owner = getattr(obj, "OwnerNetwork", None)
-        owner = obj.getOwner(obj)
+        owner = DuctNetwork.getOwnerNetwork(obj)
         # Allow deletion only when the owner network itself is being deleted
         if owner and getattr(owner.Proxy, "_allow_internal_delete", False):
             return True
@@ -183,13 +184,210 @@ class DuctManagedFolderViewProvider:
         )
         return False
 
+    def claimChildren(self):
+        try:
+            return list(self.Object.OutList)
+        except Exception:
+            return []
+
     def canDropObjects(self):
         return False
 
     def canDragObjects(self):
         return False
+
+
+class DuctSegment:
+    """Derived per-edge duct segment created from network base geometry."""
+
+    TYPE = "DuctSegment"
+    SECTION_SHAPES = ["Rectangular", "Circular"]
+
+    def __init__(self, obj, owner=None, key="", source_obj=None, source_index=0):
+        obj.Proxy = self
+        self._allow_delete = False
+        self.setProperties(obj)
+        self.updateSectionEditorModes(obj)
+        self.updateMetadata(
+            obj,
+            owner=owner,
+            key=key,
+            source_obj=source_obj,
+            source_index=source_index,
+        )
+
+    def onDocumentRestored(self, obj):
+        obj.Proxy = self
+        self._allow_delete = False
+        self.setProperties(obj)
+        self.updateSectionEditorModes(obj)
+
+    def setProperties(self, obj):
+        self._addProperty(obj, "App::PropertyString", "OwnerNetworkName", "HVAC", "Owning duct network")
+        self._addProperty(obj, "App::PropertyString", "SegmentKey", "HVAC", "Stable source-based segment key")
+        self._addProperty(obj, "App::PropertyLink", "SourceObject", "HVAC", "Source sketch or draft line")
+        self._addProperty(obj, "App::PropertyString", "SourceObjectName", "HVAC", "Internal source object name")
+        self._addProperty(obj, "App::PropertyInteger", "SourceIndex", "HVAC", "Zero-based line segment index in the source object")
+        self._addProperty(obj, "App::PropertyInteger", "StartNode", "HVAC", "Graph start node id")
+        self._addProperty(obj, "App::PropertyInteger", "EndNode", "HVAC", "Graph end node id")
+        self._addProperty(obj, "App::PropertyVector", "StartPoint", "HVAC", "Segment start point")
+        self._addProperty(obj, "App::PropertyVector", "EndPoint", "HVAC", "Segment end point")
+        self._addProperty(obj, "App::PropertyLength", "CenterlineLength", "HVAC", "Computed centerline length")
+
+        current_shape = getattr(obj, "SectionShape", self.SECTION_SHAPES[0])
+        if "SectionShape" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyEnumeration", "SectionShape", "Duct Type", "Cross-section shape")
+        obj.SectionShape = self.SECTION_SHAPES
+        if current_shape in self.SECTION_SHAPES:
+            obj.SectionShape = current_shape
+        else:
+            obj.SectionShape = self.SECTION_SHAPES[0]
+
+        self._addProperty(obj, "App::PropertyLength", "Diameter", "Dimensions", "Circular duct diameter")
+        self._addProperty(obj, "App::PropertyLength", "Width", "Dimensions", "Rectangular duct width")
+        self._addProperty(obj, "App::PropertyLength", "Height", "Dimensions", "Rectangular duct height")
         
-        
+        self._addProperty(obj, "App::PropertyLength", "InsulationThickness", "Parameters", "Insulation thickness")
+        self._addProperty(obj, "App::PropertyLength", "Roughness", "Parameters", "Wall roughness")
+        self._addProperty(obj, "App::PropertyFloat", "FlowRate", "Parameters", "Design flow rate")
+        self._addProperty(obj, "App::PropertyFloat", "Velocity", "Parameters", "Design air velocity")
+
+        for prop in (
+            "OwnerNetworkName",
+            "SegmentKey",
+            "SourceObject",
+            "SourceObjectName",
+            "SourceIndex",
+            "StartNode",
+            "EndNode",
+            "StartPoint",
+            "EndPoint",
+            "CenterlineLength",
+        ):
+            try:
+                obj.setEditorMode(prop, 1)
+            except Exception:
+                pass
+
+    def onChanged(self, obj, prop):
+        if prop == "SectionShape":
+            self.updateSectionEditorModes(obj)
+
+    def updateSectionEditorModes(self, obj):
+        shape = getattr(obj, "SectionShape", self.SECTION_SHAPES[0])
+        is_circular = shape == "Circular"
+        try:
+            obj.setEditorMode("Diameter", 0 if is_circular else 1)
+            obj.setEditorMode("Width", 1 if is_circular else 0)
+            obj.setEditorMode("Height", 1 if is_circular else 0)
+        except Exception:
+            pass
+
+    def updateMetadata(self, obj, owner=None, key="", source_obj=None, source_index=0, start_node=0, end_node=0, start_point=None, end_point=None):
+        if owner:
+            obj.OwnerNetworkName = owner.Name
+        if key:
+            obj.SegmentKey = key
+        obj.SourceObject = source_obj
+        obj.SourceObjectName = source_obj.Name if source_obj else ""
+        obj.SourceIndex = int(source_index)
+        obj.StartNode = int(start_node)
+        obj.EndNode = int(end_node)
+
+        if start_point is not None:
+            obj.StartPoint = FreeCAD.Vector(*start_point)
+        if end_point is not None:
+            obj.EndPoint = FreeCAD.Vector(*end_point)
+
+        if start_point is not None and end_point is not None:
+            start_vec = FreeCAD.Vector(*start_point)
+            end_vec = FreeCAD.Vector(*end_point)
+            obj.CenterlineLength = end_vec.sub(start_vec).Length
+
+    def execute(self, obj):
+        start_point = getattr(obj, "StartPoint", None)
+        end_point = getattr(obj, "EndPoint", None)
+        width = getattr(obj, "Width", None)
+        height = getattr(obj, "Height", None)
+        if start_point is None or end_point is None:
+            return
+        try:
+            if start_point.sub(end_point).Length > 0:
+                obj.Shape = hvaclib.create_rectangular_duct_geom(start_point, end_point, width, height)
+        except Exception as e:
+            print("HVAC - Error generating geometry \n" + str(e))
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        self._allow_delete = False
+
+    @classmethod
+    def create(cls, doc, name, owner, key, source_obj, source_index):
+        segment = doc.addObject("Part::FeaturePython", name)
+        cls(segment, owner=owner, key=key, source_obj=source_obj, source_index=source_index)
+        DuctSegmentViewProvider(segment.ViewObject)
+        return segment
+
+    @staticmethod
+    def isDuctSegment(obj):
+        return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctSegment)
+
+    @staticmethod
+    def makeKey(obj_name, source_index):
+        return "{}:{}".format(obj_name, int(source_index))
+
+    @staticmethod
+    def labelFor(source_obj, source_index):
+        source_label = source_obj.Label if source_obj else "Segment"
+        return "{} [{}]".format(source_label, int(source_index) + 1)
+
+    @staticmethod
+    def _addProperty(obj, prop_type, prop_name, group, description):
+        if prop_name not in obj.PropertiesList:
+            obj.addProperty(prop_type, prop_name, group, description)
+
+
+class DuctSegmentViewProvider:
+    """View provider for derived duct segment objects."""
+
+    def __init__(self, vobj):
+        vobj.Proxy = self
+
+    def attach(self, vobj):
+        self.Object = vobj.Object
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.pop("Object", None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
+    def getIcon(self):
+        return hvaclib.get_icon_path("DuctsIcon.svg")
+
+    def onDelete(self, vobj, subelements):
+        obj = vobj.Object
+        owner = DuctNetwork.getOwnerNetwork(obj)
+        if getattr(obj.Proxy, "_allow_delete", False):
+            return True
+        if owner and getattr(owner.Proxy, "_allow_internal_delete", False):
+            return True
+        FreeCAD.Console.PrintWarning(
+            "HVAC - Internal segment '{}' cannot be deleted directly.\n".format(obj.Label)
+        )
+        return False
+
+    def canDropObjects(self):
+        return False
+
+    def canDragObjects(self):
+        return False
+
+
 class DuctNetwork:
     """Visualize and configure HVAC duct network in FreeCAD's 3D view."""
 
@@ -200,31 +398,48 @@ class DuctNetwork:
     def __init__(self, obj):
         obj.Proxy = self
         self._allow_internal_delete = False
+        self._sync_in_progress = False
+        self.setProperties(obj)
+
+    def onDocumentRestored(self, obj):
+        obj.Proxy = self
+        self._allow_internal_delete = False
+        self._sync_in_progress = False
         self.setProperties(obj)
 
     def setProperties(self, obj):
         """Gives the object properties to HVAC ducts."""
         doc = obj.Document
-        # Create the sub-folders
-        obj.addProperty("App::PropertyLink", "Base", "HVAC", "Base (internal)")
-        folder_base = DuctManagedFolder.create(
-            doc,
-            f"{obj.Name}_{self.FOLDER_BASE_NAME}",
-            owner=obj,
-            role=self.FOLDER_BASE_NAME,
-        )
-        folder_base.Label = self.FOLDER_BASE_NAME
-        obj.Base = folder_base
-        
-        obj.addProperty("App::PropertyLink", "Geometry", "HVAC", "Geometry (internal)")
-        folder_geometry = DuctManagedFolder.create(
-            doc,
-            f"{obj.Name}_{self.FOLDER_GEOMETRY_NAME}",
-            owner=obj,
-            role=self.FOLDER_GEOMETRY_NAME,
-        )
-        folder_geometry.Label = self.FOLDER_GEOMETRY_NAME
-        obj.Geometry = folder_geometry
+
+        if "Base" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyLink", "Base", "HVAC", "Base (internal)")
+        if getattr(obj, "Base", None) is None and doc is not None:
+            folder_base = DuctManagedFolder.create(
+                doc,
+                f"{obj.Name}_{self.FOLDER_BASE_NAME}",
+                owner=obj,
+                role=self.FOLDER_BASE_NAME,
+            )
+            folder_base.Label = self.FOLDER_BASE_NAME
+            obj.Base = folder_base
+        elif obj.Base:
+            obj.Base.OwnerNetworkName = obj.Name
+            obj.Base.FolderRole = self.FOLDER_BASE_NAME
+
+        if "Geometry" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyLink", "Geometry", "HVAC", "Geometry (internal)")
+        if getattr(obj, "Geometry", None) is None and doc is not None:
+            folder_geometry = DuctManagedFolder.create(
+                doc,
+                f"{obj.Name}_{self.FOLDER_GEOMETRY_NAME}",
+                owner=obj,
+                role=self.FOLDER_GEOMETRY_NAME,
+            )
+            folder_geometry.Label = self.FOLDER_GEOMETRY_NAME
+            obj.Geometry = folder_geometry
+        elif obj.Geometry:
+            obj.Geometry.OwnerNetworkName = obj.Name
+            obj.Geometry.FolderRole = self.FOLDER_GEOMETRY_NAME
 
     @staticmethod
     def createObject(name):
@@ -232,18 +447,18 @@ class DuctNetwork:
         DuctNetwork(net)
         DuctNetworkViewProvider(net.ViewObject)
         return net
-        
+
     @staticmethod
     def createSketchInteractive(obj):
         """
         Open the standard FreeCAD sketch creation panel and,
-        after the sketch is created, move it under obj.Geometry.
+        after the sketch is created, move it under obj.Base.
         """
         if not obj or not DuctNetwork.isDuctNetwork(obj):
             return
         if FreeCAD.ActiveDocument is None or Gui.ActiveDocument is None:
             return
-            
+
         # Make this network active in the 3D view context
         DuctNetwork.setActive(obj)
         # Install observer before running the command
@@ -251,7 +466,7 @@ class DuctNetwork:
         FreeCAD.addDocumentObserver(obs)
         # Launch the built-in sketch creation command
         Gui.runCommand("Sketcher_NewSketch")
-        
+
     @staticmethod
     def createDraftLineInteractive(obj):
         """
@@ -271,7 +486,7 @@ class DuctNetwork:
         # Launch the built-in Draft line creation command
         Gui.activateWorkbench("DraftWorkbench")
         Gui.runCommand("Draft_Line")
-            
+
     @staticmethod
     def addBaseObject(net, obj):
         """
@@ -305,8 +520,7 @@ class DuctNetwork:
         net.Base.addObject(obj)
         net.Document.recompute()
         return True
-        
-        
+
     @staticmethod
     def removeBaseObject(net, obj):
         """
@@ -333,6 +547,41 @@ class DuctNetwork:
         return True
 
     @staticmethod
+    def removeGeometryObject(net, obj):
+        """Remove a derived geometry object from the Geometry folder and document."""
+        if not net or not obj or not DuctNetwork.isDuctNetwork(net):
+            return False
+        if getattr(obj, "Document", None) != net.Document:
+            return False
+        if DuctSegment.isDuctSegment(obj) and getattr(obj, "Proxy", None):
+            obj.Proxy._allow_delete = True
+        if hasattr(net, "Geometry") and net.Geometry and obj in net.Geometry.OutList:
+            net.Geometry.removeObject(obj)
+        net.Document.removeObject(obj.Name)
+        return True
+
+    @staticmethod
+    def segmentObjectName(net, edge_ref):
+        safe_source_name = "".join(ch if ch.isalnum() else "_" for ch in edge_ref.obj_name)
+        return "{}_Segment_{}_{:03d}".format(net.Name, safe_source_name, edge_ref.local_index)
+
+    @staticmethod
+    def collectSegmentObjects(net):
+        segments = {}
+        geometry = getattr(net, "Geometry", None)
+        if geometry is None:
+            return segments
+        for child in list(geometry.OutList):
+            if not DuctSegment.isDuctSegment(child):
+                continue
+            key = getattr(child, "SegmentKey", "")
+            if not key and getattr(child, "SourceObjectName", ""):
+                key = DuctSegment.makeKey(child.SourceObjectName, child.SourceIndex)
+            if key:
+                segments[key] = child
+        return segments
+
+    @staticmethod
     def setActive(obj):
         """Set this DuctNetwork as the active container in the 3D view."""
         Gui.ActiveDocument.ActiveView.setActiveObject(DuctNetwork.CONTEXT_KEY, obj)
@@ -352,13 +601,83 @@ class DuctNetwork:
     def isDuctNetwork(obj):
         """Test whether obj is a DuctNetwork FeaturePython object."""
         return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctNetwork)
+        
+    @staticmethod
+    def getOwnerNetwork(obj):
+        """Return the owning duct network document object for an internal object."""
+        owner_name = getattr(obj, "OwnerNetworkName", "")
+        doc = getattr(obj, "Document", None)
+        if owner_name and doc:
+            return doc.getObject(owner_name)
+        return None
+
+    def syncSegments(self, net, parser):
+        doc = net.Document
+        geometry = getattr(net, "Geometry", None)
+        if doc is None or geometry is None:
+            return
+
+        existing_segments = self.collectSegmentObjects(net)
+        live_keys = set()
+
+        for edge_ref in parser.edges():
+            key = DuctSegment.makeKey(edge_ref.obj_name, edge_ref.local_index)
+            live_keys.add(key)
+
+            source_obj = doc.getObject(edge_ref.obj_name)
+            if source_obj is None:
+                continue
+
+            segment_obj = existing_segments.get(key)
+            if segment_obj is None:
+                segment_obj = DuctSegment.create(
+                    doc,
+                    self.segmentObjectName(net, edge_ref),
+                    owner=net,
+                    key=key,
+                    source_obj=source_obj,
+                    source_index=edge_ref.local_index,
+                )
+            if segment_obj not in geometry.OutList:
+                geometry.addObject(segment_obj)
+
+            start_node, end_node = parser.edge_nodes(edge_ref)
+            start_point, end_point = parser.edge_line(edge_ref)
+            segment_obj.Proxy.updateMetadata(
+                segment_obj,
+                owner=net,
+                key=key,
+                source_obj=source_obj,
+                source_index=edge_ref.local_index,
+                start_node=start_node,
+                end_node=end_node,
+                start_point=start_point,
+                end_point=end_point,
+            )
+            segment_obj.Label = DuctSegment.labelFor(source_obj, edge_ref.local_index)
+
+        for key, segment_obj in list(existing_segments.items()):
+            if key not in live_keys:
+                self.removeGeometryObject(net, segment_obj)
 
     def execute(self, obj):
-        # Parse geomtery
-        parser = hvaclib.DuctNetworkParser(obj.Base.OutList)
-        # Update DuctNetworkData Class
-        print(parser.edge_u_v.values())
-        #TODO
+        base_folder = getattr(obj, "Base", None)
+        geometry_folder = getattr(obj, "Geometry", None)
+        if base_folder is None or geometry_folder is None:
+            return
+        if self._sync_in_progress:
+            return
+
+        self._sync_in_progress = True
+        try:
+            parser = hvaclib.DuctNetworkParser(list(base_folder.OutList))
+            self.syncSegments(obj, parser)
+        except Exception as err:
+            FreeCAD.Console.PrintError(
+                "HVAC - Failed to update segments for '{}': {}\n".format(obj.Label, err)
+            )
+        finally:
+            self._sync_in_progress = False
 
 
 class DuctNetworkViewProvider:
@@ -762,10 +1081,12 @@ def delete_duct_networks(nets):
             continue
         if hasattr(net, "Proxy") and net.Proxy:
             net.Proxy._allow_internal_delete = True
+        if hasattr(net, "Geometry") and net.Geometry:
+            for obj in list(net.Geometry.OutList):
+                DuctNetwork.removeGeometryObject(net, obj)
+            doc.removeObject(net.Geometry.Name)
         if hasattr(net, "Base") and net.Base:
             doc.removeObject(net.Base.Name)
-        if hasattr(net, "Geometry") and net.Geometry:
-            doc.removeObject(net.Geometry.Name)
         doc.removeObject(net.Name)
     hvaclib.refreshState()
     print("HVAC - Deleted selected {} DuctNetwork(s)".format(len(nets)))
@@ -782,3 +1103,7 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_ActivateDuctNetwork', CommandActivateDuctNetwork())
     FreeCAD.Gui.addCommand("HVAC_CreateSketch", CommandCreateSketch())
     FreeCAD.Gui.addCommand("HVAC_CreateLine", CommandCreateLine())
+
+
+
+

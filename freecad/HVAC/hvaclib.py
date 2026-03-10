@@ -27,6 +27,7 @@ import os, platform, sys
 from dataclasses import dataclass
 import FreeCAD
 import FreeCADGui as Gui
+import Part
 from PySide import QtGui, QtCore
 translate = FreeCAD.Qt.translate
 preferences = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/HVAC")
@@ -340,6 +341,54 @@ class DuctNetworkParser:
         n1 = self.node_id_by_key[self._key(p1)]
         n2 = self.node_id_by_key[self._key(p2)]
         return nx.shortest_path(self.graph, n1, n2)
+
+
+#------------------------------------------------------------------------------
+# Geometry generation functions
+#------------------------------------------------------------------------------
+
+
+def create_rectangular_duct_geom(start_point, end_point, width, height):
+    """
+    Create a cuboid centered on the line between two points.
+
+    start_point, end_point : (x,y,z)
+    width  : cross-section width
+    height : cross-section height
+
+    Returns:
+        Part.Shape
+    """
+
+    p1 = FreeCAD.Vector(*start_point)
+    p2 = FreeCAD.Vector(*end_point)
+
+    direction = p2 - p1
+    length = direction.Length
+
+    if length == 0:
+        raise ValueError("Start and end points cannot be identical")
+
+    direction_unit = FreeCAD.Vector(direction)
+    direction_unit.normalize()
+
+
+    # Create box centered on axis
+    shape = Part.makeBox(length, width, height)
+    
+    # Shift cross-section so line passes through center
+    # shape.translate(FreeCAD.Vector(0, -width / 2.0, -height / 2.0))
+    
+    # Align box X-axis to direction vector
+    rotation = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), direction_unit)
+
+    # Place at start point
+    placement = FreeCAD.Placement(p1, rotation)
+    
+    shape_mod = shape.copy()
+    shape_mod.transformShape(placement.toMatrix(), True, False)
+
+    return shape_mod
 
 
 #------------------------------------------------------------------------------
