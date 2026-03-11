@@ -118,6 +118,67 @@ class NewDraftLineObserver:
             FreeCAD.removeDocumentObserver(self)
 
 
+class DuctNetworkChangeObserver:
+    """Observe changes in base objects and resync owning duct networks."""
+
+    def __init__(self):
+        self._scheduled = set()
+
+    def slotChangedObject(self, obj, prop):
+        if obj is None or obj.Document is None:
+            return
+
+        # Ignore internal managed objects
+        if DuctNetwork.isDuctNetwork(obj):
+            return
+        if DuctSegment.isDuctSegment(obj):
+            return
+        if isinstance(getattr(obj, "Proxy", None), DuctManagedFolder):
+            return
+
+        # React only to properties relevant to geometry updates
+        if hvaclib.obj_is_sketch(obj):
+            relevant_props = ("Geometry", "Shape", "Placement")
+        elif hvaclib.obj_is_wire(obj):
+            relevant_props = ("Points", "Shape", "Placement")
+        else:
+            return
+
+        if prop not in relevant_props:
+            return
+
+        doc = obj.Document
+        for net in doc.Objects:
+            if not DuctNetwork.isDuctNetwork(net):
+                continue
+
+            base = getattr(net, "Base", None)
+            if base is None:
+                continue
+
+            if obj in base.OutList:
+                if net.Name in self._scheduled:
+                    continue
+
+                self._scheduled.add(net.Name)
+                QtCore.QTimer.singleShot(0, lambda n=net: self._doSync(n))
+
+    def _doSync(self, net):
+        if net is None:
+            return
+
+        self._scheduled.discard(net.Name)
+
+        if getattr(net, "Document", None) is None:
+            return
+        if not DuctNetwork.isDuctNetwork(net):
+            return
+
+        proxy = getattr(net, "Proxy", None)
+        if proxy:
+            proxy.requestSync(net)            
+            
+            
 #=================================================
 # B. Main classes
 #=================================================
@@ -282,24 +343,55 @@ class DuctSegment:
             pass
 
     def updateMetadata(self, obj, owner=None, key="", source_obj=None, source_index=0, start_node=0, end_node=0, start_point=None, end_point=None):
-        if owner:
+        changed = False
+        
+        if owner and getattr(obj, "OwnerNetworkName", "") != owner.Name:
             obj.OwnerNetworkName = owner.Name
-        if key:
+            changed = True
+    
+        if key and getattr(obj, "SegmentKey", "") != key:
             obj.SegmentKey = key
-        obj.SourceObjectName = source_obj.Name if source_obj else ""
-        obj.SourceIndex = int(source_index)
-        obj.StartNode = int(start_node)
-        obj.EndNode = int(end_node)
-
+            changed = True
+    
+        source_name = source_obj.Name if source_obj else ""
+        if getattr(obj, "SourceObjectName", "") != source_name:
+            obj.SourceObjectName = source_name
+            changed = True
+    
+        if getattr(obj, "SourceIndex", None) != int(source_index):
+            obj.SourceIndex = int(source_index)
+            changed = True
+    
+        if getattr(obj, "StartNode", None) != int(start_node):
+            obj.StartNode = int(start_node)
+            changed = True
+    
+        if getattr(obj, "EndNode", None) != int(end_node):
+            obj.EndNode = int(end_node)
+            changed = True
+    
+        start_vec = None
+        end_vec = None
+    
         if start_point is not None:
-            obj.StartPoint = FreeCAD.Vector(*start_point)
-        if end_point is not None:
-            obj.EndPoint = FreeCAD.Vector(*end_point)
-
-        if start_point is not None and end_point is not None:
             start_vec = FreeCAD.Vector(*start_point)
+            if obj.StartPoint != start_vec:
+                obj.StartPoint = start_vec
+                changed = True
+    
+        if end_point is not None:
             end_vec = FreeCAD.Vector(*end_point)
-            obj.CenterlineLength = end_vec.sub(start_vec).Length
+            if obj.EndPoint != end_vec:
+                obj.EndPoint = end_vec
+                changed = True
+    
+        if start_vec is not None and end_vec is not None:
+            length = end_vec.sub(start_vec).Length
+            if abs(float(obj.CenterlineLength) - float(length)) > 1e-9:
+                obj.CenterlineLength = length
+                changed = True
+    
+        return changed
 
     def execute(self, obj):
         start_point = getattr(obj, "StartPoint", None)
@@ -402,6 +494,7 @@ class DuctNetwork:
         self._allow_internal_delete = False
         self._initial_sync = True
         self._sync_in_progress = False
+        self._sync_scheduled = False
         self.setProperties(obj)
 
     def onDocumentRestored(self, obj):
@@ -409,7 +502,9 @@ class DuctNetwork:
         self._allow_internal_delete = False
         self._initial_sync = True
         self._sync_in_progress = False
+        self._sync_scheduled = False
         self.setProperties(obj)
+        self.requestSync(obj, initial_sync=True)
 
     def setProperties(self, obj):
         """Gives the object properties to HVAC ducts."""
@@ -493,17 +588,6 @@ class DuctNetwork:
 
     @staticmethod
     def addBaseObject(net, obj):
-        """
-        Add a valid base object to the network Base folder.
-
-        Allowed objects:
-        - Sketch objects
-        - Draft wire/line style objects detected by hvaclib.obj_is_wire()
-
-        Returns:
-            bool: True if object was added, False otherwise.
-        """
-        # Basic validity
         if not net or not obj:
             return False
         if not DuctNetwork.isDuctNetwork(net):
@@ -514,26 +598,19 @@ class DuctNetwork:
             return False
         if net.Document != obj.Document:
             return False
-        # Allow only supported object types
         if not (hvaclib.obj_is_sketch(obj) or hvaclib.obj_is_wire(obj)):
             return False
-        # Already in Base folder
         if obj in net.Base.OutList:
             return False
-
+        
         net.Base.addObject(obj)
+        if getattr(net, "Proxy", None):
+            net.Proxy.requestSync(net)
         net.Document.recompute()
         return True
 
     @staticmethod
     def removeBaseObject(net, obj):
-        """
-        Remove an object from the network Base folder.
-
-        Returns:
-            bool: True if object was removed, False otherwise.
-        """
-        # Basic validity
         if not net or not obj:
             return False
         if not DuctNetwork.isDuctNetwork(net):
@@ -542,11 +619,12 @@ class DuctNetwork:
             return False
         if net.Document != getattr(obj, "Document", None):
             return False
-        # Object is not inside Base
         if obj not in net.Base.OutList:
             return False
-
+    
         net.Base.removeObject(obj)
+        if getattr(net, "Proxy", None):
+            net.Proxy.requestSync(net)
         net.Document.recompute()
         return True
 
@@ -628,6 +706,7 @@ class DuctNetwork:
         geometry = getattr(net, "Geometry", None)
         if doc is None or geometry is None:
             return
+        changed = False
 
         # Map current segment objects by their stable keys
         existing_segments = self.collectSegmentObjects(net)
@@ -670,10 +749,12 @@ class DuctNetwork:
                     source_obj=source_obj,
                     source_index=edge_ref.local_index,
                 )
+                changed = True
                 
             # Ensure the segment is correctly nested in the internal Geometry folder
             if segment_obj not in geometry.OutList:
                 geometry.addObject(segment_obj)
+                changed = True
             
             # Track segments that should remain in the document
             live_objs.add(segment_obj)         
@@ -681,7 +762,7 @@ class DuctNetwork:
             # Update segment properties based on the latest parser results
             start_node, end_node = parser.edge_nodes(edge_ref)
             start_point, end_point = parser.edge_line(edge_ref)
-            segment_obj.Proxy.updateMetadata(
+            meta_changed = segment_obj.Proxy.updateMetadata(
                 segment_obj,
                 owner=net,
                 key=key,
@@ -692,36 +773,57 @@ class DuctNetwork:
                 start_point=start_point,
                 end_point=end_point,
             )
+            changed = changed or meta_changed
             # Update the user-facing label
-            segment_obj.Label = DuctSegment.labelFor(source_obj, edge_ref.local_index)
+            new_label = DuctSegment.labelFor(source_obj, edge_ref.local_index)
+            if segment_obj.Label != new_label:
+                segment_obj.Label = new_label
+                changed = True
 
         # Remove segments that are no longer part of the network's base geometry
         for segment_obj in list(existing_segments.values()):
             if segment_obj not in live_objs:
                 self.removeGeometryObject(net, segment_obj)
+                changed = True
+        return changed
+                
+    def requestSync(self, obj, initial_sync=False):
+        if self._sync_scheduled is True:
+            return
+        self._initial_sync = initial_sync
+        
+        self._sync_scheduled = True
+        QtCore.QTimer.singleShot(0, lambda o=obj: self._runDeferredSync(o))
+    
+    def _runDeferredSync(self, obj):
+        self._sync_scheduled = False
 
-    def execute(self, obj):
+        if obj is None or obj.Document is None:
+            return
+        if self._sync_in_progress:
+            return
+    
         base_folder = getattr(obj, "Base", None)
         geometry_folder = getattr(obj, "Geometry", None)
         if base_folder is None or geometry_folder is None:
             return
-        if self._sync_in_progress:
-            return
-
+    
         self._sync_in_progress = True
         try:
             parser = hvaclib.DuctNetworkParser(list(base_folder.OutList))
-            if self._initial_sync:
-                self.syncSegments(obj, parser, initial_sync=True)
-            else:
-                self.syncSegments(obj, parser, initial_sync=False)
+            changed = self.syncSegments(obj, parser, initial_sync=self._initial_sync)
+            self._initial_sync = False
+            if changed:
+                obj.Document.recompute()
         except Exception as err:
             FreeCAD.Console.PrintError(
                 "HVAC - Failed to update segments for '{}': {}\n".format(obj.Label, err)
             )
         finally:
-            self._initial_sync = False
             self._sync_in_progress = False
+
+    def execute(self, obj):
+        pass
 
 
 class DuctNetworkViewProvider:
@@ -1088,6 +1190,13 @@ class TaskPanelEditDuctNetwork:
 # E. General functions
 #=================================================
 
+_hvac_change_observer = None
+
+def ensure_change_observer():
+    global _hvac_change_observer
+    if _hvac_change_observer is None:
+        _hvac_change_observer = DuctNetworkChangeObserver()
+        FreeCAD.addDocumentObserver(_hvac_change_observer)
 
 def create_new_duct_network(name="DuctNetwork", set_active=True):
     """Create new duct network"""
@@ -1144,6 +1253,7 @@ def delete_duct_networks(nets, remove_internal_only=False):
 #=================================================
 
 if FreeCAD.GuiUp:
+    ensure_change_observer()
     FreeCAD.Gui.addCommand('HVAC_CreateDuctNetwork', CommandCreateDuctNetwork())
     FreeCAD.Gui.addCommand('HVAC_ModifyDuctNetwork', CommandModifyDuctNetwork())
     FreeCAD.Gui.addCommand('HVAC_DeleteDuctNetwork', CommandDeleteDuctNetwork())
