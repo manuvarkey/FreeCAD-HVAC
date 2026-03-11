@@ -259,7 +259,8 @@ class DuctNetworkParser:
                 v1 = e.Vertexes[0].Point
                 v2 = e.Vertexes[-1].Point
                 if (v1.sub(v2)).Length > tol:
-                    yield (vec_to_xyz(v1), vec_to_xyz(v2), getattr(e, "Tag", ""))
+                    tag = "{}_{}".format(getattr(obj, "Name", ""), getattr(e, "Tag", ""))
+                    yield (vec_to_xyz(v1), vec_to_xyz(v2), tag)
 
     ## Graph build utilities
 
