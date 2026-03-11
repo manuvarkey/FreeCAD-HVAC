@@ -646,9 +646,12 @@ class DuctNetwork:
             if initial_sync:
                 # Search by index since Tag is regenerated when objects are created
                 segment_obj = None
-                for s in existing_segments.values():
-                    if s.SourceObjectName == source_obj.Name and s.SourceIndex == edge_ref.local_index:
-                        segment_obj = s
+                for old_key, seg in existing_segments.items():
+                    if seg.SourceObjectName == source_obj.Name and seg.SourceIndex == edge_ref.local_index:
+                        segment_obj = seg
+                        # Update existing_segments since key has changed
+                        existing_segments.pop(old_key)
+                        existing_segments[key] = segment_obj
                         break
             else:
                 # Search by Tag
@@ -1088,8 +1091,9 @@ def create_new_duct_network(name="DuctNetwork", set_active=True):
     # Create new duct netowork and create default folders
     net = DuctNetwork.createObject(name)
     print("HVAC - New DuctNetwork created")
-    # Set as active network and enable edit mode
-    activate_duct_network(net, set_edit=False)
+    if set_active:
+        # Set as active network and enable edit mode
+        activate_duct_network(net, set_edit=False)
 
 def activate_duct_network(net, set_edit=False):
     DuctNetwork.setActive(net)
@@ -1112,14 +1116,20 @@ def delete_duct_networks(nets, remove_internal_only=False):
     for net in nets:
         if net.Document != doc:
             continue
+            
         if hasattr(net, "Proxy") and net.Proxy:
             net.Proxy._allow_internal_delete = True
+            
         if hasattr(net, "Geometry") and net.Geometry:
             for obj in list(net.Geometry.OutList):
                 DuctNetwork.removeGeometryObject(net, obj)
             doc.removeObject(net.Geometry.Name)
+            
         if hasattr(net, "Base") and net.Base:
+            for obj in list(net.Base.OutList):
+                net.Base.removeObject(obj)
             doc.removeObject(net.Base.Name)
+            
         if not remove_internal_only:
             doc.removeObject(net.Name)
     hvaclib.refreshState()
