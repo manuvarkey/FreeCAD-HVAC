@@ -400,12 +400,14 @@ class DuctNetwork:
     def __init__(self, obj):
         obj.Proxy = self
         self._allow_internal_delete = False
+        self._initial_sync = True
         self._sync_in_progress = False
         self.setProperties(obj)
 
     def onDocumentRestored(self, obj):
         obj.Proxy = self
         self._allow_internal_delete = False
+        self._initial_sync = True
         self._sync_in_progress = False
         self.setProperties(obj)
 
@@ -564,8 +566,7 @@ class DuctNetwork:
 
     @staticmethod
     def segmentObjectName(net, edge_ref):
-        safe_source_name = "".join(ch if ch.isalnum() else "_" for ch in edge_ref.obj_name)
-        return "{}_Segment_{}_{:03d}".format(net.Name, safe_source_name, edge_ref.local_index)
+        return edge_ref.tag
 
     @staticmethod
     def collectSegmentObjects(net):
@@ -613,24 +614,51 @@ class DuctNetwork:
             return doc.getObject(owner_name)
         return None
 
-    def syncSegments(self, net, parser):
+    def syncSegments(self, net, parser, initial_sync=False):
+        """
+        Synchronize the derived DuctSegment objects with the base geometry.
+
+        This method compares the edges provided by the network parser against the
+        existing segment objects. It creates new segments as needed, updates
+        metadata for existing ones, and prunes segments that no longer correspond
+        to any geometry in the base objects.
+
+        Args:
+            net: The DuctNetwork object to synchronize.
+            parser: An hvaclib.DuctNetworkParser instance containing edge data.
+            initial_sync (bool): True if this is the first synchronization pass.
+        """
         doc = net.Document
         geometry = getattr(net, "Geometry", None)
         if doc is None or geometry is None:
             return
 
+        # Map current segment objects by their stable keys
         existing_segments = self.collectSegmentObjects(net)
-        live_keys = set()
+        live_objs = set()
 
+        # Synchronize edges from the parser with document objects
         for edge_ref in parser.edges():
-            key = DuctSegment.makeKey(edge_ref.obj_name, edge_ref.local_index)
-            live_keys.add(key)
-
+            key = edge_ref.tag
+            
+            # Get source object corresponding to edge
             source_obj = doc.getObject(edge_ref.obj_name)
             if source_obj is None:
                 continue
 
-            segment_obj = existing_segments.get(key)
+            # Find corresponding DuctSegment
+            if initial_sync:
+                # Search by index since Tag is regenerated when objects are created
+                segment_obj = None
+                for s in existing_segments.values():
+                    if s.SourceObjectName == source_obj.Name and s.SourceIndex == edge_ref.local_index:
+                        segment_obj = s
+                        break
+            else:
+                # Search by Tag
+                segment_obj = existing_segments.get(key)
+            
+            # Create the ductsegment if element is not yet created
             if segment_obj is None:
                 segment_obj = DuctSegment.create(
                     doc,
@@ -640,9 +668,15 @@ class DuctNetwork:
                     source_obj=source_obj,
                     source_index=edge_ref.local_index,
                 )
+                
+            # Ensure the segment is correctly nested in the internal Geometry folder
             if segment_obj not in geometry.OutList:
                 geometry.addObject(segment_obj)
+            
+            # Track segments that should remain in the document
+            live_objs.add(segment_obj)         
 
+            # Update segment properties based on the latest parser results
             start_node, end_node = parser.edge_nodes(edge_ref)
             start_point, end_point = parser.edge_line(edge_ref)
             segment_obj.Proxy.updateMetadata(
@@ -656,10 +690,12 @@ class DuctNetwork:
                 start_point=start_point,
                 end_point=end_point,
             )
+            # Update the user-facing label
             segment_obj.Label = DuctSegment.labelFor(source_obj, edge_ref.local_index)
 
-        for key, segment_obj in list(existing_segments.items()):
-            if key not in live_keys:
+        # Remove segments that are no longer part of the network's base geometry
+        for segment_obj in list(existing_segments.values()):
+            if segment_obj not in live_objs:
                 self.removeGeometryObject(net, segment_obj)
 
     def execute(self, obj):
@@ -673,12 +709,16 @@ class DuctNetwork:
         self._sync_in_progress = True
         try:
             parser = hvaclib.DuctNetworkParser(list(base_folder.OutList))
-            self.syncSegments(obj, parser)
+            if self._initial_sync:
+                self.syncSegments(obj, parser, initial_sync=True)
+            else:
+                self.syncSegments(obj, parser, initial_sync=False)
         except Exception as err:
             FreeCAD.Console.PrintError(
                 "HVAC - Failed to update segments for '{}': {}\n".format(obj.Label, err)
             )
         finally:
+            self._initial_sync = False
             self._sync_in_progress = False
 
 

@@ -175,14 +175,15 @@ class EdgeRef:
     """Stable reference to an edge created from (obj_name, local_line_index)."""
     obj_name: str
     local_index: int
+    tag: str
 
 class DuctNetworkParser:
 
     def __init__(self, objs=None):
 
         # Input line storage
-        self.lines_map = {}   # Obj_Name -> [(sp, ep), ...]
-        self.all_lines = []   # [(sp, ep), ...]
+        self.lines_map = {}   # Obj_Name -> [(sp, ep, tag), ...]
+        self.all_lines = []   # [(sp, ep, tag), ...]
 
         # Graph storage (generated)
         self.tol = 1e-6
@@ -207,20 +208,20 @@ class DuctNetworkParser:
         self.all_lines = []
         for obj in objs:
             if obj_is_wire(obj):
-                for sp, ep in self.iter_line_segments_from_shape(obj):
-                    self.parse_obj(obj, sp, ep)
+                for sp, ep, tag in self.iter_line_segments_from_shape(obj):
+                    self.parse_obj(obj, sp, ep, tag)
             elif obj_is_sketch(obj):
-                for sp, ep in self.iter_line_segments_from_sketch(obj):
-                    self.parse_obj(obj, sp, ep)
+                for sp, ep, tag in self.iter_line_segments_from_sketch(obj):
+                    self.parse_obj(obj, sp, ep, tag)
         return self.lines_map, self.all_lines
 
-    def parse_obj(self, obj, sp, ep):
+    def parse_obj(self, obj, sp, ep, tag):
         obj_name = getattr(obj, "Name", None)
         if obj_name:
             if obj_name not in self.lines_map:
                 self.lines_map[obj_name] = []
-            self.lines_map[obj_name].append((sp, ep))
-            self.all_lines.append((sp, ep))
+            self.lines_map[obj_name].append((sp, ep, tag))
+            self.all_lines.append((sp, ep, tag))
 
     def iter_line_segments_from_sketch(self, sketch_obj, tol=1e-9):
         """
@@ -238,7 +239,7 @@ class DuctNetworkParser:
                     ep = geo.EndPoint
                     # Skip degenerate lines
                     if (sp.sub(ep)).Length > tol:
-                        yield (vec_to_xyz(sp), vec_to_xyz(ep))
+                        yield (vec_to_xyz(sp), vec_to_xyz(ep), getattr(geo, "Tag", ""))
 
     def iter_line_segments_from_shape(self, obj, tol=1e-9):
         """
@@ -258,7 +259,7 @@ class DuctNetworkParser:
                 v1 = e.Vertexes[0].Point
                 v2 = e.Vertexes[-1].Point
                 if (v1.sub(v2)).Length > tol:
-                    yield (vec_to_xyz(v1), vec_to_xyz(v2))
+                    yield (vec_to_xyz(v1), vec_to_xyz(v2), getattr(e, "Tag", ""))
 
     ## Graph build utilities
 
@@ -301,11 +302,11 @@ class DuctNetworkParser:
         G = nx.Graph()
 
         for obj_name, lines in self.lines_map.items():
-            for i, (sp, ep) in enumerate(lines):
+            for i, (sp, ep, tag) in enumerate(lines):
                 u = self._get_node_id(sp)
                 v = self._get_node_id(ep)
 
-                eref = EdgeRef(obj_name=obj_name, local_index=i)
+                eref = EdgeRef(obj_name=obj_name, local_index=i, tag=tag)
                 self.edge_u_v[eref] = (u, v)
                 self.edge_geom[eref] = (sp, ep)
                 self.obj_edges.setdefault(obj_name, []).append(eref)
