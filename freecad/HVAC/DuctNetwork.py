@@ -123,8 +123,13 @@ class DuctNetworkChangeObserver:
 
     def __init__(self):
         self._scheduled = set()
+        self._undo_redo_in_progress = False
+        self._sync_in_progress = False
 
     def slotChangedObject(self, obj, prop):
+        if self._undo_redo_in_progress or self._sync_in_progress:
+            return
+
         if obj is None or obj.Document is None:
             return
 
@@ -163,6 +168,14 @@ class DuctNetworkChangeObserver:
                 self._scheduled.add(net.Name)
                 QtCore.QTimer.singleShot(0, lambda n=net: self._doSync(n))
 
+    def slotUndoDocument(self, doc):
+        self._undo_redo_in_progress = True
+        QtCore.QTimer.singleShot(0, lambda d=doc: self._resyncAllNetworks(d))
+
+    def slotRedoDocument(self, doc):
+        self._undo_redo_in_progress = True
+        QtCore.QTimer.singleShot(0, lambda d=doc: self._resyncAllNetworks(d))
+
     def _doSync(self, net):
         if net is None:
             return
@@ -175,8 +188,31 @@ class DuctNetworkChangeObserver:
             return
 
         proxy = getattr(net, "Proxy", None)
-        if proxy:
-            proxy.requestSync(net)            
+        if proxy is None:
+            return
+
+        self._sync_in_progress = True
+        try:
+            proxy.requestSync(net, reason="observer")
+        finally:
+            self._sync_in_progress = False
+
+    def _resyncAllNetworks(self, doc):
+        try:
+            if doc is None:
+                return
+
+            self._scheduled.clear()
+            self._sync_in_progress = True
+
+            for obj in doc.Objects:
+                if DuctNetwork.isDuctNetwork(obj):
+                    proxy = getattr(obj, "Proxy", None)
+                    if proxy:
+                        proxy.requestSync(obj, initial_sync=True, reason="undo_redo")
+        finally:
+            self._sync_in_progress = False
+            self._undo_redo_in_progress = False
             
             
 #=================================================
@@ -285,7 +321,7 @@ class DuctSegment:
 
     def setProperties(self, obj):
         self._addProperty(obj, "App::PropertyString", "OwnerNetworkName", "HVAC", "Owning duct network")
-        self._addProperty(obj, "App::PropertyString", "SegmentKey", "HVAC", "Stable source-based segment key")
+        self._addProperty(obj, "App::PropertyString", "SegmentKey", "HVAC", "Runtime segment key")
         self._addProperty(obj, "App::PropertyString", "SourceObjectName", "HVAC", "Internal source object name")
         self._addProperty(obj, "App::PropertyInteger", "SourceIndex", "HVAC", "Zero-based line segment index in the source object")
         self._addProperty(obj, "App::PropertyInteger", "StartNode", "HVAC", "Graph start node id")
@@ -491,20 +527,24 @@ class DuctNetwork:
 
     def __init__(self, obj):
         obj.Proxy = self
+        self._runtime_param_cache = {}
         self._allow_internal_delete = False
         self._initial_sync = True
         self._sync_in_progress = False
         self._sync_scheduled = False
+        self._sync_reason = None
         self.setProperties(obj)
 
     def onDocumentRestored(self, obj):
         obj.Proxy = self
+        self._runtime_param_cache = {}
         self._allow_internal_delete = False
         self._initial_sync = True
         self._sync_in_progress = False
         self._sync_scheduled = False
+        self._sync_reason = None
         self.setProperties(obj)
-        self.requestSync(obj, initial_sync=True)
+        self.requestSync(obj, initial_sync=True, reason="restore")
 
     def setProperties(self, obj):
         """Gives the object properties to HVAC ducts."""
@@ -522,8 +562,10 @@ class DuctNetwork:
             folder_base.Label = self.FOLDER_BASE_NAME
             obj.Base = folder_base
         elif obj.Base:
-            obj.Base.OwnerNetworkName = obj.Name
-            obj.Base.FolderRole = self.FOLDER_BASE_NAME
+            if getattr(obj.Base, "OwnerNetworkName", "") != obj.Name:
+                obj.Base.OwnerNetworkName = obj.Name
+            if getattr(obj.Base, "FolderRole", "") != self.FOLDER_BASE_NAME:
+                obj.Base.FolderRole = self.FOLDER_BASE_NAME
 
         if "Geometry" not in obj.PropertiesList:
             obj.addProperty("App::PropertyLink", "Geometry", "HVAC", "Geometry (internal)")
@@ -537,8 +579,10 @@ class DuctNetwork:
             folder_geometry.Label = self.FOLDER_GEOMETRY_NAME
             obj.Geometry = folder_geometry
         elif obj.Geometry:
-            obj.Geometry.OwnerNetworkName = obj.Name
-            obj.Geometry.FolderRole = self.FOLDER_GEOMETRY_NAME
+            if getattr(obj.Geometry, "OwnerNetworkName", "") != obj.Name:
+                obj.Geometry.OwnerNetworkName = obj.Name
+            if getattr(obj.Geometry, "FolderRole", "") != self.FOLDER_GEOMETRY_NAME:
+                obj.Geometry.FolderRole = self.FOLDER_GEOMETRY_NAME
 
     @staticmethod
     def createObject(name):
@@ -705,7 +749,7 @@ class DuctNetwork:
         doc = net.Document
         geometry = getattr(net, "Geometry", None)
         if doc is None or geometry is None:
-            return
+            return False
         changed = False
 
         # Map current segment objects by their stable keys
@@ -743,7 +787,7 @@ class DuctNetwork:
             if segment_obj is None:
                 segment_obj = DuctSegment.create(
                     doc,
-                    edge_ref.tag,
+                    "{}_Seg_{}_{}".format(net.Name, source_obj.Name, edge_ref.local_index),
                     owner=net,
                     key=key,
                     source_obj=source_obj,
@@ -774,6 +818,13 @@ class DuctNetwork:
                 end_point=end_point,
             )
             changed = changed or meta_changed
+            
+            # Restore runtime-only params if this segment was previously deleted
+            cached_params = self._runtime_param_cache.pop(key, None)
+            if cached_params:
+                restored = self._restoreSegmentUserParams(segment_obj, cached_params)
+                changed = changed or restored
+            
             # Update the user-facing label
             new_label = DuctSegment.labelFor(source_obj, edge_ref.local_index)
             if segment_obj.Label != new_label:
@@ -783,20 +834,28 @@ class DuctNetwork:
         # Remove segments that are no longer part of the network's base geometry
         for segment_obj in list(existing_segments.values()):
             if segment_obj not in live_objs:
+                seg_key = getattr(segment_obj, "SegmentKey", "")
+                if seg_key:
+                    self._runtime_param_cache[seg_key] = self._segmentUserParams(segment_obj)
                 self.removeGeometryObject(net, segment_obj)
                 changed = True
         return changed
                 
-    def requestSync(self, obj, initial_sync=False):
-        if self._sync_scheduled is True:
+    def requestSync(self, obj, initial_sync=None, reason="unknown"):
+        if initial_sync is not None:
+            self._initial_sync = bool(initial_sync)
+        
+        if self._sync_scheduled:
+            self._sync_reason = reason
             return
-        self._initial_sync = initial_sync
         
         self._sync_scheduled = True
+        self._sync_reason = reason
         QtCore.QTimer.singleShot(0, lambda o=obj: self._runDeferredSync(o))
     
     def _runDeferredSync(self, obj):
         self._sync_scheduled = False
+        self._sync_reason = None
 
         if obj is None or obj.Document is None:
             return
@@ -821,9 +880,60 @@ class DuctNetwork:
             )
         finally:
             self._sync_in_progress = False
-
+    
+    @staticmethod
+    def _segmentUserParams(obj):
+        return {
+            "SectionShape": str(getattr(obj, "SectionShape", "")),
+            "Diameter": float(getattr(obj, "Diameter", 0.0)),
+            "Width": float(getattr(obj, "Width", 0.0)),
+            "Height": float(getattr(obj, "Height", 0.0)),
+            "InsulationThickness": float(getattr(obj, "InsulationThickness", 0.0)),
+            "Roughness": float(getattr(obj, "Roughness", 0.0)),
+            "FlowRate": float(getattr(obj, "FlowRate", 0.0)),
+            "Velocity": float(getattr(obj, "Velocity", 0.0)),
+        }
+    
+    @staticmethod
+    def _restoreSegmentUserParams(obj, params):
+        if not isinstance(params, dict):
+            return False
+    
+        changed = False
+    
+        def set_if_needed(prop, value):
+            nonlocal changed
+            try:
+                if getattr(obj, prop) != value:
+                    setattr(obj, prop, value)
+                    changed = True
+            except Exception:
+                pass
+    
+        if "SectionShape" in params:
+            set_if_needed("SectionShape", params["SectionShape"])
+        if "Diameter" in params:
+            set_if_needed("Diameter", params["Diameter"])
+        if "Width" in params:
+            set_if_needed("Width", params["Width"])
+        if "Height" in params:
+            set_if_needed("Height", params["Height"])
+        if "InsulationThickness" in params:
+            set_if_needed("InsulationThickness", params["InsulationThickness"])
+        if "Roughness" in params:
+            set_if_needed("Roughness", params["Roughness"])
+        if "FlowRate" in params:
+            set_if_needed("FlowRate", params["FlowRate"])
+        if "Velocity" in params:
+            set_if_needed("Velocity", params["Velocity"])
+    
+        return changed
+        
     def execute(self, obj):
-        pass
+        """Manual recompute of the network triggers deferred synchronization."""
+        if self._sync_in_progress:
+            return
+        self.requestSync(obj, reason="execute")
 
 
 class DuctNetworkViewProvider:
@@ -969,7 +1079,8 @@ class CommandModifyDuctNetwork:
     def IsActive(self):
         if Gui.ActiveDocument:
             selected_hvac_networks = hvaclib.selectedHVACNetworks()
-            if selected_hvac_networks:
+            active_hvac_network = hvaclib.activeHVACNetwork()
+            if selected_hvac_networks or active_hvac_network:
                 return True
         else:
             return False
@@ -978,6 +1089,9 @@ class CommandModifyDuctNetwork:
         selected_hvac_networks = hvaclib.selectedHVACNetworks()
         if selected_hvac_networks:
             modify_duct_network(selected_hvac_networks[0])
+        else:
+            active_hvac_network = hvaclib.activeHVACNetwork()
+            modify_duct_network(active_hvac_network)
 
 
 class CommandDeleteDuctNetwork:

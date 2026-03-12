@@ -152,6 +152,17 @@ class HVAC(Gui.Workbench):
 
             def __init__(self):
                 super().__init__()
+                self.commands = ["HVAC_ModifyDuctNetwork"]
+                self.title = translate("HVAC", "Modify")
+
+            def shouldShow(self):
+                return super().shouldShow()
+                
+        class HVACToolsWatcher(HVACBaseWatcher):
+            """Shows 'Tools' when an HVAC Network is active."""
+
+            def __init__(self):
+                super().__init__()
                 self.commands = ["HVAC_CreateSketch", "HVAC_CreateLine"]
                 self.title = translate("HVAC", "Tools")
 
@@ -162,6 +173,7 @@ class HVAC(Gui.Workbench):
             HVACCreateWatcher(),
             HVACActivateWatcher(),
             HVACEditWatcher(),
+            HVACToolsWatcher()
         ]
         Gui.Control.addTaskWatcher(self.watchers)
 
