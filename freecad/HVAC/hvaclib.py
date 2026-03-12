@@ -83,23 +83,24 @@ def activeHVACNetwork():
     if active_network:
         return active_network
 
-def allHVACNetworks():
+def allHVACNetworks(doc: FreeCAD.Document | None = None) -> list | None:
     from freecad.HVAC.DuctNetwork import DuctNetwork
-    doc = Gui.ActiveDocument
-
-    hvac_networks = None
+    doc = FreeCAD.ActiveDocument if doc is None else doc
     if doc is None:
         return None
-    if hasattr(doc.Document, "Objects"):
-        hvac_networks = [n for n in doc.Document.Objects if hasattr(n, "Proxy") and isinstance(n.Proxy, DuctNetwork)]
-
+    hvac_networks = []
+    if hasattr(doc, "Objects"):
+        hvac_networks = [
+            n for n in doc.Objects 
+            if hasattr(n, "Proxy") and DuctNetwork.isDuctNetwork(n)
+        ]
     return hvac_networks
 
 def selectedHVACNetworks():
     from freecad.HVAC.DuctNetwork import DuctNetwork
     objs = Gui.Selection.getSelection()
     if objs:
-        filtered = [o for o in objs if hasattr(o, "Proxy") and isinstance(o.Proxy, DuctNetwork)]
+        filtered = [o for o in objs if hasattr(o, "Proxy") and DuctNetwork.isDuctNetwork(o)]
         return filtered
     return None
 
