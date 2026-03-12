@@ -368,8 +368,11 @@ class DuctSegment:
             obj.SectionShape = self.SECTION_SHAPES[0]
 
         self._addProperty(obj, "App::PropertyLength", "Diameter", "Dimensions", "Circular duct diameter")
+        if not obj.Diameter: obj.Diameter = 100.0
         self._addProperty(obj, "App::PropertyLength", "Width", "Dimensions", "Rectangular duct width")
+        if not obj.Width: obj.Width = 100.0
         self._addProperty(obj, "App::PropertyLength", "Height", "Dimensions", "Rectangular duct height")
+        if not obj.Height: obj.Height = 100.0
         
         self._addProperty(obj, "App::PropertyLength", "InsulationThickness", "Parameters", "Insulation thickness")
         self._addProperty(obj, "App::PropertyLength", "Roughness", "Parameters", "Wall roughness")
