@@ -50,6 +50,7 @@ import networkx as nx
 WORKBENCH_NAME = 'HVAC'
 WORKBENCH_STATE = 'DEFAULT'
 DUCT_NETWORK_CONTEXT_KEY = "hvac_ductnetwork"
+OBSERVER_TIMER_POLL_INTERVAL = 100
 
 DUCT_SECTION_SHAPES = ["Rectangular", "Circular"]
 

@@ -77,17 +77,11 @@ class NewSketchObserver:
             return
         self._finished = True
         self._timer.stop()
-
+        
         try:
             if self.created_sketch:
                 DuctNetwork.addBaseObject(self.network_obj, self.created_sketch)
         finally:
-            # Set visibilty of created geometry to visible
-            proxy = getattr(self.network_obj, "Proxy", None)
-            if proxy:
-                proxy._suppress_new_geometry_visibility = False
-                proxy.showAllGeometry(self.network_obj)
-            # Always remove observer after one use
             FreeCAD.removeDocumentObserver(self)
 
 
@@ -135,17 +129,12 @@ class NewDraftLineObserver:
             return
         self._finished = True
         self._timer.stop()
-
+        
         try:
             for obj in self.created_objects:
                 if hvaclib.obj_is_wire(obj):
                     DuctNetwork.addBaseObject(self.network_obj, obj)
         finally:
-            # Set visibilty of created geometry to visible
-            proxy = getattr(self.network_obj, "Proxy", None)
-            if proxy:
-                proxy._suppress_new_geometry_visibility = False
-                proxy.showAllGeometry(self.network_obj)
             # Switch back workbench to HVAC
             Gui.activateWorkbench(hvaclib.WORKBENCH_NAME)
             # Always remove observer after one use
@@ -166,6 +155,14 @@ class DuctNetworkChangeObserver:
         self._scheduled: set[str] = set()
         self._undo_redo_in_progress: bool = False
         self._sync_in_progress: bool = False
+        
+        self._edit_timer = QtCore.QTimer()
+        self._edit_timer.setInterval(hvaclib.OBSERVER_TIMER_POLL_INTERVAL)
+        self._edit_timer.timeout.connect(self._checkEditedBaseObject)
+        self._edit_timer.start()
+        
+        self._edited_net = None
+        self._edited_base_obj = None
 
     def slotChangedObject(self, obj: object, prop: str) -> None:
         """
@@ -231,6 +228,8 @@ class DuctNetworkChangeObserver:
         self._undo_redo_in_progress = True
         QtCore.QTimer.singleShot(0, lambda d=doc: self._resyncAllNetworks(d))
 
+    # Sync watcher
+    
     def _doSync(self, net):
         if net is None:
             return
@@ -268,6 +267,87 @@ class DuctNetworkChangeObserver:
         finally:
             self._sync_in_progress = False
             self._undo_redo_in_progress = False
+       
+    # Visibility watcher
+    
+    def _findOwnerNetwork(self, obj):
+        doc = getattr(obj, "Document", None)
+        if doc is None:
+            return None
+        for net in hvaclib.allHVACNetworks(doc):
+            base = getattr(net, "Base", None)
+            if base and obj in base.OutList:
+                return net
+        return None
+    
+    def _isEditableManagedBase(self, obj):
+        return obj is not None and (hvaclib.obj_is_sketch(obj) or hvaclib.obj_is_wire(obj))
+    
+    def _finishEditedBaseObject(self):
+        """
+        Finalize the tracking state when a base geometry object exits edit mode.
+
+        Resets internal references and notifies the parent network's proxy to
+        restore normal segment visibility and perform a final synchronization.
+        """
+        net = self._edited_net
+        obj = self._edited_base_obj
+        self._edited_net = None
+        self._edited_base_obj = None
+        
+        if net is None or obj is None:
+            return
+
+        proxy = getattr(net, "Proxy", None)
+        if proxy:
+            proxy.setBaseObjectEditing(net, obj, False)
+            proxy.requestSync(net, reason="edit_finished")
+
+    def _checkEditedBaseObject(self):
+        """
+        Monitor the active document to detect when base objects enter or exit edit mode.
+
+        This method is called periodically via a timer to identify if a Sketch 
+        or Draft Wire managed by an HVAC network is currently being edited. 
+        It toggles the visibility of derived 3D geometry through the network 
+        proxy to facilitate editing.
+        """
+        if not FreeCAD.GuiUp or Gui.ActiveDocument is None:
+            return
+
+        # Query the current edited object
+        in_edit = Gui.ActiveDocument.getInEdit()
+        obj = getattr(in_edit, "Object", None) if in_edit else None
+
+        # Check if the object type is relevant
+        if not self._isEditableManagedBase(obj):
+            if self._edited_base_obj is not None:
+                self._finishEditedBaseObject()
+            return
+
+        # Find the owning network
+        net = self._findOwnerNetwork(obj)
+        if net is None:
+            if self._edited_base_obj is not None:
+                self._finishEditedBaseObject()
+            return
+
+        # If the same object is still being edited
+        if self._edited_net is net and self._edited_base_obj is obj:
+            return
+
+        # If editing switched to a different object
+        if self._edited_base_obj is not None:
+            self._finishEditedBaseObject()
+
+        # Record the new editing state
+        self._edited_net = net
+        self._edited_base_obj = obj
+
+        # Hide the geometry belonging to that base object
+        proxy = getattr(net, "Proxy", None)
+        if proxy:
+            proxy.setBaseObjectEditing(net, obj, True)
             
             
 #=================================================
@@ -591,8 +671,16 @@ class DuctNetwork:
         self._sync_in_progress = False
         self._sync_scheduled = False
         self._sync_reason = None
-        self._suppress_new_geometry_visibility = False
+        self._hidden_source_names = set()
         self.setProperties(obj)
+        
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.pop("_hidden_source_names", None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
     def onDocumentRestored(self, obj):
         obj.Proxy = self
@@ -602,7 +690,7 @@ class DuctNetwork:
         self._sync_in_progress = False
         self._sync_scheduled = False
         self._sync_reason = None
-        self._suppress_new_geometry_visibility = False
+        self._hidden_source_names = set()
         self.setProperties(obj)
         self.requestSync(obj, initial_sync=True, reason="restore")
         
@@ -616,6 +704,7 @@ class DuctNetwork:
         """Gives the object properties to HVAC ducts."""
         doc = obj.Document
 
+        # Base folder
         if "Base" not in obj.PropertiesList:
             obj.addProperty("App::PropertyLink", "Base", "HVAC", "Base (internal)")
         if getattr(obj, "Base", None) is None and doc is not None:
@@ -633,6 +722,7 @@ class DuctNetwork:
             if getattr(obj.Base, "FolderRole", "") != self.FOLDER_BASE_NAME:
                 obj.Base.FolderRole = self.FOLDER_BASE_NAME
 
+        # Geometry folder
         if "Geometry" not in obj.PropertiesList:
             obj.addProperty("App::PropertyLink", "Geometry", "HVAC", "Geometry (internal)")
         if getattr(obj, "Geometry", None) is None and doc is not None:
@@ -671,10 +761,6 @@ class DuctNetwork:
         # Make this network active in the 3D view context
         DuctNetwork.setActive(obj)
         
-        # Disable new geometry visibility while sketching
-        if getattr(obj, "Proxy", None):
-            obj.Proxy._suppress_new_geometry_visibility = True
-            
         # Install observer before running the command
         obs = NewSketchObserver(obj)
         FreeCAD.addDocumentObserver(obs)
@@ -695,10 +781,6 @@ class DuctNetwork:
 
         # Make this network active in the 3D view context
         DuctNetwork.setActive(obj)
-        
-        # Disable new geometry visibility while drafting
-        if getattr(obj, "Proxy", None):
-            obj.Proxy._suppress_new_geometry_visibility = True
         
         # Install observer before running the command
         obs = NewDraftLineObserver(obj)
@@ -827,6 +909,40 @@ class DuctNetwork:
         for obj in list(geometry.OutList):
             if DuctSegment.isDuctSegment(obj):
                 self._setSegmentVisibilityDeferred(obj, True)
+                
+    def _segmentFromBaseObject(self, seg, base_obj):
+        return (
+            seg is not None
+            and base_obj is not None
+            and DuctSegment.isDuctSegment(seg)
+            and getattr(seg, "SourceObjectName", "") == base_obj.Name
+        )
+    
+    def hideGeometryForBaseObject(self, net, base_obj):
+        geometry = getattr(net, "Geometry", None)
+        if geometry is None or base_obj is None:
+            return
+        for seg in list(geometry.OutList):
+            if self._segmentFromBaseObject(seg, base_obj):
+                self._setSegmentVisibilityDeferred(seg, False)
+    
+    def showGeometryForBaseObject(self, net, base_obj):
+        geometry = getattr(net, "Geometry", None)
+        if geometry is None or base_obj is None:
+            return
+        for seg in list(geometry.OutList):
+            if self._segmentFromBaseObject(seg, base_obj):
+                self._setSegmentVisibilityDeferred(seg, True)
+    
+    def setBaseObjectEditing(self, net, base_obj, editing):
+        if net is None or base_obj is None:
+            return
+        if editing:
+            self._hidden_source_names.add(base_obj.Name)
+            self.hideGeometryForBaseObject(net, base_obj)
+        else:
+            self._hidden_source_names.discard(base_obj.Name)
+            self.showGeometryForBaseObject(net, base_obj)
 
     @staticmethod
     def isDuctNetwork(obj):
@@ -907,7 +1023,7 @@ class DuctNetwork:
                 )
                 changed = True
                 # Only suppress visibility during interactive sketch creation
-                if self._suppress_new_geometry_visibility:
+                if source_obj.Name in self._hidden_source_names:
                     self._setSegmentVisibilityDeferred(segment_obj, False)
                 else:
                     self._setSegmentVisibilityDeferred(segment_obj, True)
