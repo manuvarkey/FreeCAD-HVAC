@@ -132,34 +132,86 @@ class DuctSegment:
         self._allow_delete = False
         self.setProperties(obj)
         self.updateSectionEditorModes(obj)
-        
+
     def __getstate__(self):
         return None
 
     def __setstate__(self, state):
         self._allow_delete = False
-        
+
     def onChanged(self, obj, prop):
         if prop == "SectionShape":
             self.updateSectionEditorModes(obj)
-            
+
     def execute(self, obj):
         start_point = getattr(obj, "StartPoint", None)
         end_point = getattr(obj, "EndPoint", None)
-        width = getattr(obj, "Width", None)
-        height = getattr(obj, "Height", None)
-        diameter = getattr(obj, "Diameter", None)
-        section_shape = getattr(obj, "SectionShape", self.SECTION_SHAPES[0])
         if start_point is None or end_point is None:
             return
+
         try:
-            if start_point.sub(end_point).Length > 0:
+            if start_point.sub(end_point).Length <= 0:
+                return
+
+            library_id = getattr(obj, "LibraryId", "")
+            type_id = getattr(obj, "TypeId", "")
+
+            # Backward-compatible fallback
+            if not library_id or not type_id:
+                section_shape = getattr(obj, "SectionShape", self.SECTION_SHAPES[0])
+                width = getattr(obj, "Width", None)
+                height = getattr(obj, "Height", None)
+                diameter = getattr(obj, "Diameter", None)
+
                 if section_shape == self.SECTION_SHAPES[0]:
-                    obj.Shape = hvaclib.create_rectangular_duct_geom(start_point, end_point, width, height)
+                    obj.Shape = hvaclib.create_rectangular_duct_geom(
+                        start_point, end_point, width, height
+                    )
                 elif section_shape == self.SECTION_SHAPES[1]:
-                    obj.Shape = hvaclib.create_circular_duct_geom(start_point, end_point, diameter)
+                    obj.Shape = hvaclib.create_circular_duct_geom(
+                        start_point, end_point, diameter
+                    )
+                return
+
+            reg = hvaclib.get_hvac_library_registry()
+            type_def = reg.resolve_type(library_id, type_id)
+            if type_def is None:
+                raise ValueError(
+                    "Unknown segment type '{}' in library '{}'".format(
+                        type_id, library_id
+                    )
+                )
+
+            props = {}
+            for pdef in getattr(type_def, "properties", []) or []:
+                if hasattr(obj, pdef.name):
+                    props[pdef.name] = getattr(obj, pdef.name)
+                else:
+                    props[pdef.name] = getattr(pdef, "default", None)
+
+            context = {
+                "obj": obj,
+                "start_point": start_point,
+                "end_point": end_point,
+                "properties": props,
+                "family": getattr(obj, "Family", ""),
+                "profile": getattr(obj, "Profile", ""),
+                "type_id": type_id,
+                "library_id": library_id,
+                "segment_key": getattr(obj, "SegmentKey", ""),
+                "source_object_name": getattr(obj, "SourceObjectName", ""),
+                "source_index": int(getattr(obj, "SourceIndex", 0)),
+            }
+
+            result = reg.call_generator(library_id, type_def, context)
+            shape = result.get("shape", None)
+            if shape is not None:
+                obj.Shape = shape
+
         except Exception as e:
-            print("HVAC - Error generating geometry \n" + str(e))
+            FreeCAD.Console.PrintError(
+                "HVAC - Error generating segment '{}': {}\n".format(obj.Label, e)
+            )
 
     def setProperties(self, obj):
         self._addProperty(obj, "App::PropertyString", "OwnerNetworkName", "HVAC", "Owning duct network")
@@ -172,6 +224,15 @@ class DuctSegment:
         self._addProperty(obj, "App::PropertyVector", "EndPoint", "HVAC", "Segment end point")
         self._addProperty(obj, "App::PropertyLength", "CenterlineLength", "HVAC", "Computed centerline length")
 
+        # Library/type system
+        self._addProperty(obj, "App::PropertyString", "LibraryId", "HVAC", "HVAC library id")
+        self._addProperty(obj, "App::PropertyString", "Family", "HVAC", "Segment family")
+        self._addProperty(obj, "App::PropertyString", "TypeId", "HVAC", "Selected segment type id")
+        self._addProperty(obj, "App::PropertyBool", "AutoType", "HVAC", "Auto-select type from profile")
+        self._addProperty(obj, "App::PropertyString", "Profile", "HVAC", "Segment profile")
+        self._addProperty(obj, "App::PropertyString", "AnalysisJson", "HVAC", "Serialized segment analysis")
+
+        # Backward-compatible section shape
         current_shape = getattr(obj, "SectionShape", self.SECTION_SHAPES[0])
         if "SectionShape" not in obj.PropertiesList:
             obj.addProperty("App::PropertyEnumeration", "SectionShape", "Duct Type", "Cross-section shape")
@@ -181,17 +242,37 @@ class DuctSegment:
         else:
             obj.SectionShape = self.SECTION_SHAPES[0]
 
+        # Built-in/basic dimensions kept for compatibility and as library-backed params
         self._addProperty(obj, "App::PropertyLength", "Diameter", "Dimensions", "Circular duct diameter")
-        if not obj.Diameter: obj.Diameter = 100.0
+        if not obj.Diameter:
+            obj.Diameter = 100.0
+
         self._addProperty(obj, "App::PropertyLength", "Width", "Dimensions", "Rectangular duct width")
-        if not obj.Width: obj.Width = 100.0
+        if not obj.Width:
+            obj.Width = 100.0
+
         self._addProperty(obj, "App::PropertyLength", "Height", "Dimensions", "Rectangular duct height")
-        if not obj.Height: obj.Height = 100.0
-        
+        if not obj.Height:
+            obj.Height = 100.0
+
         self._addProperty(obj, "App::PropertyLength", "InsulationThickness", "Parameters", "Insulation thickness")
         self._addProperty(obj, "App::PropertyLength", "Roughness", "Parameters", "Wall roughness")
         self._addProperty(obj, "App::PropertyFloat", "FlowRate", "Parameters", "Design flow rate")
         self._addProperty(obj, "App::PropertyFloat", "Velocity", "Parameters", "Design air velocity")
+
+        if getattr(obj, "AutoType", None) is None:
+            obj.AutoType = True
+
+        if not getattr(obj, "LibraryId", ""):
+            lib = hvaclib.get_active_hvac_library()
+            if lib:
+                obj.LibraryId = lib.id
+
+        if not getattr(obj, "Profile", ""):
+            obj.Profile = self.profileFromSectionShape(getattr(obj, "SectionShape", self.SECTION_SHAPES[0]))
+
+        if not getattr(obj, "AnalysisJson", ""):
+            obj.AnalysisJson = "{}"
 
         for prop in (
             "OwnerNetworkName",
@@ -203,6 +284,9 @@ class DuctSegment:
             "StartPoint",
             "EndPoint",
             "CenterlineLength",
+            "Family",
+            "Profile",
+            "AnalysisJson",
         ):
             try:
                 obj.setEditorMode(prop, 1)
@@ -219,61 +303,134 @@ class DuctSegment:
         except Exception:
             pass
 
-    def updateMetadata(self, obj, owner=None, key="", source_obj=None, source_index=0, start_node=0, end_node=0, start_point=None, end_point=None):
+    def applyTypeSchema(self, obj):
+        reg = hvaclib.get_hvac_library_registry()
+        lib_id = getattr(obj, "LibraryId", "")
+        type_id = getattr(obj, "TypeId", "")
+        if not lib_id or not type_id:
+            return False
+
+        type_def = reg.resolve_type(lib_id, type_id)
+        if type_def is None:
+            return False
+
         changed = False
-        
+        for pdef in getattr(type_def, "properties", []) or []:
+            if pdef.name not in obj.PropertiesList:
+                obj.addProperty(pdef.prop_type, pdef.name, pdef.group, pdef.description)
+                changed = True
+
+            try:
+                current = getattr(obj, pdef.name)
+            except Exception:
+                current = None
+
+            if current in (None, "") and getattr(pdef, "default", None) is not None:
+                try:
+                    setattr(obj, pdef.name, pdef.default)
+                    changed = True
+                except Exception:
+                    pass
+
+        return changed
+
+    def updateMetadata(
+        self,
+        obj,
+        owner=None,
+        key="",
+        source_obj=None,
+        source_index=0,
+        start_node=0,
+        end_node=0,
+        start_point=None,
+        end_point=None,
+        family="",
+        type_id="",
+        library_id="",
+        profile="",
+        analysis_json=None,
+    ):
+        changed = False
+
         if owner and getattr(obj, "OwnerNetworkName", "") != owner.Name:
             obj.OwnerNetworkName = owner.Name
             changed = True
-    
+
         if key and getattr(obj, "SegmentKey", "") != key:
             obj.SegmentKey = key
             changed = True
-    
+
         source_name = source_obj.Name if source_obj else ""
         if getattr(obj, "SourceObjectName", "") != source_name:
             obj.SourceObjectName = source_name
             changed = True
-    
+
         if getattr(obj, "SourceIndex", None) != int(source_index):
             obj.SourceIndex = int(source_index)
             changed = True
-    
+
         if getattr(obj, "StartNode", None) != int(start_node):
             obj.StartNode = int(start_node)
             changed = True
-    
+
         if getattr(obj, "EndNode", None) != int(end_node):
             obj.EndNode = int(end_node)
             changed = True
-    
+
         start_vec = None
         end_vec = None
-    
+
         if start_point is not None:
             start_vec = FreeCAD.Vector(*start_point)
             if obj.StartPoint != start_vec:
                 obj.StartPoint = start_vec
                 changed = True
-    
+
         if end_point is not None:
             end_vec = FreeCAD.Vector(*end_point)
             if obj.EndPoint != end_vec:
                 obj.EndPoint = end_vec
                 changed = True
-    
+
         if start_vec is not None and end_vec is not None:
             length = end_vec.sub(start_vec).Length
             if abs(float(obj.CenterlineLength) - float(length)) > 1e-9:
                 obj.CenterlineLength = length
                 changed = True
-    
+
+        if library_id and getattr(obj, "LibraryId", "") != str(library_id):
+            obj.LibraryId = str(library_id)
+            changed = True
+
+        if family and getattr(obj, "Family", "") != str(family):
+            obj.Family = str(family)
+            changed = True
+
+        if type_id and getattr(obj, "TypeId", "") != str(type_id):
+            obj.TypeId = str(type_id)
+            changed = True
+
+        if profile and getattr(obj, "Profile", "") != str(profile):
+            obj.Profile = str(profile)
+            changed = True
+
+        if analysis_json is not None and getattr(obj, "AnalysisJson", "") != str(analysis_json):
+            obj.AnalysisJson = str(analysis_json)
+            changed = True
+
         return changed
 
     @classmethod
     def create(cls, doc, name, owner, key, source_obj, source_index):
         segment = doc.addObject("Part::FeaturePython", name)
-        cls(segment, owner=owner, key=key, source_obj=source_obj, source_index=source_index)
+        cls(
+            segment,
+            owner=owner,
+            key=key,
+            source_obj=source_obj,
+            source_index=source_index,
+        )
         DuctSegmentViewProvider(segment.ViewObject)
         return segment
 
@@ -287,15 +444,26 @@ class DuctSegment:
 
     @staticmethod
     def labelFor(source_obj, source_index):
-        source_label = source_obj.Label if source_obj else "Segment"
-        return "{} [{}]".format(source_label, int(source_index) + 1)
+        return "{} [{}]".format(source_obj.Label if source_obj else "Segment", int(source_index))
+
+    @staticmethod
+    def profileFromSectionShape(section_shape):
+        if str(section_shape) == "Circular":
+            return "circular"
+        return "rectangular"
+
+    @staticmethod
+    def defaultTypeIdForProfile(profile):
+        if str(profile) == "circular":
+            return "circular_straight"
+        return "rectangular_straight"
 
     @staticmethod
     def _addProperty(obj, prop_type, prop_name, group, description):
         if prop_name not in obj.PropertiesList:
             obj.addProperty(prop_type, prop_name, group, description)
-
-
+            
+            
 class DuctSegmentViewProvider:
     """View provider for derived duct segment objects."""
 
@@ -1031,38 +1199,31 @@ class DuctNetwork:
         """
         Synchronize the derived DuctSegment objects with the base geometry.
 
-        This method compares the edges provided by the network parser against the
-        existing segment objects. It creates new segments as needed, updates
-        metadata for existing ones, and prunes segments that no longer correspond
-        to any geometry in the base objects.
-
-        Args:
-            net: The DuctNetwork object to synchronize.
-            parser: An hvaclib.DuctNetworkParser instance containing edge data.
-            initial_sync (bool): True if this is the first synchronization pass.
+        This keeps the existing stable edge sync behavior, but now also assigns
+        segment library/type metadata so geometry generation can be library-driven.
         """
         doc = net.Document
         geometry = getattr(net, "Geometry", None)
         if doc is None or geometry is None:
             return False
+
+        active_lib = hvaclib.get_active_hvac_library()
+        if active_lib is None:
+            return False
+
         changed = False
 
-        # Map current segment objects by their stable keys
         existing_segments = self.collectSegmentObjects(net)
         live_objs = set()
 
-        # Synchronize edges from the parser with document objects
         for edge_ref in parser.edges():
             key = edge_ref.tag
-            
-            # Get source object corresponding to edge
+
             source_obj = doc.getObject(edge_ref.obj_name)
             if source_obj is None:
                 continue
 
-            # Find corresponding DuctSegment
             if initial_sync:
-                # Search by index since Tag is regenerated when objects are created
                 segment_obj = None
                 matched_old_key = None
                 for old_key, seg in existing_segments.items():
@@ -1075,10 +1236,8 @@ class DuctNetwork:
                     existing_segments.pop(matched_old_key, None)
                     existing_segments[key] = segment_obj
             else:
-                # Search by Tag
                 segment_obj = existing_segments.get(key)
-            
-            # Create the ductsegment if element is not yet created
+
             if segment_obj is None:
                 segment_obj = DuctSegment.create(
                     doc,
@@ -1089,23 +1248,39 @@ class DuctNetwork:
                     source_index=edge_ref.local_index,
                 )
                 changed = True
-                # Only suppress visibility during interactive sketch creation
+
                 if source_obj.Name in self._hidden_source_names:
                     self._setSegmentVisibilityDeferred(segment_obj, False)
                 else:
                     self._setSegmentVisibilityDeferred(segment_obj, True)
-                
-            # Ensure the segment is correctly nested in the internal Geometry folder
+
             if segment_obj not in geometry.OutList:
                 geometry.addObject(segment_obj)
                 changed = True
-            
-            # Track segments that should remain in the document
-            live_objs.add(segment_obj)         
 
-            # Update segment properties based on the latest parser results
+            live_objs.add(segment_obj)
+
             start_node, end_node = parser.edge_nodes(edge_ref)
             start_point, end_point = parser.edge_line(edge_ref)
+
+            # Determine profile from legacy SectionShape for now
+            section_shape = getattr(segment_obj, "SectionShape", DuctSegment.SECTION_SHAPES[0])
+            profile = DuctSegment.profileFromSectionShape(section_shape)
+            default_type_id = DuctSegment.defaultTypeIdForProfile(profile)
+
+            effective_type_id = getattr(segment_obj, "TypeId", "")
+            if not effective_type_id or getattr(segment_obj, "AutoType", True):
+                effective_type_id = default_type_id
+
+            analysis_json = json.dumps(
+                {
+                    "profile": profile,
+                    "default_type_id": default_type_id,
+                    "start_node": int(start_node),
+                    "end_node": int(end_node),
+                }
+            )
+
             meta_changed = segment_obj.Proxy.updateMetadata(
                 segment_obj,
                 owner=net,
@@ -1116,22 +1291,27 @@ class DuctNetwork:
                 end_node=end_node,
                 start_point=start_point,
                 end_point=end_point,
+                family="straight_segment",
+                type_id=effective_type_id,
+                library_id=active_lib.id,
+                profile=profile,
+                analysis_json=analysis_json,
             )
             changed = changed or meta_changed
-            
-            # Restore runtime-only params if this segment was previously deleted
+
+            schema_changed = segment_obj.Proxy.applyTypeSchema(segment_obj)
+            changed = changed or schema_changed
+
             cached_params = self._runtime_param_cache.pop(key, None)
             if cached_params:
                 restored = self._restoreSegmentUserParams(segment_obj, cached_params)
                 changed = changed or restored
-            
-            # Update the user-facing label
+
             new_label = DuctSegment.labelFor(source_obj, edge_ref.local_index)
             if segment_obj.Label != new_label:
                 segment_obj.Label = new_label
                 changed = True
 
-        # Remove segments that are no longer part of the network's base geometry
         for segment_obj in list(existing_segments.values()):
             if segment_obj not in live_objs:
                 seg_key = getattr(segment_obj, "SegmentKey", "")
@@ -1139,8 +1319,9 @@ class DuctNetwork:
                     self._runtime_param_cache[seg_key] = self._segmentUserParams(segment_obj)
                 self.removeGeometryObject(net, segment_obj)
                 changed = True
+
         return changed
-        
+            
     def syncJunctions(self, net, parser):
         """
         Synchronize derived DuctJunction objects with parser nodes.

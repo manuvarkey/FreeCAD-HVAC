@@ -31,6 +31,37 @@ def load_into(registry):
         root_path="builtin",
         generators_package="freecad.HVAC.libraries.builtin_basic.generators",
     )
+    
+    ## SEGMENTS
+    
+    lib.add_type(HVACTypeDef(
+        id="rectangular_straight",
+        label="Rectangular Straight",
+        category="segment",
+        family="straight_segment",
+        profiles=["rectangular"],
+        properties=[
+            HVACPropertyDef("Width", "App::PropertyLength", "Dimensions", "Rectangular duct width", 100.0),
+            HVACPropertyDef("Height", "App::PropertyLength", "Dimensions", "Rectangular duct height", 100.0),
+        ],
+        generator_module="segments",
+        generator_function="build_rectangular_straight",
+    ))
+
+    lib.add_type(HVACTypeDef(
+        id="circular_straight",
+        label="Circular Straight",
+        category="segment",
+        family="straight_segment",
+        profiles=["circular"],
+        properties=[
+            HVACPropertyDef("Diameter", "App::PropertyLength", "Dimensions", "Circular duct diameter", 100.0),
+        ],
+        generator_module="segments",
+        generator_function="build_circular_straight",
+    ))
+    
+    ## JUNCTIONS
 
     # Terminal marker
     lib.add_type(HVACTypeDef(
