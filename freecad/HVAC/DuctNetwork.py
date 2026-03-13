@@ -335,6 +335,176 @@ class DuctSegmentViewProvider:
         return False
 
 
+class DuctJunction:
+    """Derived per-node junction object created from network base geometry."""
+
+    TYPE = "DuctJunction"
+
+    def __init__(self, obj, owner=None, node_id=0, node_key="", node_kind="", center_point=None, degree=0):
+        obj.Proxy = self
+        self._allow_delete = False
+        self.setProperties(obj)
+        self.updateMetadata(
+            obj,
+            owner=owner,
+            node_id=node_id,
+            node_key=node_key,
+            node_kind=node_kind,
+            center_point=center_point,
+            degree=degree,
+        )
+
+    def onDocumentRestored(self, obj):
+        obj.Proxy = self
+        self._allow_delete = False
+        self.setProperties(obj)
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        self._allow_delete = False
+
+    def execute(self, obj):
+        center_point = getattr(obj, "CenterPoint", None)
+        marker_diameter = getattr(obj, "MarkerDiameter", None)
+        if center_point is None:
+            return
+        try:
+            if float(marker_diameter) > 0:
+                obj.Shape = hvaclib.create_junction_marker_geom(center_point, marker_diameter)
+        except Exception as e:
+            print("HVAC - Error generating junction geometry \n" + str(e))
+
+    def setProperties(self, obj):
+        self._addProperty(obj, "App::PropertyString", "OwnerNetworkName", "HVAC", "Owning duct network")
+        self._addProperty(obj, "App::PropertyInteger", "NodeId", "HVAC", "Parser node id")
+        self._addProperty(obj, "App::PropertyString", "NodeKey", "HVAC", "Persistent snapped node key")
+        self._addProperty(obj, "App::PropertyString", "NodeKind", "HVAC", "Junction classification")
+        self._addProperty(obj, "App::PropertyInteger", "Degree", "HVAC", "Node degree")
+        self._addProperty(obj, "App::PropertyVector", "CenterPoint", "HVAC", "Junction center point")
+        self._addProperty(obj, "App::PropertyLength", "MarkerDiameter", "Dimensions", "Display marker diameter")
+
+        if not obj.MarkerDiameter:
+            obj.MarkerDiameter = 200.0
+
+        for prop in (
+            "OwnerNetworkName",
+            "NodeId",
+            "NodeKey",
+            "NodeKind",
+            "Degree",
+            "CenterPoint",
+        ):
+            try:
+                obj.setEditorMode(prop, 1)
+            except Exception:
+                pass
+
+    def updateMetadata(self, obj, owner=None, node_id=0, node_key="", node_kind="", center_point=None, degree=0):
+        changed = False
+
+        if owner and getattr(obj, "OwnerNetworkName", "") != owner.Name:
+            obj.OwnerNetworkName = owner.Name
+            changed = True
+
+        if getattr(obj, "NodeId", None) != int(node_id):
+            obj.NodeId = int(node_id)
+            changed = True
+
+        if getattr(obj, "NodeKey", "") != str(node_key):
+            obj.NodeKey = str(node_key)
+            changed = True
+
+        if getattr(obj, "NodeKind", "") != str(node_kind):
+            obj.NodeKind = str(node_kind)
+            changed = True
+
+        if getattr(obj, "Degree", None) != int(degree):
+            obj.Degree = int(degree)
+            changed = True
+
+        if center_point is not None:
+            center_vec = FreeCAD.Vector(*center_point)
+            if obj.CenterPoint != center_vec:
+                obj.CenterPoint = center_vec
+                changed = True
+
+        return changed
+
+    @classmethod
+    def create(cls, doc, name, owner, node_id, node_key, node_kind, center_point, degree):
+        junction = doc.addObject("Part::FeaturePython", name)
+        cls(
+            junction,
+            owner=owner,
+            node_id=node_id,
+            node_key=node_key,
+            node_kind=node_kind,
+            center_point=center_point,
+            degree=degree,
+        )
+        DuctJunctionViewProvider(junction.ViewObject)
+        return junction
+
+    @staticmethod
+    def isDuctJunction(obj):
+        return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunction)
+
+    @staticmethod
+    def makeKey(node_key):
+        return "NODE:{}_{}_{}".format(node_key[0], node_key[1], node_key[2])
+
+    @staticmethod
+    def labelFor(node_kind, node_id):
+        kind = str(node_kind).capitalize() if node_kind else "Junction"
+        return "{} [{}]".format(kind, int(node_id))
+
+    @staticmethod
+    def _addProperty(obj, prop_type, prop_name, group, description):
+        if prop_name not in obj.PropertiesList:
+            obj.addProperty(prop_type, prop_name, group, description)
+
+
+class DuctJunctionViewProvider:
+    """View provider for derived duct junction objects."""
+
+    def __init__(self, vobj):
+        vobj.Proxy = self
+
+    def attach(self, vobj):
+        self.Object = vobj.Object
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.pop("Object", None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
+    def getIcon(self):
+        return hvaclib.get_icon_path("DuctsIcon.svg")
+
+    def onDelete(self, vobj, subelements):
+        obj = vobj.Object
+        owner = DuctNetwork.getOwnerNetwork(obj)
+        if getattr(obj.Proxy, "_allow_delete", False):
+            return True
+        if owner and getattr(owner.Proxy, "_allow_internal_delete", False):
+            return True
+        FreeCAD.Console.PrintWarning(
+            "HVAC - Internal junction '{}' cannot be deleted directly.\n".format(obj.Label)
+        )
+        return False
+
+    def canDropObjects(self):
+        return False
+
+    def canDragObjects(self):
+        return False
+
+
 class DuctNetwork:
     """Visualize and configure HVAC duct network in FreeCAD's 3D view."""
 
@@ -527,8 +697,8 @@ class DuctNetwork:
             return False
         if getattr(obj, "Document", None) != net.Document:
             return False
-        if DuctSegment.isDuctSegment(obj) and getattr(obj, "Proxy", None):
-            obj.Proxy._allow_delete = True
+        if (DuctSegment.isDuctSegment(obj) or DuctJunction.isDuctJunction(obj)) and getattr(obj, "Proxy", None):
+                    obj.Proxy._allow_delete = True
         if hasattr(net, "Geometry") and net.Geometry and obj in net.Geometry.OutList:
             net.Geometry.removeObject(obj)
         net.Document.removeObject(obj.Name)
@@ -549,6 +719,20 @@ class DuctNetwork:
             if key:
                 segments[key] = child
         return segments
+        
+    @staticmethod
+    def collectJunctionObjects(net):
+        junctions = {}
+        geometry = getattr(net, "Geometry", None)
+        if geometry is None:
+            return junctions
+        for child in list(geometry.OutList):
+            if not DuctJunction.isDuctJunction(child):
+                continue
+            key = getattr(child, "NodeKey", "")
+            if key:
+                junctions[key] = child
+        return junctions
 
     @staticmethod
     def setActive(obj):
@@ -595,7 +779,7 @@ class DuctNetwork:
                 pass
 
         for obj in list(geometry.OutList):
-            if DuctSegment.isDuctSegment(obj):
+            if DuctSegment.isDuctSegment(obj) or DuctJunction.isDuctJunction(obj):
                 self._setSegmentVisibilityDeferred(obj, True)
                 
     def _segmentFromBaseObject(self, seg, base_obj):
@@ -652,7 +836,14 @@ class DuctNetwork:
         
     @staticmethod
     def isGeometryObject(obj):
-        return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctSegment)
+        return (
+            bool(obj)
+            and hasattr(obj, "Proxy")
+            and (
+                isinstance(obj.Proxy, DuctSegment)
+                or isinstance(obj.Proxy, DuctJunction)
+            )
+        )
         
     @staticmethod
     def getOwnerNetwork(obj):
@@ -795,6 +986,76 @@ class DuctNetwork:
                 self.removeGeometryObject(net, segment_obj)
                 changed = True
         return changed
+        
+    def syncJunctions(self, net, parser):
+        """
+        Synchronize derived DuctJunction objects with parser nodes.
+
+        First-pass logic:
+        - create junctions only for parser.junction_nodes()
+        - match by persistent snapped NodeKey
+        - create/update/prune under the Geometry folder
+        """
+        doc = net.Document
+        geometry = getattr(net, "Geometry", None)
+        if doc is None or geometry is None:
+            return False
+
+        changed = False
+        existing_junctions = self.collectJunctionObjects(net)
+        live_objs = set()
+
+        for node_id in parser.junction_nodes():
+            point = parser.node_xyz(node_id)
+            degree = parser.node_degree(node_id)
+            node_kind = parser.node_kind(node_id)
+            node_key_tuple = parser.node_key(node_id)
+            node_key = DuctJunction.makeKey(node_key_tuple)
+
+            junction_obj = existing_junctions.get(node_key)
+
+            if junction_obj is None:
+                junction_obj = DuctJunction.create(
+                    doc,
+                    "{}_Junc_{}".format(net.Name, node_id),
+                    owner=net,
+                    node_id=node_id,
+                    node_key=node_key,
+                    node_kind=node_kind,
+                    center_point=point,
+                    degree=degree,
+                )
+                changed = True
+                self._setSegmentVisibilityDeferred(junction_obj, True)
+
+            if junction_obj not in geometry.OutList:
+                geometry.addObject(junction_obj)
+                changed = True
+
+            live_objs.add(junction_obj)
+
+            meta_changed = junction_obj.Proxy.updateMetadata(
+                junction_obj,
+                owner=net,
+                node_id=node_id,
+                node_key=node_key,
+                node_kind=node_kind,
+                center_point=point,
+                degree=degree,
+            )
+            changed = changed or meta_changed
+
+            new_label = DuctJunction.labelFor(node_kind, node_id)
+            if junction_obj.Label != new_label:
+                junction_obj.Label = new_label
+                changed = True
+
+        for junction_obj in list(existing_junctions.values()):
+            if junction_obj not in live_objs:
+                self.removeGeometryObject(net, junction_obj)
+                changed = True
+
+        return changed
                 
     def requestSync(self, obj, initial_sync=None, reason="unknown"):
         if initial_sync is not None:
@@ -825,7 +1086,9 @@ class DuctNetwork:
         self._sync_in_progress = True
         try:
             parser = hvaclib.DuctNetworkParser(list(base_folder.OutList))
-            changed = self.syncSegments(obj, parser, initial_sync=self._initial_sync)
+            changed_segments = self.syncSegments(obj, parser, initial_sync=self._initial_sync)
+            changed_junctions = self.syncJunctions(obj, parser)
+            changed = changed_segments or changed_junctions
             self._initial_sync = False
             if changed:
                 obj.Document.recompute()

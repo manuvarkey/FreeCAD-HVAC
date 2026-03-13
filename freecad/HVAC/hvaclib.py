@@ -406,7 +406,48 @@ class DuctNetworkParser:
         n1 = self.node_id_by_key[self._key(p1)]
         n2 = self.node_id_by_key[self._key(p2)]
         return nx.shortest_path(self.graph, n1, n2)
+    
+    def node_key(self, node_id):
+        """Return persistent snapped-key for a node."""
+        return self._key(self.node_point[node_id])
+    
+    def node_degree(self, node_id):
+        if self.graph is None:
+            raise RuntimeError("Graph not built. Call build_graph() first.")
+        return int(self.graph.degree[node_id])
 
+    def node_edges(self, node_id):
+        """
+        Return EdgeRef objects incident to a node.
+        """
+        refs = []
+        for eref, (u, v) in self.edge_u_v.items():
+            if u == node_id or v == node_id:
+                refs.append(eref)
+        return refs
+
+    def node_kind(self, node_id):
+        d = self.node_degree(node_id)
+        if d <= 0:
+            return "isolated"
+        if d == 1:
+            return "terminal"
+        if d == 2:
+            return "transition"
+        if d == 3:
+            return "tee"
+        if d == 4:
+            return "cross"
+        return "manifold"
+
+    def junction_nodes(self):
+        #TODO
+        out = []
+        for nid in self.nodes():
+            d = self.node_degree(nid)
+            if d >= 2:
+                out.append(nid)
+        return out
 
 #------------------------------------------------------------------------------
 # Geometry generation functions
@@ -496,6 +537,38 @@ def create_circular_duct_geom(start_point, end_point, diameter):
     cyl_mod.transformShape(placement.toMatrix(), True, False)
 
     return cyl_mod
+    
+
+def create_junction_marker_geom(center_point, diameter):
+    """
+    Create a simple spherical marker centered at center_point.
+
+    center_point : (x,y,z) or FreeCAD.Vector
+    diameter     : marker diameter
+
+    Returns:
+        Part.Shape
+    """
+    if hasattr(center_point, "x"):
+        center = FreeCAD.Vector(center_point)
+    else:
+        center = FreeCAD.Vector(*center_point)
+
+    radius = float(diameter) / 2.0
+    if radius <= 0:
+        raise ValueError("Junction diameter must be > 0")
+
+    # Create sphere at (0,0,0)
+    sphere = Part.makeSphere(radius)
+
+    # Place base center at start point
+    rotation = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), FreeCAD.Vector(0, 0, 1))
+    placement = FreeCAD.Placement(center, rotation)
+    
+    shape_mod = sphere.copy()
+    shape_mod.transformShape(placement.toMatrix(), True, False)
+    
+    return shape_mod
 
 
 #------------------------------------------------------------------------------
