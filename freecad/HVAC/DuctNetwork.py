@@ -112,13 +112,11 @@ class DuctSegment:
     """Derived per-edge duct segment created from network base geometry."""
 
     TYPE = "DuctSegment"
-    SECTION_SHAPES = hvaclib.DUCT_SECTION_SHAPES
 
     def __init__(self, obj, owner=None, key="", source_obj=None, source_index=0):
         obj.Proxy = self
         self._allow_delete = False
         self.setProperties(obj)
-        self.updateSectionEditorModes(obj)
         self.updateMetadata(
             obj,
             owner=owner,
@@ -131,17 +129,12 @@ class DuctSegment:
         obj.Proxy = self
         self._allow_delete = False
         self.setProperties(obj)
-        self.updateSectionEditorModes(obj)
 
     def __getstate__(self):
         return None
 
     def __setstate__(self, state):
         self._allow_delete = False
-
-    def onChanged(self, obj, prop):
-        if prop == "SectionShape":
-            self.updateSectionEditorModes(obj)
 
     def execute(self, obj):
         start_point = getattr(obj, "StartPoint", None)
@@ -155,22 +148,7 @@ class DuctSegment:
 
             library_id = getattr(obj, "LibraryId", "")
             type_id = getattr(obj, "TypeId", "")
-
-            # Backward-compatible fallback
             if not library_id or not type_id:
-                section_shape = getattr(obj, "SectionShape", self.SECTION_SHAPES[0])
-                width = getattr(obj, "Width", None)
-                height = getattr(obj, "Height", None)
-                diameter = getattr(obj, "Diameter", None)
-
-                if section_shape == self.SECTION_SHAPES[0]:
-                    obj.Shape = hvaclib.create_rectangular_duct_geom(
-                        start_point, end_point, width, height
-                    )
-                elif section_shape == self.SECTION_SHAPES[1]:
-                    obj.Shape = hvaclib.create_circular_duct_geom(
-                        start_point, end_point, diameter
-                    )
                 return
 
             reg = hvaclib.get_hvac_library_registry()
@@ -224,41 +202,29 @@ class DuctSegment:
         self._addProperty(obj, "App::PropertyVector", "EndPoint", "HVAC", "Segment end point")
         self._addProperty(obj, "App::PropertyLength", "CenterlineLength", "HVAC", "Computed centerline length")
 
-        # Library/type system
         self._addProperty(obj, "App::PropertyString", "LibraryId", "HVAC", "HVAC library id")
         self._addProperty(obj, "App::PropertyString", "Family", "HVAC", "Segment family")
         self._addProperty(obj, "App::PropertyString", "TypeId", "HVAC", "Selected segment type id")
-        self._addProperty(obj, "App::PropertyBool", "AutoType", "HVAC", "Auto-select type from profile")
+        self._addProperty(obj, "App::PropertyBool", "AutoType", "HVAC", "Auto-select type from network defaults")
         self._addProperty(obj, "App::PropertyString", "Profile", "HVAC", "Segment profile")
         self._addProperty(obj, "App::PropertyString", "AnalysisJson", "HVAC", "Serialized segment analysis")
 
-        # Backward-compatible section shape
-        current_shape = getattr(obj, "SectionShape", self.SECTION_SHAPES[0])
-        if "SectionShape" not in obj.PropertiesList:
-            obj.addProperty("App::PropertyEnumeration", "SectionShape", "Duct Type", "Cross-section shape")
-        obj.SectionShape = self.SECTION_SHAPES
-        if current_shape in self.SECTION_SHAPES:
-            obj.SectionShape = current_shape
-        else:
-            obj.SectionShape = self.SECTION_SHAPES[0]
-
-        # Built-in/basic dimensions kept for compatibility and as library-backed params
+        # Keep these as generic dimensional parameters. The active type schema
+        # decides whether they are used.
         self._addProperty(obj, "App::PropertyLength", "Diameter", "Dimensions", "Circular duct diameter")
-        if not obj.Diameter:
-            obj.Diameter = 100.0
-
         self._addProperty(obj, "App::PropertyLength", "Width", "Dimensions", "Rectangular duct width")
-        if not obj.Width:
-            obj.Width = 100.0
-
         self._addProperty(obj, "App::PropertyLength", "Height", "Dimensions", "Rectangular duct height")
-        if not obj.Height:
-            obj.Height = 100.0
-
         self._addProperty(obj, "App::PropertyLength", "InsulationThickness", "Parameters", "Insulation thickness")
         self._addProperty(obj, "App::PropertyLength", "Roughness", "Parameters", "Wall roughness")
         self._addProperty(obj, "App::PropertyFloat", "FlowRate", "Parameters", "Design flow rate")
         self._addProperty(obj, "App::PropertyFloat", "Velocity", "Parameters", "Design air velocity")
+
+        if not obj.Diameter:
+            obj.Diameter = 100.0
+        if not obj.Width:
+            obj.Width = 100.0
+        if not obj.Height:
+            obj.Height = 100.0
 
         if getattr(obj, "AutoType", None) is None:
             obj.AutoType = True
@@ -290,16 +256,6 @@ class DuctSegment:
             except Exception:
                 pass
 
-    def updateSectionEditorModes(self, obj):
-        shape = getattr(obj, "SectionShape", self.SECTION_SHAPES[0])
-        is_circular = shape == "Circular"
-        try:
-            obj.setEditorMode("Diameter", 0 if is_circular else 1)
-            obj.setEditorMode("Width", 1 if is_circular else 0)
-            obj.setEditorMode("Height", 1 if is_circular else 0)
-        except Exception:
-            pass
-
     def applyTypeSchema(self, obj):
         reg = hvaclib.get_hvac_library_registry()
         lib_id = getattr(obj, "LibraryId", "")
@@ -312,7 +268,11 @@ class DuctSegment:
             return False
 
         changed = False
+
+        active_prop_names = set()
         for pdef in getattr(type_def, "properties", []) or []:
+            active_prop_names.add(pdef.name)
+
             if pdef.name not in obj.PropertiesList:
                 obj.addProperty(pdef.prop_type, pdef.name, pdef.group, pdef.description)
                 changed = True
@@ -326,6 +286,19 @@ class DuctSegment:
                 try:
                     setattr(obj, pdef.name, pdef.default)
                     changed = True
+                except Exception:
+                    pass
+
+            try:
+                obj.setEditorMode(pdef.name, 0)
+            except Exception:
+                pass
+
+        # Hide known generic dimension fields that are not active for the current type
+        for prop in ("Diameter", "Width", "Height"):
+            if prop in obj.PropertiesList:
+                try:
+                    obj.setEditorMode(prop, 0 if prop in active_prop_names else 1)
                 except Exception:
                     pass
 
@@ -1053,18 +1026,20 @@ class DuctNetwork:
             net.DefaultLibraryId = library_id
             changed = True
 
-            # When library changes, reset profile if current profile is not valid
-            valid_profiles = hvaclib.segment_profiles_for_library(library_id)
-            current_profile = getattr(net, "DefaultSegmentProfile", "")
-            if current_profile not in valid_profiles:
-                new_profile = valid_profiles[0] if valid_profiles else ""
-                if getattr(net, "DefaultSegmentProfile", "") != new_profile:
-                    net.DefaultSegmentProfile = new_profile
-                    changed = True
+        effective_library_id = library_id or getattr(net, "DefaultLibraryId", "")
 
-        if segment_profile and getattr(net, "DefaultSegmentProfile", "") != segment_profile:
-            net.DefaultSegmentProfile = segment_profile
-            changed = True
+        valid_profiles = hvaclib.segment_profiles_for_library(effective_library_id)
+
+        if segment_profile and segment_profile in valid_profiles:
+            if getattr(net, "DefaultSegmentProfile", "") != segment_profile:
+                net.DefaultSegmentProfile = segment_profile
+                changed = True
+        else:
+            fallback_profile = valid_profiles[0] if valid_profiles else ""
+            if getattr(net, "DefaultSegmentProfile", "") not in valid_profiles:
+                if getattr(net, "DefaultSegmentProfile", "") != fallback_profile:
+                    net.DefaultSegmentProfile = fallback_profile
+                    changed = True
 
         if bool(getattr(net, "DefaultSegmentAutoType", True)) != bool(default_segment_auto):
             net.DefaultSegmentAutoType = bool(default_segment_auto)
@@ -1404,30 +1379,29 @@ class DuctNetwork:
         return None
     
     # Functions for syncing object data with the network parser
-    
+
     def syncSegments(self, net, parser, initial_sync=False):
         """
-        Synchronize the derived DuctSegment objects with the base geometry.
+        Synchronize derived DuctSegment objects with the base geometry.
 
-        This keeps the existing stable edge sync behavior, but now also assigns
-        segment library/type metadata so geometry generation can be library-driven.
+        Segment profile and default type come from network defaults and library
+        definitions. SectionShape is no longer used.
         """
         doc = net.Document
         geometry = getattr(net, "Geometry", None)
         if doc is None or geometry is None:
             return False
-        
-        # Get library defaults
+
         default_lib = self.getDefaultLibrary(net)
         if default_lib is None:
             return False
+
         default_segment_auto = self.getDefaultSegmentAutoType(net)
         default_segment_profile = self.getDefaultSegmentProfile(net)
         if not default_segment_profile:
             default_segment_profile = hvaclib.default_segment_profile_for_library(default_lib.id)
 
         changed = False
-
         existing_segments = self.collectSegmentObjects(net)
         live_objs = set()
 
@@ -1486,16 +1460,11 @@ class DuctNetwork:
             start_node, end_node = parser.edge_nodes(edge_ref)
             start_point, end_point = parser.edge_line(edge_ref)
 
-            # Set profile
             profile = default_segment_profile
             default_type_id = hvaclib.default_segment_type_id_for_profile(
                 default_lib.id,
                 profile,
             )
-
-            # Initialize AutoType from network default when segment is first created
-            if getattr(segment_obj, "AutoType", None) is None:
-                segment_obj.AutoType = default_segment_auto
 
             effective_type_id = getattr(segment_obj, "TypeId", "")
             if not effective_type_id or getattr(segment_obj, "AutoType", True):

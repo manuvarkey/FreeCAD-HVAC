@@ -39,7 +39,7 @@ def load_into(registry):
         label="Rectangular Straight",
         category="segment",
         family="straight_segment",
-        profiles=["rectangular"],
+        profiles=["Rectangular"],
         properties=[
             HVACPropertyDef("Width", "App::PropertyLength", "Dimensions", "Rectangular duct width", 100.0),
             HVACPropertyDef("Height", "App::PropertyLength", "Dimensions", "Rectangular duct height", 100.0),
@@ -53,7 +53,7 @@ def load_into(registry):
         label="Circular Straight",
         category="segment",
         family="straight_segment",
-        profiles=["circular"],
+        profiles=["Circular"],
         properties=[
             HVACPropertyDef("Diameter", "App::PropertyLength", "Dimensions", "Circular duct diameter", 100.0),
         ],
@@ -69,7 +69,7 @@ def load_into(registry):
         label="Terminal Marker",
         category="junction",
         family="terminal",
-        profiles=["generic"],
+        profiles=["Generic"],
         constraints={"degree": 1},
         properties=[
             HVACPropertyDef("MarkerDiameter", "App::PropertyLength", "Dimensions", "Marker diameter", 200.0),
@@ -84,7 +84,7 @@ def load_into(registry):
         label="Transition Marker",
         category="junction",
         family="transition",
-        profiles=["generic"],
+        profiles=["Generic"],
         constraints={"degree": 2, "collinear": True},
         properties=[
             HVACPropertyDef("MarkerDiameter", "App::PropertyLength", "Dimensions", "Marker diameter", 220.0),
@@ -99,7 +99,7 @@ def load_into(registry):
         label="Elbow Marker",
         category="junction",
         family="elbow",
-        profiles=["generic"],
+        profiles=["Generic"],
         constraints={"degree": 2, "collinear": False},
         properties=[
             HVACPropertyDef("MarkerDiameter", "App::PropertyLength", "Dimensions", "Marker diameter", 240.0),
@@ -114,7 +114,7 @@ def load_into(registry):
         label="Tee Marker",
         category="junction",
         family="tee",
-        profiles=["generic"],
+        profiles=["Generic"],
         constraints={"degree": 3},
         properties=[
             HVACPropertyDef("MarkerDiameter", "App::PropertyLength", "Dimensions", "Marker diameter", 260.0),
@@ -129,7 +129,7 @@ def load_into(registry):
         label="Wye Marker",
         category="junction",
         family="wye",
-        profiles=["generic"],
+        profiles=["Generic"],
         constraints={"degree": 3},
         properties=[
             HVACPropertyDef("MarkerDiameter", "App::PropertyLength", "Dimensions", "Marker diameter", 260.0),
@@ -144,7 +144,7 @@ def load_into(registry):
         label="Cross Marker",
         category="junction",
         family="cross",
-        profiles=["generic"],
+        profiles=["Generic"],
         constraints={"degree": 4},
         properties=[
             HVACPropertyDef("MarkerDiameter", "App::PropertyLength", "Dimensions", "Marker diameter", 280.0),
@@ -159,7 +159,7 @@ def load_into(registry):
         label="Manifold Marker",
         category="junction",
         family="manifold",
-        profiles=["generic"],
+        profiles=["Generic"],
         constraints={"degree_min": 5},
         properties=[
             HVACPropertyDef("MarkerDiameter", "App::PropertyLength", "Dimensions", "Marker diameter", 300.0),

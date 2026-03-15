@@ -393,21 +393,30 @@ class TaskPanelNetworkTypeDefaults:
 
     def _populateLibraries(self):
         reg = hvaclib.get_hvac_library_registry()
-
         self.library_combo.clear()
         for lib in reg.list_libraries():
             self.library_combo.addItem(lib.label, lib.id)
 
     def _refreshProfiles(self):
         library_id = self.library_combo.currentData()
-        self.profile_combo.clear()
+        current_profile = self.profile_combo.currentData()
 
+        self.profile_combo.clear()
         if not library_id:
             return
 
         profiles = hvaclib.segment_profiles_for_library(library_id)
         for profile in profiles:
             self.profile_combo.addItem(profile, profile)
+
+        if current_profile:
+            idx = self.profile_combo.findData(current_profile)
+            if idx >= 0:
+                self.profile_combo.setCurrentIndex(idx)
+            elif profiles:
+                self.profile_combo.setCurrentIndex(0)
+        elif profiles:
+            self.profile_combo.setCurrentIndex(0)
 
     def _loadFromNetwork(self):
         lib_id = getattr(self.network_obj, "DefaultLibraryId", "")
