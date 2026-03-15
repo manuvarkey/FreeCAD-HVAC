@@ -1706,6 +1706,7 @@ class DuctNetwork:
         if doc is None:
             return
 
+        reg = hvaclib.get_hvac_library_registry()
         changed = False
 
         for obj in objects or []:
@@ -1726,6 +1727,15 @@ class DuctNetwork:
                 if obj.TypeId != type_id:
                     obj.TypeId = type_id
                     changed = True
+
+                # Keep Profile aligned with the selected segment type
+                if hvaclib.isDuctSegment(obj):
+                    tdef = reg.resolve_type(obj.LibraryId, type_id)
+                    if tdef and getattr(tdef, "profiles", None):
+                        new_profile = tdef.profiles[0]
+                        if hasattr(obj, "Profile") and obj.Profile != new_profile:
+                            obj.Profile = new_profile
+                            changed = True
 
             proxy = getattr(obj, "Proxy", None)
             if proxy and hasattr(proxy, "applyTypeSchema"):

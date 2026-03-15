@@ -305,15 +305,21 @@ class TaskPanelTypeEditor:
             return
 
         ref = self.objects[0]
-        category = "segment" if hvaclib.isDuctSegment(ref) else "junction"
-        family = getattr(ref, "Family", "")
-        profile = getattr(ref, "Profile", "")
 
-        type_defs = lib.list_types(
-            category=category,
-            family=family if family else None,
-            profile=profile if profile else None,
-        )
+        if hvaclib.isDuctSegment(ref):
+            # For segments, keep it simple:
+            # show all segment types from the selected library.
+            type_defs = lib.list_types(category="segment")
+
+        else:
+            # For junctions, keep family filtering.
+            family = getattr(ref, "Family", "")
+            profile = getattr(ref, "Profile", "")
+            type_defs = lib.list_types(
+                category="junction",
+                family=family if family else None,
+                profile=profile if profile else None,
+            )
 
         for tdef in type_defs:
             self.type_combo.addItem(tdef.label, tdef.id)
