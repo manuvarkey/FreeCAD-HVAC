@@ -212,10 +212,6 @@ class TaskPanelTypeEditor:
         self.type_combo = QtWidgets.QComboBox()
         layout.addWidget(self.type_combo)
 
-        # Suggested type info
-        self.suggested_label = QtWidgets.QLabel("")
-        layout.addWidget(self.suggested_label)
-
         self._populateLibraries()
         self._loadFromSelection()
 
@@ -235,22 +231,6 @@ class TaskPanelTypeEditor:
         vals = {getattr(o, "TypeId", "") for o in self.objects}
         return vals.pop() if len(vals) == 1 else ""
 
-    def _commonSuggestedType(self):
-        suggested = set()
-        for obj in self.objects:
-            family = getattr(obj, "Family", "")
-            if hvaclib.isDuctSegment(obj):
-                profile = getattr(obj, "Profile", "")
-                type_id = ""
-                if profile == "circular":
-                    type_id = "circular_straight"
-                else:
-                    type_id = "rectangular_straight"
-            else:
-                type_id = hvaclib.default_junction_type_id(family)
-            suggested.add(type_id)
-        return suggested.pop() if len(suggested) == 1 else ""
-
     def _loadFromSelection(self):
         library_id = self._commonLibraryId()
 
@@ -266,16 +246,6 @@ class TaskPanelTypeEditor:
             idx = self.type_combo.findData(type_id)
             if idx >= 0:
                 self.type_combo.setCurrentIndex(idx)
-
-        suggested = self._commonSuggestedType()
-        if suggested:
-            self.suggested_label.setText(
-                translate("HVAC_EditType", "Suggested type: {}").format(suggested)
-            )
-        else:
-            self.suggested_label.setText(
-                translate("HVAC_EditType", "Suggested type: <mixed>")
-            )
 
     def _refreshTypes(self):
         self.type_combo.clear()

@@ -267,23 +267,26 @@ class DuctSegment:
 
         active_prop_names = set()
         for pdef in getattr(type_def, "properties", []) or []:
-            active_prop_names.add(pdef.name)
-
+            prop_added = False
+        
             if pdef.name not in obj.PropertiesList:
                 obj.addProperty(pdef.prop_type, pdef.name, pdef.group, pdef.description)
                 changed = True
-
+                prop_added = True
+        
             try:
                 current = getattr(obj, pdef.name)
             except Exception:
                 current = None
-
-            if current in (None, "") and getattr(pdef, "default", None) is not None:
-                try:
-                    setattr(obj, pdef.name, pdef.default)
-                    changed = True
-                except Exception:
-                    pass
+        
+            if getattr(pdef, "default", None) is not None:
+                should_apply_default = prop_added or current in (None, "")
+                if should_apply_default:
+                    try:
+                        setattr(obj, pdef.name, pdef.default)
+                        changed = True
+                    except Exception:
+                        pass
 
             try:
                 obj.setEditorMode(pdef.name, 0)
@@ -607,21 +610,26 @@ class DuctJunction:
 
         changed = False
         for pdef in getattr(type_def, "properties", []) or []:
+            prop_added = False
+        
             if pdef.name not in obj.PropertiesList:
                 obj.addProperty(pdef.prop_type, pdef.name, pdef.group, pdef.description)
                 changed = True
-
+                prop_added = True
+        
             try:
                 current = getattr(obj, pdef.name)
             except Exception:
                 current = None
-
-            if current in (None, "") and getattr(pdef, "default", None) is not None:
-                try:
-                    setattr(obj, pdef.name, pdef.default)
-                    changed = True
-                except Exception:
-                    pass
+        
+            if getattr(pdef, "default", None) is not None:
+                should_apply_default = prop_added or current in (None, "")
+                if should_apply_default:
+                    try:
+                        setattr(obj, pdef.name, pdef.default)
+                        changed = True
+                    except Exception:
+                        pass
 
         return changed
 
@@ -785,7 +793,6 @@ class DuctNetwork:
         self._initial_sync = True
         self._sync_in_progress = False
         self._sync_scheduled = False
-        self._sync_reason = None
         self._hidden_source_names = set()
         self.setProperties(obj)
         
@@ -804,16 +811,15 @@ class DuctNetwork:
         self._initial_sync = True
         self._sync_in_progress = False
         self._sync_scheduled = False
-        self._sync_reason = None
         self._hidden_source_names = set()
         self.setProperties(obj)
-        self.requestSync(obj, initial_sync=True, reason="restore")
+        self.requestSync(obj, initial_sync=True)
         
     def execute(self, obj):
         """Manual recompute of the network triggers deferred synchronization."""
         if self._sync_in_progress:
             return
-        self.requestSync(obj, reason="execute")
+        self.requestSync(obj)
 
     def setProperties(self, obj):
         """Gives the object properties to HVAC ducts."""
@@ -941,38 +947,7 @@ class DuctNetwork:
         }
 
     @staticmethod
-    def resolveJunctionTypeDefaults(net, family="", junction_obj=None):
-        """
-        Resolve library/type defaults for a junction.
-
-        Priority:
-        object manual override > object auto/default state > network defaults > global fallback
-        """
-        library_id = DuctNetwork.getDefaultLibraryId(net)
-        default_type_id = getattr(net, "DefaultJunctionTypeId", "") or ""
-
-        if junction_obj is not None:
-            if getattr(junction_obj, "LibraryId", ""):
-                library_id = junction_obj.LibraryId
-            if getattr(junction_obj, "TypeId", ""):
-                default_type_id = junction_obj.TypeId
-
-        suggested_type_id = hvaclib.default_junction_type_id(family)
-
-        if auto_type:
-            effective_type_id = suggested_type_id
-        else:
-            effective_type_id = default_type_id or suggested_type_id
-
-        return {
-            "library_id": library_id,
-            "auto_type": auto_type,
-            "type_id": effective_type_id,
-            "suggested_type_id": suggested_type_id,
-        }
-
-    @staticmethod
-    def applyNetworkTypeDefaults(net, library_id="", segment_profile="", default_segment_auto=True):
+    def applyNetworkTypeDefaults(net, library_id="", segment_profile=""):
         """
         Apply network-level default type settings.
         """
@@ -1682,21 +1657,18 @@ class DuctNetwork:
 
         return changed
                             
-    def requestSync(self, obj, initial_sync=None, reason="unknown"):
+    def requestSync(self, obj, initial_sync=None):
         if initial_sync is not None:
             self._initial_sync = bool(initial_sync)
         
         if self._sync_scheduled:
-            self._sync_reason = reason
             return
         
         self._sync_scheduled = True
-        self._sync_reason = reason
         QtCore.QTimer.singleShot(0, lambda o=obj: self._runDeferredSync(o))
     
     def _runDeferredSync(self, obj):
         self._sync_scheduled = False
-        self._sync_reason = None
 
         if obj is None or obj.Document is None:
             return
@@ -1727,7 +1699,9 @@ class DuctNetwork:
     @staticmethod
     def _segmentUserParams(obj):
         return {
-            "SectionShape": str(getattr(obj, "SectionShape", "")),
+            "LibraryId": str(getattr(obj, "LibraryId", "")),
+            "Profile": str(getattr(obj, "Profile", "")),
+            "TypeId": str(getattr(obj, "TypeId", "")),
             "Diameter": float(getattr(obj, "Diameter", 0.0)),
             "Width": float(getattr(obj, "Width", 0.0)),
             "Height": float(getattr(obj, "Height", 0.0)),
@@ -1811,8 +1785,12 @@ class DuctNetwork:
             except Exception:
                 pass
     
-        if "SectionShape" in params:
-            set_if_needed("SectionShape", params["SectionShape"])
+        if "LibraryId" in params:
+            set_if_needed("LibraryId", params["LibraryId"])
+        if "Profile" in params:
+            set_if_needed("Profile", params["Profile"])
+        if "TypeId" in params:
+            set_if_needed("TypeId", params["TypeId"])
         if "Diameter" in params:
             set_if_needed("Diameter", params["Diameter"])
         if "Width" in params:

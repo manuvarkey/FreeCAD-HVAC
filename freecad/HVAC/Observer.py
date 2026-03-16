@@ -231,7 +231,7 @@ class DuctNetworkChangeObserver:
                     
         self._sync_in_progress = True
         try:
-            proxy.requestSync(net, reason="observer")
+            proxy.requestSync(net)
         finally:
             self._sync_in_progress = False
 
@@ -247,7 +247,7 @@ class DuctNetworkChangeObserver:
                 if hvaclib.isDuctNetwork(obj):
                     proxy = getattr(obj, "Proxy", None)
                     if proxy:
-                        proxy.requestSync(obj, initial_sync=True, reason="undo_redo")
+                        proxy.requestSync(obj, initial_sync=True)
         finally:
             self._sync_in_progress = False
             self._undo_redo_in_progress = False
@@ -289,7 +289,7 @@ class DuctNetworkChangeObserver:
                     pass
             
             proxy.setBaseObjectEditing(net, obj, False)
-            proxy.requestSync(net, reason="edit_finished")
+            proxy.requestSync(net)
 
     def _checkEditedBaseObject(self):
         """

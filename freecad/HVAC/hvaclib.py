@@ -218,14 +218,18 @@ def all_type_defs_for_object(obj):
     if lib is None:
         return []
 
-    category = None
     if isDuctSegment(obj):
-        category = "segment"
-    elif isDuctJunction(obj):
-        category = "junction"
+        return lib.list_types(category="segment")
 
-    return lib.list_types(category=category, family=family, profile=profile or None)
+    if isDuctJunction(obj):
+        return lib.list_types(
+            category="junction",
+            family=family or None,
+            profile=profile or None,
+        )
 
+    return []
+    
 def type_labels_for_object(obj):
     out = []
     for tdef in all_type_defs_for_object(obj):
