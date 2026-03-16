@@ -1979,7 +1979,7 @@ class DuctNetwork:
         sp = FreeCAD.Vector(*start_point) if not hasattr(start_point, "x") else FreeCAD.Vector(start_point)
         ep = FreeCAD.Vector(*end_point) if not hasattr(end_point, "x") else FreeCAD.Vector(end_point)
     
-        vec = ep.sub(sp)
+        vec = ep - sp
         raw_length = vec.Length
     
         if raw_length <= 1e-9:
@@ -1997,9 +1997,9 @@ class DuctNetwork:
             ts *= scale
             te *= scale
     
-        eff_sp = sp.add(direction.multiply(ts))
-        eff_ep = ep.sub(direction.multiply(te))
-        eff_len = eff_ep.sub(eff_sp).Length
+        eff_sp = sp + direction * ts
+        eff_ep = ep - direction * te
+        eff_len = (eff_ep - eff_sp).Length
     
         return eff_sp, eff_ep, ts, te, eff_len
         
