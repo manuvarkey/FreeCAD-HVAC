@@ -550,12 +550,21 @@ class DuctJunction:
                     props[pdef.name] = getattr(pdef, "default", None)
 
             edge_keys = list(getattr(obj, "ConnectedEdgeKeys", []) or [])
+            
+            connected_ports = []
+            raw_analysis = getattr(obj, "AnalysisJson", "") or "{}"
+            try:
+                analysis = json.loads(raw_analysis)
+                connected_ports = list(analysis.get("connected_ports", []) or [])
+            except Exception:
+                connected_ports = []
 
             context = {
                 "obj": obj,
                 "center_point": center_point,
                 "properties": props,
                 "edge_keys": edge_keys,
+                "connected_ports": connected_ports,
                 "family": getattr(obj, "Family", ""),
                 "type_id": type_id,
                 "library_id": library_id,
@@ -1492,12 +1501,8 @@ class DuctNetwork:
             start_node, end_node = parser.edge_nodes(edge_ref)
             start_point, end_point = parser.edge_line(edge_ref)
             
-            trim_values = trim_map.get(key, [])
-            trim_start, trim_end = self.resolveSegmentEndTrims(
-                parser,
-                edge_ref,
-                trim_values,
-            )
+            trim_entry = trim_map.get(key, {})
+            trim_start, trim_end = self.resolveSegmentEndTrims(trim_entry)
 
             eff_sp, eff_ep, trim_start, trim_end, eff_len = self.computeTrimmedSegmentPoints(
                 start_point,
@@ -1620,29 +1625,43 @@ class DuctNetwork:
                 DuctSegment.makeKey(edge_ref.obj_name, edge_ref.local_index)
                 for edge_ref in analysis["edge_refs"]
             ]
+            
+            connected_ports = []
+            for edge_ref in analysis["edge_refs"]:
+                edge_key = DuctSegment.makeKey(edge_ref.obj_name, edge_ref.local_index)
+                seg_end = hvaclib.segment_end_for_node(parser, edge_ref, node_id)
+                if not seg_end:
+                    continue
+                connected_ports.append(
+                    {
+                        "edge_key": edge_key,
+                        "segment_end": seg_end,
+                    }
+                )
 
-            analysis_json = json.dumps(
-                {
-                    "degree": degree,
-                    "family": family,
-                    "collinear_pairs": [
-                        [
-                            DuctSegment.makeKey(a.obj_name, a.local_index),
-                            DuctSegment.makeKey(b.obj_name, b.local_index),
-                            float(ang),
-                        ]
-                        for a, b, ang in analysis.get("collinear_pairs", [])
-                    ],
-                    "orthogonal_pairs": [
-                        [
-                            DuctSegment.makeKey(a.obj_name, a.local_index),
-                            DuctSegment.makeKey(b.obj_name, b.local_index),
-                            float(ang),
-                        ]
-                        for a, b, ang in analysis.get("orthogonal_pairs", [])
-                    ],
-                }
-            )
+                analysis_json = json.dumps(
+                    {
+                        "degree": degree,
+                        "family": family,
+                        "connected_ports": connected_ports,
+                        "collinear_pairs": [
+                            [
+                                DuctSegment.makeKey(a.obj_name, a.local_index),
+                                DuctSegment.makeKey(b.obj_name, b.local_index),
+                                float(ang),
+                            ]
+                            for a, b, ang in analysis.get("collinear_pairs", [])
+                        ],
+                        "orthogonal_pairs": [
+                            [
+                                DuctSegment.makeKey(a.obj_name, a.local_index),
+                                DuctSegment.makeKey(b.obj_name, b.local_index),
+                                float(ang),
+                            ]
+                            for a, b, ang in analysis.get("orthogonal_pairs", [])
+                        ],
+                    }
+                )
 
             junction_obj = existing_junctions.get(node_key)
 
@@ -1875,17 +1894,21 @@ class DuctNetwork:
 
         Returns:
             {
-                "edge_key": [length1, length2, ...],
+                "edge_key": {
+                    "start": max_length_at_start,
+                    "end": max_length_at_end,
+                },
                 ...
             }
         """
         trim_map = {}
+
         geometry = getattr(net, "Geometry", None)
         if geometry is None:
             return trim_map
 
         for obj in list(geometry.OutList):
-            if not DuctJunction.isDuctJunction(obj):
+            if not hvaclib.isDuctJunction(obj):
                 continue
 
             raw = getattr(obj, "ConnectionLengthsJson", "") or "[]"
@@ -1900,44 +1923,36 @@ class DuctNetwork:
             for item in items:
                 if not isinstance(item, dict):
                     continue
+
                 edge_key = str(item.get("edge_key", "") or "")
-                if not edge_key:
+                seg_end = str(item.get("segment_end", "") or "")
+                if not edge_key or seg_end not in ("start", "end"):
                     continue
+
                 try:
                     length = float(item.get("length", 0.0) or 0.0)
                 except Exception:
                     length = 0.0
+
                 if length < 0:
                     length = 0.0
 
-                trim_map.setdefault(edge_key, []).append(length)
+                trim_map.setdefault(edge_key, {"start": 0.0, "end": 0.0})
+                trim_map[edge_key][seg_end] = max(trim_map[edge_key][seg_end], length)
 
         return trim_map
     
-    #TODO
     @staticmethod
-    def resolveSegmentEndTrims(parser, edge_ref, trim_values):
+    def resolveSegmentEndTrims(trim_entry):
         """
-        Resolve trim contributions for a segment into start and end trims.
-
-        For now:
-        - 0 values -> (0, 0)
-        - 1 value  -> assign to one end, leave other 0
-        - 2+ values -> take the two largest and assign one to each end
-
-        This is a temporary simple rule until explicit port-end mapping is added.
+        Resolve explicit end-mapped trim contribution for a segment.
         """
-        vals = sorted(
-            [max(0.0, float(v)) for v in (trim_values or [])],
-            reverse=True,
-        )
-
-        if not vals:
+        if not trim_entry:
             return 0.0, 0.0
-        if len(vals) == 1:
-            return vals[0], 0.0
 
-        return vals[0], vals[1]
+        ts = max(0.0, float(trim_entry.get("start", 0.0) or 0.0))
+        te = max(0.0, float(trim_entry.get("end", 0.0) or 0.0))
+        return ts, te
         
     @staticmethod
     def computeTrimmedSegmentPoints(start_point, end_point, trim_start, trim_end):
@@ -1968,7 +1983,7 @@ class DuctNetwork:
         eff_len = eff_ep.sub(eff_sp).Length
 
         return eff_sp, eff_ep, ts, te, eff_len
-
+        
 
 class DuctNetworkViewProvider:
     """A View Provider for the HVAC duct network object"""

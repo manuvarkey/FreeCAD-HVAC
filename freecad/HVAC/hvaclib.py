@@ -130,6 +130,46 @@ def default_segment_type_id_for_profile(library_id, profile):
         return ""
     return type_defs[0].id
     
+def all_type_defs_for_object(obj):
+    reg = get_hvac_library_registry()
+    library_id = getattr(obj, "LibraryId", "")
+    family = getattr(obj, "Family", "")
+    profile = getattr(obj, "Profile", "")
+
+    lib = reg.get_library(library_id) if library_id else reg.get_active_library()
+    if lib is None:
+        return []
+
+    if isDuctSegment(obj):
+        return lib.list_types(category="segment")
+
+    if isDuctJunction(obj):
+        return lib.list_types(
+            category="junction",
+            family=family or None,
+            profile=profile or None,
+        )
+
+    return []
+    
+def type_labels_for_object(obj):
+    out = []
+    for tdef in all_type_defs_for_object(obj):
+        out.append((tdef.label, tdef.id))
+    return out
+    
+def segment_end_for_node(parser, edge_ref, node_id):
+    """
+    Return 'start' if node_id is the start node of edge_ref,
+    'end' if it is the end node.
+    """
+    start_node, end_node = parser.edge_nodes(edge_ref)
+    if node_id == start_node:
+        return "start"
+    if node_id == end_node:
+        return "end"
+    return ""
+    
 def debug_print_loaded_libraries():
     reg = get_hvac_library_registry()
     libs = reg.list_libraries()
@@ -207,34 +247,6 @@ def selectedGeometryObjects():
         ]
         return filtered
     return None
-    
-def all_type_defs_for_object(obj):
-    reg = get_hvac_library_registry()
-    library_id = getattr(obj, "LibraryId", "")
-    family = getattr(obj, "Family", "")
-    profile = getattr(obj, "Profile", "")
-
-    lib = reg.get_library(library_id) if library_id else reg.get_active_library()
-    if lib is None:
-        return []
-
-    if isDuctSegment(obj):
-        return lib.list_types(category="segment")
-
-    if isDuctJunction(obj):
-        return lib.list_types(
-            category="junction",
-            family=family or None,
-            profile=profile or None,
-        )
-
-    return []
-    
-def type_labels_for_object(obj):
-    out = []
-    for tdef in all_type_defs_for_object(obj):
-        out.append((tdef.label, tdef.id))
-    return out
     
 def selectedBaseObjects():
     from .DuctNetwork import DuctNetwork
