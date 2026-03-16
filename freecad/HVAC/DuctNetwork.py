@@ -23,6 +23,7 @@
 
 """This module implements HVAC duct description classes."""
 import json
+import traceback
 import FreeCAD
 import FreeCADGui as Gui
 from PySide import QtWidgets, QtCore
@@ -432,7 +433,17 @@ class DuctSegment:
 
     @staticmethod
     def makeKey(obj_name, source_index):
-        return "{}:{}".format(obj_name, int(source_index))
+        source_index = int(source_index)
+        obj = FreeCAD.ActiveDocument.getObject(obj_name)
+        if (obj and len(getattr(obj, "Geometry", [])) > source_index and \
+                    hasattr(obj.Geometry[source_index], "Tag") and 
+                    obj.Geometry[source_index].Tag):
+            if hvaclib.obj_is_sketch(obj):
+                return obj.Geometry[source_index].Tag
+            elif hvaclib.obj_is_wire(obj):
+                return "{}_{}".format(getattr(obj, "Name", ""), 
+                                    getattr(obj.Geometry[source_index], "Tag", ""))
+        return '{}_{}'.format(obj_name, source_index)
 
     @staticmethod
     def labelFor(source_obj, source_index):
@@ -1622,13 +1633,13 @@ class DuctNetwork:
             node_key = DuctJunction.makeKey(node_key_tuple)
     
             connected_edge_keys = [
-                DuctSegment.makeKey(edge_ref.obj_name, edge_ref.local_index)
+                edge_ref.tag
                 for edge_ref in analysis["edge_refs"]
             ]
     
             connected_ports = []
             for edge_ref in analysis["edge_refs"]:
-                edge_key = DuctSegment.makeKey(edge_ref.obj_name, edge_ref.local_index)
+                edge_key = edge_ref.tag
                 seg_end = hvaclib.segment_end_for_node(parser, edge_ref, node_id)
                 if not seg_end:
                     continue
@@ -1646,16 +1657,16 @@ class DuctNetwork:
                     "connected_ports": connected_ports,
                     "collinear_pairs": [
                         [
-                            DuctSegment.makeKey(a.obj_name, a.local_index),
-                            DuctSegment.makeKey(b.obj_name, b.local_index),
+                            a.tag,
+                            b.tag,
                             float(ang),
                         ]
                         for a, b, ang in analysis.get("collinear_pairs", [])
                     ],
                     "orthogonal_pairs": [
                         [
-                            DuctSegment.makeKey(a.obj_name, a.local_index),
-                            DuctSegment.makeKey(b.obj_name, b.local_index),
+                            a.tag,
+                            b.tag,
                             float(ang),
                         ]
                         for a, b, ang in analysis.get("orthogonal_pairs", [])
@@ -1775,6 +1786,7 @@ class DuctNetwork:
                 obj.Document.recompute()
     
         except Exception as err:
+            print(traceback.format_exc())
             FreeCAD.Console.PrintError(
                 "HVAC - Failed to update network '{}': {}\n".format(obj.Label, err)
             )

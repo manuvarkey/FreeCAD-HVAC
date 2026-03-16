@@ -388,7 +388,9 @@ class DuctNetworkParser:
         Yield (start_point, end_point) for all LINE segments in a Sketch.
         Sketch line geo is typically Part.LineSegment.
         """
-        for geo in getattr(sketch_obj, "Geometry", []) or []:
+        from .DuctNetwork import DuctSegment
+        
+        for slno, geo in enumerate(getattr(sketch_obj, "Geometry", []) or []):
             # Accept only straight line segments
             if hasattr(geo, "StartPoint") and hasattr(geo, "EndPoint"):
                 # Filter out arcs/circles/etc by type
@@ -399,17 +401,20 @@ class DuctNetworkParser:
                     ep = geo.EndPoint
                     # Skip degenerate lines
                     if (sp.sub(ep)).Length > tol:
-                        yield (vec_to_xyz(sp), vec_to_xyz(ep), getattr(geo, "Tag", ""))
+                        tag = DuctSegment.makeKey(sketch_obj.Name, slno)
+                        yield (vec_to_xyz(sp), vec_to_xyz(ep), tag)
 
     def iter_line_segments_from_shape(self, obj, tol=1e-9):
         """
         Yield (start_point, end_point) for all straight edges in obj.Shape.
         Works for Draft Wire (and many Part-based objects) as long as Shape exists.
         """
+        from .DuctNetwork import DuctSegment
+        
         shape = getattr(obj, "Shape", None)
         if shape is None:
             return
-        for e in getattr(shape, "Edges", []) or []:
+        for slno, e in enumerate(getattr(shape, "Edges", []) or []):
             c = getattr(e, "Curve", None)
             if c is None:
                 continue
@@ -420,6 +425,8 @@ class DuctNetworkParser:
                 v2 = e.Vertexes[-1].Point
                 if (v1.sub(v2)).Length > tol:
                     tag = "{}_{}".format(getattr(obj, "Name", ""), getattr(e, "Tag", ""))
+                    #TODO make use of DuctSegment.makeKey()
+                    tag = DuctSegment.makeKey(obj.Name, slno)
                     yield (vec_to_xyz(v1), vec_to_xyz(v2), tag)
 
     ## Graph build utilities
