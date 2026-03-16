@@ -96,6 +96,11 @@ def get_active_hvac_library():
     reg = get_hvac_library_registry()
     return reg.get_active_library()
     
+def reload_hvac_libraries():
+    reg = get_hvac_library_registry()
+    reg.reload()
+    return reg
+    
 def segment_profiles_for_library(library_id):
     reg = get_hvac_library_registry()
     lib = reg.get_library(library_id)
@@ -127,7 +132,12 @@ def default_segment_type_id_for_profile(library_id, profile):
     
 def debug_print_loaded_libraries():
     reg = get_hvac_library_registry()
-    for lib in reg.list_libraries():
+    libs = reg.list_libraries()
+    if not libs:
+        FreeCAD.Console.PrintWarning("HVAC - No libraries loaded.\n")
+        return
+
+    for lib in libs:
         FreeCAD.Console.PrintMessage(
             "HVAC - Library loaded: {} ({}) with {} types\n".format(
                 lib.label, lib.id, len(lib.types_by_id)

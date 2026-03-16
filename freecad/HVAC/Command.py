@@ -351,6 +351,25 @@ class CommandResetTypesToNetworkDefaults:
             "HVAC - Reset {} object(s) to network defaults.\n".format(len(selected_geom))
         )
         
+
+class CommandReloadHVACLibraries:
+    """Reload HVAC libraries from configured search paths."""
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("ModifyDuctsIcon.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_ReloadLibraries', 'Reload Libraries'),
+            'ToolTip': QT_TRANSLATE_NOOP('HVAC_ReloadLibraries', 'Reload HVAC libraries from disk'),
+            'CmdType': 'ForEdit',
+        }
+
+    def IsActive(self):
+        return Gui.ActiveDocument is not None
+
+    def Activated(self):
+        hvaclib.reload_hvac_libraries()
+        hvaclib.debug_print_loaded_libraries()
+        
         
 #=================================================
 # Register Commands
@@ -367,3 +386,4 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_EditType', CommandEditType())
     FreeCAD.Gui.addCommand('HVAC_EditNetworkTypeDefaults', CommandEditNetworkTypeDefaults())
     FreeCAD.Gui.addCommand('HVAC_ResetTypesToDefaults', CommandResetTypesToNetworkDefaults())
+    FreeCAD.Gui.addCommand('HVAC_ReloadLibraries', CommandReloadHVACLibraries())  # Debug method

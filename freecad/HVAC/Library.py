@@ -160,16 +160,20 @@ class HVACLibraryRegistry:
     def ensure_loaded(self):
         if self._loaded:
             return
-            
+
         self.scan_paths()
-        
+
         if not self._libraries:
             FreeCAD.Console.PrintError(
-                "HVAC: No HVAC libraries found in search paths.\n"
+                "HVAC - No HVAC libraries found in configured search paths.\n"
             )
+
         self._loaded = True
 
     def scan_paths(self):
+        self._libraries = {}
+        self._active_library_id = None
+
         for root in self._search_paths:
             self.scan_path(root)
 
@@ -190,6 +194,10 @@ class HVACLibraryRegistry:
                     "HVAC - Failed to load library from '{}': {}\n".format(lib_dir, e)
                 )
 
+    def reload(self):
+        self._loaded = False
+        self.ensure_loaded()
+
     def load_library_from_folder(self, lib_dir):
         manifest_path = os.path.join(lib_dir, "library.json")
         if not os.path.isfile(manifest_path):
@@ -197,7 +205,7 @@ class HVACLibraryRegistry:
 
         with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
-        
+
         lib_id = manifest["id"]
         label = manifest.get("label", lib_id)
         generators_package = manifest["generators_package"]
