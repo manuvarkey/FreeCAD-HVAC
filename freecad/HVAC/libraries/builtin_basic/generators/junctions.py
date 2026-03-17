@@ -144,7 +144,63 @@ def _build_marker(context, default_diameter, trim_factor):
 # --------------------------------------------------------------------------
 
 def build_terminal_marker(context):
-    return _build_marker(context, default_diameter=200.0, trim_factor=0.25)
+    center = _center_from_context(context)
+
+    # Use the same diameter logic as the original _build_marker
+    default_diameter = 200.0
+    dia = float(context["properties"].get("MarkerDiameter", default_diameter) or default_diameter)
+
+    if dia <= 0:
+        raise ValueError("Marker diameter must be > 0 for lines to have length")
+
+    # Calculate trim_len for connection_lengths, consistent with original _build_marker
+    trim_len = 0.0
+
+    # Determine the primary port direction
+    ports = list(context.get("connected_ports", []) or [])
+    if len(ports) == 1:
+        port_dir = _port_direction(ports[0])
+    else:
+        # Default to Z-axis if no single connected port (e.g., truly a "terminal" end with no connected segments yet)
+        # This will make the cross perpendicular to the Z-axis (i.e., in the XY plane)
+        port_dir = FreeCAD.Vector(0, 0, 1)
+
+    # Calculate two orthogonal vectors perpendicular to port_dir
+    # These will define the plane in which our cross lines lie.
+    # Choose a reference vector that is not collinear with port_dir
+    # This prevents the initial cross-product from being a zero vector.
+    if abs(port_dir.dot(FreeCAD.Vector(1, 0, 0))) < 0.999: # Check if port_dir is not nearly parallel to X-axis
+        ref_vec = FreeCAD.Vector(1, 0, 0)
+    else: # If it is, use Y-axis as a reference
+        ref_vec = FreeCAD.Vector(0, 1, 0)
+
+    # The first line direction (v1) is perpendicular to port_dir and ref_vec
+    v1 = port_dir.cross(ref_vec)
+    v1.normalize() # Ensure it's a unit vector
+
+    # The second line direction (v2) is perpendicular to port_dir and v1
+    # This ensures v1 and v2 are perpendicular to each other and to port_dir
+    v2 = port_dir.cross(v1)
+    v2.normalize() # Should already be normalized if port_dir and v1 are orthogonal unit vectors
+
+    # Create the two lines spanning 'dia' length, centered at 'center'
+    # Line 1 along v1
+    p1_v1 = center - v1 * dia / 2.0
+    p2_v1 = center + v1 * dia / 2.0
+    line_v1 = Part.makeLine(p1_v1, p2_v1)
+
+    # Line 2 along v2
+    p1_v2 = center - v2 * dia / 2.0
+    p2_v2 = center + v2 * dia / 2.0
+    line_v2 = Part.makeLine(p1_v2, p2_v2)
+
+    # Combine the lines into a single compound shape
+    shape = Part.makeCompound([line_v1, line_v2])
+
+    return {
+        "shape": shape,
+        "connection_lengths": _build_records(context, trim_len),
+    }
 
 
 def build_transition_marker(context):
