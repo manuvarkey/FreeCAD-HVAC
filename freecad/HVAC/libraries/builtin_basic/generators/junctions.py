@@ -21,28 +21,58 @@
 #                                                                              #
 ################################################################################
 
+import math
 import FreeCAD
 import Part
 
 
-def _center_from_context(context):
-    cp = context["center_point"]
-    if hasattr(cp, "x"):
-        return FreeCAD.Vector(cp)
-    return FreeCAD.Vector(*cp)
+# --------------------------------------------------------------------------
+# Basic helpers
+# --------------------------------------------------------------------------
+
+def _vec(v):
+    if hasattr(v, "x"):
+        return FreeCAD.Vector(v)
+    return FreeCAD.Vector(*v)
 
 
-def _make_sphere(center, diameter):
-    radius = float(diameter) / 2.0
-    if radius <= 0:
-        raise ValueError("Marker diameter must be > 0")
-
-    sphere = Part.makeSphere(radius)
-    placement = FreeCAD.Placement(center, FreeCAD.Rotation())
-    out = sphere.copy()
-    out.transformShape(placement.toMatrix(), True, False)
+def _unit(v):
+    out = FreeCAD.Vector(v)
+    if out.Length <= 1e-9:
+        raise ValueError("Zero-length vector")
+    out.normalize()
     return out
 
+
+def _center_from_context(context):
+    return _vec(context["center_point"])
+
+
+def _angle_between(u1, u2):
+    dot = max(-1.0, min(1.0, float(u1.dot(u2))))
+    return math.acos(dot)
+
+
+def _port_direction(port):
+    return _unit(_vec(port["direction"]))
+
+
+def _port_profile(port):
+    return str(port.get("profile", "") or "")
+
+
+def _port_section_params(port):
+    return dict(port.get("section_params", {}) or {})
+
+
+def _port_diameter(port):
+    params = _port_section_params(port)
+    return float(params.get("Diameter", 0.0) or 0.0)
+
+
+# --------------------------------------------------------------------------
+# Generic trim reporting
+# --------------------------------------------------------------------------
 
 def _build_records(context, length_value):
     records = []
@@ -65,9 +95,25 @@ def _build_records(context, length_value):
     return records
 
 
+# --------------------------------------------------------------------------
+# Marker geometry
+# --------------------------------------------------------------------------
+
+def _make_sphere(center, diameter):
+    radius = float(diameter) / 2.0
+    if radius <= 0:
+        raise ValueError("Marker diameter must be > 0")
+
+    sphere = Part.makeSphere(radius)
+    placement = FreeCAD.Placement(center, FreeCAD.Rotation())
+    out = sphere.copy()
+    out.transformShape(placement.toMatrix(), True, False)
+    return out
+
+
 def _build_marker(context, default_diameter, trim_factor):
     center = _center_from_context(context)
-    dia = context["properties"].get("MarkerDiameter", default_diameter)
+    dia = float(context["properties"].get("MarkerDiameter", default_diameter) or default_diameter)
 
     shape = _make_sphere(center, dia)
     trim_len = float(dia) * float(trim_factor)
@@ -77,6 +123,84 @@ def _build_marker(context, default_diameter, trim_factor):
         "connection_lengths": _build_records(context, trim_len),
     }
 
+
+# --------------------------------------------------------------------------
+# Circular elbow geometry helpers
+# --------------------------------------------------------------------------
+
+def _elbow_trim(radius, theta_rad):
+    t = math.tan(theta_rad / 2.0)
+    if abs(t) <= 1e-12:
+        return 0.0
+    return float(radius) * t
+
+
+def _minor_arc_delta(a1, a2):
+    da = a2 - a1
+    while da <= -math.pi:
+        da += 2.0 * math.pi
+    while da > math.pi:
+        da -= 2.0 * math.pi
+    return da
+
+
+def _build_circular_elbow_shape(center, u1, u2, diameter, radius):
+    """
+    Build a swept circular elbow from two outgoing port directions.
+
+    center   : junction corner point
+    u1, u2   : unit vectors pointing away from the junction
+    diameter : duct diameter
+    radius   : centerline radius
+    """
+    theta = _angle_between(u1, u2)
+
+    if theta <= 1e-6:
+        raise ValueError("Elbow requires non-collinear directions")
+    if abs(theta - math.pi) <= 1e-6:
+        raise ValueError("Elbow cannot be built for opposite directions")
+
+    normal = u1.cross(u2)
+    if normal.Length <= 1e-9:
+        raise ValueError("Elbow plane is undefined")
+    normal.normalize()
+
+    bis = FreeCAD.Vector(u1.add(u2))
+    if bis.Length <= 1e-9:
+        raise ValueError("Invalid elbow bisector")
+    bis.normalize()
+
+    trim = _elbow_trim(radius, theta)
+
+    # Tangency points on the two connected straight segments
+    p1 = center + u1 * trim
+    p2 = center + u2 * trim
+
+    # Arc center lies on the internal angle bisector
+    dist_to_arc_center = float(radius) / math.sin(theta / 2.0)
+    arc_center = center + bis * dist_to_arc_center
+
+    # Build minor arc explicitly using a midpoint on the intended elbow side
+    mid_dir = FreeCAD.Vector(bis)
+    mid_dir.multiply(-1.0)   # inward from arc center toward elbow interior
+    mid_point = arc_center + mid_dir * float(radius)
+
+    arc_edge = Part.Arc(p1, mid_point, p2).toShape()
+    path_wire = Part.Wire([arc_edge])
+
+    # Circular profile normal to tangent at p1
+    profile_edge = Part.makeCircle(float(diameter) / 2.0, p1, u1)
+    profile_wire = Part.Wire([profile_edge])
+
+    shell = path_wire.makePipeShell([profile_wire], True, True)
+    solid = Part.makeSolid(shell)
+
+    return solid, trim
+
+
+# --------------------------------------------------------------------------
+# Marker generators
+# --------------------------------------------------------------------------
 
 def build_terminal_marker(context):
     return _build_marker(context, default_diameter=200.0, trim_factor=0.25)
@@ -104,3 +228,64 @@ def build_cross_marker(context):
 
 def build_manifold_marker(context):
     return _build_marker(context, default_diameter=320.0, trim_factor=0.50)
+
+
+# --------------------------------------------------------------------------
+# Real fitting generator: circular elbow
+# --------------------------------------------------------------------------
+
+def build_circular_elbow_90(context):
+    """
+    First real port-aware fitting.
+
+    Requirements:
+    - exactly 2 ports
+    - both ports circular
+    - equal diameters
+    """
+    center = _center_from_context(context)
+    ports = list(context.get("connected_ports", []) or [])
+    props = dict(context.get("properties", {}) or {})
+
+    if len(ports) != 2:
+        raise ValueError("Circular elbow requires exactly 2 ports")
+
+    for p in ports:
+        if _port_profile(p) != "Circular":
+            raise ValueError("Circular elbow requires circular ports")
+
+    d1 = _port_diameter(ports[0])
+    d2 = _port_diameter(ports[1])
+    if d1 <= 0 or d2 <= 0:
+        raise ValueError("Circular elbow requires valid port diameters")
+
+    if abs(d1 - d2) > 1e-6:
+        raise ValueError("Circular elbow currently requires equal diameters")
+
+    diameter = float(props.get("Diameter", d1) or d1)
+    radius = float(props.get("CenterlineRadius", 0.0) or 0.0)
+    if radius <= 0:
+        radius = 1.5 * diameter
+
+    u1 = _port_direction(ports[0])
+    u2 = _port_direction(ports[1])
+
+    shape, trim = _build_circular_elbow_shape(center, u1, u2, diameter, radius)
+
+    trims = [
+        {
+            "edge_key": str(ports[0]["edge_key"]),
+            "segment_end": str(ports[0]["segment_end"]),
+            "length": float(trim),
+        },
+        {
+            "edge_key": str(ports[1]["edge_key"]),
+            "segment_end": str(ports[1]["segment_end"]),
+            "length": float(trim),
+        },
+    ]
+
+    return {
+        "shape": shape,
+        "connection_lengths": trims,
+    }

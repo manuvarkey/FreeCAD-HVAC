@@ -1,0 +1,30 @@
+{
+  "id": "circular_elbow_90",
+  "label": "Circular Elbow 90",
+  "category": "junction",
+  "family": "elbow",
+  "profiles": ["Circular"],
+  "constraints": {
+    "degree": 2
+  },
+  "properties": [
+    {
+      "name": "Diameter",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Elbow duct diameter",
+      "default": 200.0
+    },
+    {
+      "name": "CenterlineRadius",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Elbow centerline radius",
+      "default": 300.0
+    }
+  ],
+  "generator": {
+    "module": "junctions",
+    "function": "build_circular_elbow_90"
+  }
+}

@@ -188,6 +188,7 @@ class DuctSegment:
                 obj.Shape = shape
 
         except Exception as e:
+            FreeCAD.Console.PrintError(traceback.format_exc())
             FreeCAD.Console.PrintError(
                 "HVAC - Error generating segment '{}': {}\n".format(obj.Label, e)
             )
@@ -590,6 +591,7 @@ class DuctJunction:
                 obj.ConnectionLengthsJson = lengths_json
 
         except Exception as e:
+            FreeCAD.Console.PrintError(traceback.format_exc())
             FreeCAD.Console.PrintError(
                 "HVAC - Error generating junction '{}': {}\n".format(obj.Label, e)
             )
@@ -1615,8 +1617,9 @@ class DuctNetwork:
             return False
     
         changed = False
-        existing_junctions = self.collectJunctionObjects(net)
         live_objs = set()
+        existing_junctions = self.collectJunctionObjects(net)
+        segment_map = self.collectSegmentObjects(net)
     
         for node_id in parser.nodes():
             analysis = parser.node_analysis(node_id)
@@ -1635,10 +1638,10 @@ class DuctNetwork:
             ]
     
             port_objs = hvaclib.build_junction_ports(
-                doc,
                 parser,
                 node_id,
                 analysis["edge_refs"],
+                segment_map=segment_map,
             )
             
             connected_ports = [
@@ -1774,10 +1777,12 @@ class DuctNetwork:
         try:
             parser = hvaclib.DuctNetworkParser(list(base_folder.OutList))
     
-            # Stage 1: junctions first so their execute() writes ConnectionLengthsJson
-            changed_junctions = self.syncJunctions(obj, parser)
-            if changed_junctions:
-                obj.Document.recompute()
+            # Stage 1: junctions first so their execute() writes ConnectionLengthsJson (Except for initial sync) 
+            # Do not run junction update on initial sync since edge tags will not be updated
+            if not self._initial_sync:  
+                changed_junctions = self.syncJunctions(obj, parser)
+                if changed_junctions:
+                    obj.Document.recompute()
     
             # Stage 2: segments consume the junction trim data
             changed_segments = self.syncSegments(obj, parser, initial_sync=self._initial_sync)
@@ -1788,7 +1793,7 @@ class DuctNetwork:
                 obj.Document.recompute()
     
         except Exception as err:
-            print(traceback.format_exc())
+            FreeCAD.Console.PrintError(traceback.format_exc())
             FreeCAD.Console.PrintError(
                 "HVAC - Failed to update network '{}': {}\n".format(obj.Label, err)
             )

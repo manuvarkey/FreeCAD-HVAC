@@ -24,6 +24,7 @@
 import os
 import platform
 import sys
+import traceback
 import json
 import math
 from dataclasses import dataclass
@@ -276,8 +277,9 @@ def refreshState():
             wb = Gui.activeWorkbench()
             if wb and hasattr(wb, "refreshWatchers"):
                 wb.refreshWatchers()
-        except Exception:
-            pass
+        except Exception as e:
+            FreeCAD.Console.PrintError(traceback.format_exc())
+            FreeCAD.Console.PrintWarning("HVAC - refreshState: {}".format(e))
     
     QtCore.QTimer.singleShot(0, _do_refresh)
     
@@ -337,12 +339,12 @@ def get_segment_section_params(seg):
     """
     profile = str(getattr(seg, "Profile", "") or "")
 
-    if profile == "circular":
+    if profile == "Circular":
         return {
             "Diameter": float(getattr(seg, "Diameter", 0.0) or 0.0),
         }
 
-    if profile == "rectangular":
+    if profile == "Rectangular":
         return {
             "Width": float(getattr(seg, "Width", 0.0) or 0.0),
             "Height": float(getattr(seg, "Height", 0.0) or 0.0),
@@ -358,14 +360,15 @@ def get_segment_section_params(seg):
                 pass
     return out
 
-def build_junction_ports(doc, parser, node_id, edge_refs):
+def build_junction_ports(parser, node_id, edge_refs, segment_map=None):
     """
     Build generic port descriptors for a junction node.
 
-    Returns:
-        list[JunctionPort]
+    segment_map:
+        dict { segment_key : DuctSegment object }
     """
     ports = []
+    segment_map = segment_map or {}
 
     node_point = FreeCAD.Vector(*parser.node_xyz(node_id))
 
@@ -379,7 +382,7 @@ def build_junction_ports(doc, parser, node_id, edge_refs):
         sp_vec = FreeCAD.Vector(*sp)
         ep_vec = FreeCAD.Vector(*ep)
 
-        # Direction must point away from the junction along the segment
+        # Direction points away from the junction along the connected segment
         if segment_end == "start":
             other = ep_vec
         else:
@@ -390,10 +393,14 @@ def build_junction_ports(doc, parser, node_id, edge_refs):
             continue
         direction.normalize()
 
-        seg_obj = doc.getObject(edge_ref.obj_name)
+        seg_obj = segment_map.get(edge_key)
+
         if seg_obj is None:
             profile = ""
             section_params = {}
+            FreeCAD.Console.PrintWarning(
+                "HVAC - No derived segment found for edge key '{}'\n".format(edge_key)
+            )
         else:
             profile = str(getattr(seg_obj, "Profile", "") or "")
             section_params = get_segment_section_params(seg_obj)
@@ -418,7 +425,7 @@ class JunctionPort:
     edge_key      : stable segment key, e.g. "Sketch001:0"
     segment_end   : "start" or "end" relative to the connected segment
     direction     : unit vector pointing away from the junction along the segment
-    profile       : segment profile string, e.g. "circular", "rectangular"
+    profile       : segment profile string, e.g. "Circular", "Rectangular"
     section_params: generic profile-dependent section data
     """
     edge_key: str
