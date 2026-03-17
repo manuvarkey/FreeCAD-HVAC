@@ -48,9 +48,9 @@ def _build_records(context, length_value):
     records = []
 
     connected_ports = list(context.get("connected_ports", []) or [])
-    for item in connected_ports:
-        edge_key = str(item.get("edge_key", "") or "")
-        seg_end = str(item.get("segment_end", "") or "")
+    for port in connected_ports:
+        edge_key = str(port.get("edge_key", "") or "")
+        seg_end = str(port.get("segment_end", "") or "")
         if not edge_key or seg_end not in ("start", "end"):
             continue
 

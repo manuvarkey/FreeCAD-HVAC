@@ -560,8 +560,6 @@ class DuctJunction:
                 else:
                     props[pdef.name] = getattr(pdef, "default", None)
 
-            edge_keys = list(getattr(obj, "ConnectedEdgeKeys", []) or [])
-            
             connected_ports = []
             raw_analysis = getattr(obj, "AnalysisJson", "") or "{}"
             try:
@@ -569,12 +567,11 @@ class DuctJunction:
                 connected_ports = list(analysis.get("connected_ports", []) or [])
             except Exception:
                 connected_ports = []
-
+            
             context = {
                 "obj": obj,
                 "center_point": center_point,
                 "properties": props,
-                "edge_keys": edge_keys,
                 "connected_ports": connected_ports,
                 "family": getattr(obj, "Family", ""),
                 "type_id": type_id,
@@ -1637,18 +1634,23 @@ class DuctNetwork:
                 for edge_ref in analysis["edge_refs"]
             ]
     
-            connected_ports = []
-            for edge_ref in analysis["edge_refs"]:
-                edge_key = edge_ref.tag
-                seg_end = hvaclib.segment_end_for_node(parser, edge_ref, node_id)
-                if not seg_end:
-                    continue
-                connected_ports.append(
-                    {
-                        "edge_key": edge_key,
-                        "segment_end": seg_end,
-                    }
-                )
+            port_objs = hvaclib.build_junction_ports(
+                doc,
+                parser,
+                node_id,
+                analysis["edge_refs"],
+            )
+            
+            connected_ports = [
+                {
+                    "edge_key": p.edge_key,
+                    "segment_end": p.segment_end,
+                    "direction": p.direction,
+                    "profile": p.profile,
+                    "section_params": p.section_params,
+                }
+                for p in port_objs
+            ]
     
             analysis_json = json.dumps(
                 {

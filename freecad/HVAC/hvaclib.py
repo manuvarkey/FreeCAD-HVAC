@@ -330,12 +330,110 @@ def vec_to_xyz(v):
     """Return (x,y,z) tuple from a FreeCAD.Vector-like object."""
     return (float(v.x), float(v.y), float(v.z))
 
+def get_segment_section_params(seg):
+    """
+    Return generic section parameters for a segment.
+    This is profile-dependent and intentionally not reduced to a single diameter.
+    """
+    profile = str(getattr(seg, "Profile", "") or "")
+
+    if profile == "circular":
+        return {
+            "Diameter": float(getattr(seg, "Diameter", 0.0) or 0.0),
+        }
+
+    if profile == "rectangular":
+        return {
+            "Width": float(getattr(seg, "Width", 0.0) or 0.0),
+            "Height": float(getattr(seg, "Height", 0.0) or 0.0),
+        }
+
+    # Generic fallback for future profiles
+    out = {}
+    for name in ("Diameter", "Width", "Height"):
+        if hasattr(seg, name):
+            try:
+                out[name] = float(getattr(seg, name) or 0.0)
+            except Exception:
+                pass
+    return out
+
+def build_junction_ports(doc, parser, node_id, edge_refs):
+    """
+    Build generic port descriptors for a junction node.
+
+    Returns:
+        list[JunctionPort]
+    """
+    ports = []
+
+    node_point = FreeCAD.Vector(*parser.node_xyz(node_id))
+
+    for edge_ref in edge_refs:
+        edge_key = edge_ref.tag
+        segment_end = segment_end_for_node(parser, edge_ref, node_id)
+        if segment_end not in ("start", "end"):
+            continue
+
+        sp, ep = parser.edge_line(edge_ref)
+        sp_vec = FreeCAD.Vector(*sp)
+        ep_vec = FreeCAD.Vector(*ep)
+
+        # Direction must point away from the junction along the segment
+        if segment_end == "start":
+            other = ep_vec
+        else:
+            other = sp_vec
+
+        direction = other.sub(node_point)
+        if direction.Length <= 1e-9:
+            continue
+        direction.normalize()
+
+        seg_obj = doc.getObject(edge_ref.obj_name)
+        if seg_obj is None:
+            profile = ""
+            section_params = {}
+        else:
+            profile = str(getattr(seg_obj, "Profile", "") or "")
+            section_params = get_segment_section_params(seg_obj)
+
+        ports.append(
+            JunctionPort(
+                edge_key=edge_key,
+                segment_end=segment_end,
+                direction=vec_to_xyz(direction),
+                profile=profile,
+                section_params=section_params,
+            )
+        )
+
+    return ports
+
+@dataclass
+class JunctionPort:
+    """
+    Generic junction port descriptor.
+
+    edge_key      : stable segment key, e.g. "Sketch001:0"
+    segment_end   : "start" or "end" relative to the connected segment
+    direction     : unit vector pointing away from the junction along the segment
+    profile       : segment profile string, e.g. "circular", "rectangular"
+    section_params: generic profile-dependent section data
+    """
+    edge_key: str
+    segment_end: str
+    direction: tuple
+    profile: str
+    section_params: dict
+
 @dataclass(frozen=True)
 class EdgeRef:
     """Stable reference to an edge created from (obj_name, local_line_index)."""
     obj_name: str
     local_index: int
     tag: str
+
 
 class DuctNetworkParser:
 
