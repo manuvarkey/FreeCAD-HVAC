@@ -216,7 +216,9 @@ class DuctSegment:
         self._addProperty(obj, "App::PropertyString", "Profile", "HVAC", "Segment profile")
         self._addProperty(obj, "App::PropertyString", "AnalysisJson", "HVAC", "Serialized segment analysis")
         
-        self._addProperty(obj, "App::PropertyString", "Attachment", "Placement", "Section attachment relative to route")
+        self._addProperty(obj, "App::PropertyEnumeration", "Attachment", "Placement", "Section attachment relative to route")
+        obj.Attachment = list(hvaclib.ATTACH_MAP.keys())
+        obj.Attachment = "Center"
         self._addProperty(obj, "App::PropertyVector", "Offset", "Placement", "Global user offset")
 
         # Keep these as generic dimensional parameters. The active type schema
