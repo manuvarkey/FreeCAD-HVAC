@@ -332,10 +332,12 @@ def vec_to_xyz(v):
     """Return (x,y,z) tuple from a FreeCAD.Vector-like object."""
     return (float(v.x), float(v.y), float(v.z))
 
+# Attachment offset with duct direction along Z axis +ve direction
+# Viewed from start of duct, X axis -> To Left, Y axis -> To Top
 ATTACH_MAP = {
-    "TopLeft": (-1, 1), "TopCenter": (0, 1), "TopRight": (1, 1),
-    "CenterLeft": (-1, 0), "Center": (0, 0), "CenterRight": (1, 0),
-    "BottomLeft": (-1, -1), "BottomCenter": (0, -1), "BottomRight": (1, -1),
+    "TopLeft": (1, 1), "TopCenter": (0, 1), "TopRight": (-1, 1),
+    "CenterLeft": (1, 0), "Center": (0, 0), "CenterRight": (-1, 0),
+    "BottomLeft": (1, -1), "BottomCenter": (0, -1), "BottomRight": (-1, -1),
 }
 
 @dataclass
@@ -397,25 +399,60 @@ def get_section_extents(section_params):
     # fallback
     return 0.0, 0.0
     
-def build_local_frame(direction):
-    t = direction / direction.Length
+def make_frame_from_direction(direction, origin=None):
+    """
+    Create a right-handed orthonormal frame given a direction.
 
-    up = FreeCAD.Vector(0, 0, 1)
-    if abs(t.dot(up)) > 0.99:
-        up = FreeCAD.Vector(1, 0, 0)
+    Parameters
+    ----------
+    direction : FreeCAD.Vector
+        Desired Z-axis (path tangent).
+    origin : FreeCAD.Vector or None
+        Frame origin. Defaults to (0,0,0).
 
-    local_x = up.cross(t)
-    local_x.normalize()
+    Returns
+    -------
+    (placement, x_dir, y_dir, z_dir)
+        placement : FreeCAD.Placement
+        x_dir, y_dir, z_dir : FreeCAD.Vector
+    """
+    if direction.Length <= 1e-12:
+        raise ValueError("Direction vector too small")
 
-    local_y = t.cross(local_x)
-    local_y.normalize()
+    # Z axis (tangent)
+    z_dir = FreeCAD.Vector(direction)
+    z_dir.normalize()
 
-    return local_x, local_y
+    # Choose a stable reference vector
+    ref = FreeCAD.Vector(0, 0, 1)
+    if abs(z_dir.dot(ref)) > 0.99:
+        ref = FreeCAD.Vector(1, 0, 0)
+
+    # Build orthonormal basis
+    x_dir = ref.cross(z_dir)
+    if x_dir.Length <= 1e-12:
+        raise ValueError("Failed to compute X axis")
+    x_dir.normalize()
+
+    y_dir = z_dir.cross(x_dir)
+    y_dir.normalize()
+
+    # Build rotation matrix (columns = local axes)
+    mat = FreeCAD.Matrix()
+    mat.A11, mat.A12, mat.A13 = x_dir.x, y_dir.x, z_dir.x
+    mat.A21, mat.A22, mat.A23 = x_dir.y, y_dir.y, z_dir.y
+    mat.A31, mat.A32, mat.A33 = x_dir.z, y_dir.z, z_dir.z
+
+    placement = FreeCAD.Placement(mat)
+    if origin is not None:
+        placement.Base = origin
+
+    return placement, x_dir, y_dir, z_dir
 
 def compute_port_position(base_point, direction, section_params, attachment, user_offset_vec):
     ax, ay = ATTACH_MAP.get(str(attachment or "Center"), (0, 0))
     W, H = get_section_extents(section_params)
-    local_x, local_y = build_local_frame(direction)
+    _, local_x, local_y, local_z = make_frame_from_direction(direction)
     attach_offset = (-ax * W * 0.5) * local_x + (-ay * H * 0.5) * local_y
     return base_point + attach_offset + user_offset_vec
     
@@ -456,7 +493,7 @@ def build_junction_ports(parser, node_id, edge_refs, segment_map=None):
         else:
             other = sp_vec
 
-        direction = other.sub(node_point)
+        direction = other - node_point
         if direction.Length <= 1e-9:
             continue
         direction.normalize()

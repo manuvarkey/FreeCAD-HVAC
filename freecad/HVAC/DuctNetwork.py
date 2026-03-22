@@ -217,8 +217,6 @@ class DuctSegment:
         self._addProperty(obj, "App::PropertyString", "AnalysisJson", "HVAC", "Serialized segment analysis")
         
         self._addProperty(obj, "App::PropertyEnumeration", "Attachment", "Placement", "Section attachment relative to route")
-        obj.Attachment = list(hvaclib.ATTACH_MAP.keys())
-        obj.Attachment = "Center"
         self._addProperty(obj, "App::PropertyVector", "Offset", "Placement", "Global user offset")
 
         # Keep these as generic dimensional parameters. The active type schema
@@ -264,6 +262,7 @@ class DuctSegment:
             obj.AnalysisJson = "{}"
             
         if not getattr(obj, "Attachment", ""):
+            obj.Attachment = list(hvaclib.ATTACH_MAP.keys())
             obj.Attachment = "Center"
         
         try:
@@ -605,7 +604,7 @@ class DuctJunction:
                 obj.ConnectionLengthsJson = lengths_json
 
         except Exception as e:
-            # FreeCAD.Console.PrintError(traceback.format_exc())
+            FreeCAD.Console.PrintError(traceback.format_exc())
             FreeCAD.Console.PrintError(
                 "HVAC - Error generating junction '{}': {}\n".format(obj.Label, e)
             )
