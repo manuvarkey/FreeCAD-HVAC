@@ -493,10 +493,11 @@ def build_junction_ports(parser, node_id, edge_refs, segment_map=None):
         else:
             other = sp_vec
 
-        direction = other - node_point
-        if direction.Length <= 1e-9:
+        direction_port_ref = other - node_point
+        direction_seg_ref = ep_vec - sp_vec
+        if direction_port_ref.Length <= 1e-9:
             continue
-        direction.normalize()
+        direction_port_ref.normalize()
 
         seg_obj = segment_map.get(edge_key)
         
@@ -515,7 +516,7 @@ def build_junction_ports(parser, node_id, edge_refs, segment_map=None):
         
         final_pos = compute_port_position(
             base_point,
-            direction,
+            direction_seg_ref,  # Use segment reference for computation of port position
             section_params,
             attachment,
             user_offset
@@ -525,7 +526,7 @@ def build_junction_ports(parser, node_id, edge_refs, segment_map=None):
             edge_key = edge_key,
             segment_end = segment_end,
             position = vec_to_xyz(final_pos),
-            direction = vec_to_xyz(direction),
+            direction = vec_to_xyz(direction_port_ref),  # Use port reference convention
             profile = profile,
             section_params = section_params,
             attachment = attachment,

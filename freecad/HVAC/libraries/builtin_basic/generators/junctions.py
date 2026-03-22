@@ -511,28 +511,27 @@ def build_elbow(context):
         radius = 1.5 * _section_size_hint(ports[0])
 
     trim = _elbow_trim(radius, theta)
-
+    
+    # Find trimed segment mid points (Directions points away from the junction along the connected segment)
+    s0 = p0 + (u0 * trim)
+    s1 = p1 + (u1 * trim)
+    
     # Find elbow corner
     corner = _line_line_intersection_best_fit(p0, u0, p1, u1)
     if corner is None:
         raise ValueError("Failed to determine elbow corner")
-    
-    # Find trimed segment mid points (Direction points away from the junction along the connected segment)
-    s0 = corner + (u0 * (trim))
-    s1 = corner + (u1 * (trim))
-    
-    print('theta:', theta, '\np0:', (p0, u0), '\np1:', (p1, u1), '\ncorner:', corner, '\ntrim:', trim, '\ns0:', s0, '\ns1:', s1)
-
-    # Bisector pointing towards arc direction
+        
+    # Bisector pointing outwards of arc direction
     bis = FreeCAD.Vector(u0 + u1)
     if bis.Length <= 1e-9:
         raise ValueError("Invalid elbow bisector")
     bis.normalize()
-    
-    dist_to_arc_center = float(radius) / math.sin(theta / 2.0)
+         
+    dist_to_arc_center = float(radius) / math.sin(theta / 2.0) 
     arc_center = corner + (bis * dist_to_arc_center)
     mid_point = arc_center - (bis * float(radius))
     
+    print('theta:', theta, '\np0:', (p0, u0), '\np1:', (p1, u1), '\ncorner:', corner, '\ntrim:', trim, '\ns0:', s0, '\ns1:', s1)
     print('(s0, mid_point, s1):', (s0, mid_point, s1))
     arc_edge = Part.Arc(s0, mid_point, s1).toShape()
     path_wire = Part.Wire([arc_edge])
