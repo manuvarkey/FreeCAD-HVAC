@@ -1,9 +1,9 @@
 {
-  "id": "circular_elbow_90",
-  "label": "Circular Elbow 90",
+  "id": "elbow_generic",
+  "label": "Elbow - Generic",
   "category": "junction",
   "family": "elbow",
-  "profiles": ["Circular"],
+  "profiles": ["Circular", "Rectangular"],
   "constraints": {
     "degree": 2
   },
@@ -18,6 +18,6 @@
   ],
   "generator": {
     "module": "junctions",
-    "function": "build_circular_elbow_90"
+    "function": "build_elbow"
   }
 }

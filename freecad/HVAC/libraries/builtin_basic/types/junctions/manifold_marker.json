@@ -1,6 +1,6 @@
 {
   "id": "manifold_marker",
-  "label": "Manifold Marker",
+  "label": "Manifold - Marker",
   "category": "junction",
   "family": "manifold",
   "profiles": ["generic"],

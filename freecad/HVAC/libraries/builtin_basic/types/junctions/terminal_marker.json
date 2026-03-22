@@ -1,6 +1,6 @@
 {
   "id": "terminal_marker",
-  "label": "Terminal Marker",
+  "label": "Terminal - Marker",
   "category": "junction",
   "family": "terminal",
   "profiles": ["generic"],

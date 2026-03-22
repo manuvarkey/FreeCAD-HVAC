@@ -1,6 +1,6 @@
 {
   "id": "cross_marker",
-  "label": "Cross Marker",
+  "label": "Cross - Marker",
   "category": "junction",
   "family": "cross",
   "profiles": ["generic"],

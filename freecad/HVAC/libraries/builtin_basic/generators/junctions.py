@@ -156,7 +156,7 @@ def make_frame_from_direction(direction, origin=None):
     placement = FreeCAD.Placement(mat)
     if origin is not None:
         placement.Base = origin
-
+    
     return placement, x_dir, y_dir, z_dir
     
 
@@ -236,8 +236,8 @@ def _make_rectangular_wire(center, x_axis, y_axis, width, height):
 def _section_wire_from_port(port):
     profile = _port_profile(port)
     center = _port_position(port)
-    _, x_axis, y_axis, z_axis = make_frame_from_direction(center)
-    
+    direction = _port_direction(port)
+    _, x_axis, y_axis, z_axis = make_frame_from_direction(direction, center)
 
     if profile == "Circular":
         diameter = _port_diameter(port)
@@ -428,12 +428,96 @@ def _line_line_intersection_best_fit(p1, u1, p2, u2):
     q1 = p1 + (u1 * (t))
     q2 = p2 + (u2 * (s))
     return (q1 + q2) * 0.5
+    
+
+def arc_center_from_points_radius_dirs(p0, p1, u0, u1, radius):
+    """
+    Compute arc center given endpoints, radius, and tangent directions.
+
+    Parameters
+    ----------
+    p0, p1 : FreeCAD.Vector
+        Endpoints of arc
+    u0, u1 : FreeCAD.Vector
+        Tangent directions at p0 and p1
+    radius : float
+
+    Returns
+    -------
+    center : FreeCAD.Vector
+    """
+
+    if radius <= 0:
+        raise ValueError("Radius must be positive")
+
+    # normalize directions
+    u0 = FreeCAD.Vector(u0)
+    u1 = FreeCAD.Vector(u1)
+    u0.normalize()
+    u1.normalize()
+
+    # chord
+    chord = p1 - p0
+    d = chord.Length
+
+    if d <= 1e-12:
+        raise ValueError("Points too close")
+
+    if d > 2 * radius:
+        raise ValueError("No valid circle (points too far apart)")
+
+    # midpoint
+    mid = (p0 + p1) * 0.5
+
+    # perpendicular direction to chord
+    u = FreeCAD.Vector(chord)
+    u.normalize()
+
+    ref = FreeCAD.Vector(0, 0, 1)
+    perp = u.cross(ref)
+
+    if perp.Length <= 1e-12:
+        ref = FreeCAD.Vector(1, 0, 0)
+        perp = u.cross(ref)
+
+    perp.normalize()
+
+    # distance from midpoint to center
+    h = math.sqrt(max(radius**2 - (d * 0.5)**2, 0.0))
+
+    # two candidates
+    c1 = mid + perp * h
+    c2 = mid - perp * h
+
+    # --- select correct one using tangent condition
+    def score(c):
+        # radius vector must be perpendicular to tangent
+        v0 = (p0 - c)
+        v1 = (p1 - c)
+        return abs(v0.dot(u0)) + abs(v1.dot(u1))
+
+    if score(c1) < score(c2):
+        return c1
+    else:
+        return c2
 
 
 def _make_loft_between_ports(port_a, port_b, solid=True, ruled=True):
     wire_a = _section_wire_from_port(port_a)
     wire_b = _section_wire_from_port(port_b)
     return Part.makeLoft([wire_a, wire_b], bool(solid), bool(ruled))
+    
+    
+def _make_multisection_sweep_between_ports(port_a, port_b, path_wire):
+    wire_a = _section_wire_from_port(port_a)
+    wire_b = _section_wire_from_port(port_b)
+    ps = Part.BRepOffsetAPI.MakePipeShell(path_wire)
+    ps.add(wire_a)
+    ps.add(wire_b)
+    ps.setFrenetMode(True)   # important for stable frame
+    ps.build()
+    ps.makeSolid()
+    return ps.shape()
 
 
 def _make_solid_from_pipe(path_wire, profile_wire):
@@ -475,12 +559,6 @@ def _make_center_merge_port(port, center, inset):
 # Elbow
 # --------------------------------------------------------------------------
 
-def _elbow_trim(radius, theta_rad):
-    t = math.tan(theta_rad / 2.0)
-    if abs(t) <= 1e-12:
-        return 0.0
-    return float(radius) * t
-
 
 def build_elbow(context):
     ports = list(context.get("connected_ports", []) or [])
@@ -489,11 +567,11 @@ def build_elbow(context):
     if len(ports) != 2:
         raise ValueError("Elbow requires exactly 2 ports")
 
-    if not _profiles_compatible(ports[0], ports[1]):
-        raise ValueError("Elbow requires compatible port profiles")
+    # if not _profiles_compatible(ports[0], ports[1]):
+    #     raise ValueError("Elbow requires compatible port profiles")
 
-    if not _same_section(ports[0], ports[1]):
-        raise ValueError("Elbow currently requires equal end sections")
+    # if not _same_section(ports[0], ports[1]):
+    #     raise ValueError("Elbow currently requires equal end sections")
 
     p0 = _port_position(ports[0])
     p1 = _port_position(ports[1])
@@ -510,36 +588,25 @@ def build_elbow(context):
     if radius <= 1e-6:
         radius = 1.5 * _section_size_hint(ports[0])
 
-    trim = _elbow_trim(radius, theta)
+    # Calculate trim from geometry using u0, u1 and radius
+    trim = radius / math.tan(theta / 2.0)
     
     # Find trimed segment mid points (Directions points away from the junction along the connected segment)
     s0 = p0 + (u0 * trim)
     s1 = p1 + (u1 * trim)
     
-    # Find elbow corner
-    corner = _line_line_intersection_best_fit(p0, u0, p1, u1)
-    if corner is None:
-        raise ValueError("Failed to determine elbow corner")
-        
-    # Bisector pointing outwards of arc direction
-    bis = FreeCAD.Vector(u0 + u1)
-    if bis.Length <= 1e-9:
-        raise ValueError("Invalid elbow bisector")
-    bis.normalize()
-         
-    dist_to_arc_center = float(radius) / math.sin(theta / 2.0) 
-    arc_center = corner + (bis * dist_to_arc_center)
-    mid_point = arc_center - (bis * float(radius))
+    # Find arc center and point on arc using bisector
+    arc_center = arc_center_from_points_radius_dirs(s0, s1, u0, u1, radius)
+    mid_point = arc_center - (u0 + u1).normalize() * float(radius)
     
-    print('theta:', theta, '\np0:', (p0, u0), '\np1:', (p1, u1), '\ncorner:', corner, '\ntrim:', trim, '\ns0:', s0, '\ns1:', s1)
-    print('(s0, mid_point, s1):', (s0, mid_point, s1))
+    # Generate arc wire
     arc_edge = Part.Arc(s0, mid_point, s1).toShape()
     path_wire = Part.Wire([arc_edge])
-
-    sweep_port = _copy_port(ports[0], position=s0, direction=u0)
-    profile_wire = _section_wire_from_port(sweep_port)
-
-    shape = _make_solid_from_pipe(path_wire, profile_wire)
+    
+    # Generate a sweep between ports
+    sweep_port_0 = _copy_port(ports[0], position=s0, direction=u0)
+    sweep_port_1 = _copy_port(ports[1], position=s1, direction=u1)
+    shape = _make_multisection_sweep_between_ports(sweep_port_0, sweep_port_1, path_wire)
 
     return {
         "shape": shape,

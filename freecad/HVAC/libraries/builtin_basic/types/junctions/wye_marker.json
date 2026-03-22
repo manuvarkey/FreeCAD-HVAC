@@ -1,6 +1,6 @@
 {
   "id": "wye_marker",
-  "label": "Wye Marker",
+  "label": "Wye - Marker",
   "category": "junction",
   "family": "wye",
   "profiles": ["generic"],

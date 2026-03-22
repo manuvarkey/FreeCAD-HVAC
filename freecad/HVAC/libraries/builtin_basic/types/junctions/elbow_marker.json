@@ -1,6 +1,6 @@
 {
   "id": "elbow_marker",
-  "label": "Elbow Marker",
+  "label": "Elbow - Marker",
   "category": "junction",
   "family": "elbow",
   "profiles": ["generic"],

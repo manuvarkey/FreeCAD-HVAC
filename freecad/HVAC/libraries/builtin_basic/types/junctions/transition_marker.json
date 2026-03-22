@@ -1,6 +1,6 @@
 {
   "id": "transition_marker",
-  "label": "Transition Marker",
+  "label": "Transition - Marker",
   "category": "junction",
   "family": "transition",
   "profiles": ["generic"],
