@@ -218,6 +218,7 @@ class DuctSegment:
         
         self._addProperty(obj, "App::PropertyEnumeration", "Attachment", "Placement", "Section attachment relative to route")
         self._addProperty(obj, "App::PropertyVector", "Offset", "Placement", "Global user offset")
+        self._addProperty(obj, "App::PropertyVector", "ProfileXAxis", "Placement", "Preferred local X axis for section/profile orientation; zero vector = auto")
 
         # Keep these as generic dimensional parameters. The active type schema
         # decides whether they are used.
@@ -264,6 +265,9 @@ class DuctSegment:
         if not getattr(obj, "Attachment", ""):
             obj.Attachment = list(hvaclib.ATTACH_MAP.keys())
             obj.Attachment = "Center"
+            
+        if not obj.ProfileXAxis:
+            obj.ProfileXAxis = FreeCAD.Vector(0, 0, 0)
         
         try:
             if obj.Offset != FreeCAD.Vector(0, 0, 0):

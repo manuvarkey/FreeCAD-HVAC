@@ -25,7 +25,7 @@ import FreeCAD
 import Part
 
 
-def create_rectangular_duct_geom(start_point, end_point, width, height):
+def create_rectangular_duct_geom(start_point, end_point, width, height, profile_x_axis):
     """
     Create a cuboid centered on the line between two points.
 
@@ -45,28 +45,26 @@ def create_rectangular_duct_geom(start_point, end_point, width, height):
 
     if length == 0:
         raise ValueError("Start and end points cannot be identical")
+        
+    _, x_axis, y_axis, z_axis = hvaclib.make_profile_frame(direction, profile_x_axis, p1)
+    
+    dx = x_axis * (float(width) * 0.5)
+    dy = y_axis * (float(height) * 0.5)
+    
+    w = Part.Wire([
+            Part.makeLine(p1 - dx - dy, p1 + dx - dy),
+            Part.makeLine(p1 + dx - dy, p1 + dx + dy),
+            Part.makeLine(p1 + dx + dy, p1 - dx + dy),
+            Part.makeLine(p1 - dx + dy, p1 - dx - dy),
+        ])
+    
+    face = Part.Face(w)
+    prism = face.extrude(z_axis * length)
+    try:
+        return prism.removeSplitter()
+    except Exception:
+        return prism
 
-    direction_unit = FreeCAD.Vector(direction)
-    direction_unit.normalize()
-
-    # Create box with length along X and cross-section in YZ
-    # Box origin is at (0,0,0) and spans X:[0,length], Y:[0,width], Z:[0,height]
-    shape = Part.makeBox(length, width, height)
-
-    # We want the duct centerline to lie along the box X axis at Y=0, Z=0.
-    # Therefore shift the box in its local coordinates by (0, -width/2, -height/2)
-    # Then apply rotation that aligns X to the direction vector and translate to p1.
-    rotation = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), direction_unit)
-
-    local_shift = FreeCAD.Vector(0.0, -width / 2.0, -height / 2.0)
-    world_shift = rotation.multVec(local_shift)
-    placement_origin = p1.add(world_shift)
-    placement = FreeCAD.Placement(placement_origin, rotation)
-
-    shape_mod = shape.copy()
-    shape_mod.transformShape(placement.toMatrix(), True, False)
-
-    return shape_mod
 
 def create_circular_duct_geom(start_point, end_point, diameter):
     """
@@ -112,9 +110,14 @@ def create_circular_duct_geom(start_point, end_point, diameter):
 def build_rectangular_straight(context):
     sp = context["start_point"]
     ep = context["end_point"]
-    width = context["properties"].get("Width", 100.0)
-    height = context["properties"].get("Height", 100.0)
-    shape = create_rectangular_duct_geom(sp, ep, width, height)
+    props = context["properties"]
+    obj = context.get("obj", None)
+
+    width = props.get("Width", 100.0)
+    height = props.get("Height", 100.0)
+    profile_x_axis = getattr(obj, "ProfileXAxis", FreeCAD.Vector(0, 0, 0)) if obj else None
+
+    shape = create_rectangular_duct_geom(sp, ep, width, height, profile_x_axis)
     return {"shape": shape}
 
 

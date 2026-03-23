@@ -100,54 +100,61 @@ def _port_height(port):
     return float(params.get("Height", 0.0) or 0.0)
 
 
-def _copy_port(port, position=None, direction=None):
+def _copy_port(port, position=None, direction=None, profile_x_axis=None):
     out = dict(port)
     if position is not None:
         out["position"] = _vec(position)
     if direction is not None:
         out["direction"] = _vec(direction)
+    if profile_x_axis is not None:
+        out["profile_x_axis"] = _vec(profile_x_axis)
     return out
 
 
-def make_frame_from_direction(direction, origin=None):
+def make_profile_frame(direction, preferred_x=None, origin=None):
     """
-    Create a right-handed orthonormal frame given a direction.
+    Build a right-handed frame with:
+      z_dir = normalized(direction)
+      x_dir = preferred cross-section X axis projected onto the normal plane
+      y_dir = z_dir cross x_dir
 
-    Parameters
-    ----------
-    direction : FreeCAD.Vector
-        Desired Z-axis (path tangent).
-    origin : FreeCAD.Vector or None
-        Frame origin. Defaults to (0,0,0).
-
-    Returns
-    -------
-    (placement, x_dir, y_dir, z_dir)
-        placement : FreeCAD.Placement
-        x_dir, y_dir, z_dir : FreeCAD.Vector
+    preferred_x:
+      - None or zero-length => automatic stable frame
+      - otherwise projected to plane normal to z_dir
     """
-    if direction.Length <= 1e-12:
-        raise ValueError("Direction vector too small")
-
-    # Z axis (tangent)
     z_dir = FreeCAD.Vector(direction)
+    if z_dir.Length <= 1e-12:
+        raise ValueError("Direction vector too small")
     z_dir.normalize()
 
-    # Choose a stable reference vector
-    ref = FreeCAD.Vector(0, 0, 1)
-    if abs(z_dir.dot(ref)) > 0.99:
-        ref = FreeCAD.Vector(1, 0, 0)
+    x_dir = None
+    if preferred_x is not None:
+        px = FreeCAD.Vector(preferred_x)
+        if px.Length > 1e-12:
+            # Remove tangent component so X stays in section plane
+            px = px - z_dir * px.dot(z_dir)
+            if px.Length > 1e-12:
+                px.normalize()
+                x_dir = px
 
-    # Build orthonormal basis
-    x_dir = ref.cross(z_dir)
-    if x_dir.Length <= 1e-12:
-        raise ValueError("Failed to compute X axis")
-    x_dir.normalize()
+    if x_dir is None:
+        ref = FreeCAD.Vector(0, 0, 1)
+        if abs(z_dir.dot(ref)) > 0.99:
+            ref = FreeCAD.Vector(1, 0, 0)
+        x_dir = ref.cross(z_dir)
+        if x_dir.Length <= 1e-12:
+            raise ValueError("Failed to compute X axis")
+        x_dir.normalize()
 
     y_dir = z_dir.cross(x_dir)
+    if y_dir.Length <= 1e-12:
+        raise ValueError("Failed to compute Y axis")
     y_dir.normalize()
 
-    # Build rotation matrix (columns = local axes)
+    # Re-orthogonalize X for numerical cleanliness
+    x_dir = y_dir.cross(z_dir)
+    x_dir.normalize()
+
     mat = FreeCAD.Matrix()
     mat.A11, mat.A12, mat.A13 = x_dir.x, y_dir.x, z_dir.x
     mat.A21, mat.A22, mat.A23 = x_dir.y, y_dir.y, z_dir.y
@@ -156,8 +163,16 @@ def make_frame_from_direction(direction, origin=None):
     placement = FreeCAD.Placement(mat)
     if origin is not None:
         placement.Base = origin
-    
+
     return placement, x_dir, y_dir, z_dir
+    
+
+def _port_profile_x_axis(port):
+    v = port.get("profile_x_axis", None)
+    if v is None:
+        return None
+    vv = _vec(v)
+    return vv if vv.Length > 1e-12 else None
     
 
 def _pick_reference(u):
@@ -237,7 +252,8 @@ def _section_wire_from_port(port):
     profile = _port_profile(port)
     center = _port_position(port)
     direction = _port_direction(port)
-    _, x_axis, y_axis, z_axis = make_frame_from_direction(direction, center)
+    preferred_x = _port_profile_x_axis(port)
+    _, x_axis, y_axis, z_axis = make_profile_frame(direction, preferred_x, center)
 
     if profile == "Circular":
         diameter = _port_diameter(port)
@@ -832,4 +848,3 @@ def build_wye(context):
 
 def build_circular_wye(context):
     return build_wye(context)
-    
