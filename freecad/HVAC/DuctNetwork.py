@@ -1683,6 +1683,7 @@ class DuctNetwork:
                     "section_params": p.section_params,
                     "attachment": p.attachment,
                     "user_offset": p.user_offset,
+                    "profile_x_axis": p.profile_x_axis
                 }
                 for p in port_objs
             ]
