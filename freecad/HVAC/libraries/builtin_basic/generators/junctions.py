@@ -62,7 +62,7 @@ def _make_sphere(center, diameter):
 
 
 def _build_marker(context, default_diameter, trim_factor):
-    api = context.get("api", None)
+    api = context.get("hvac_api", None)
     
     ports = list(context.get("connected_ports", []) or [])
     if not ports:
@@ -76,12 +76,12 @@ def _build_marker(context, default_diameter, trim_factor):
 
     return {
         "shape": shape,
-        "connection_lengths": build_trim_rec_from_context_uniform(context, trim_len),
+        "connection_lengths": api.build_trim_rec_from_context_uniform(context, trim_len),
     }
 
 
 def build_terminal_marker(context):
-    api = context.get("api", None)
+    api = context.get("hvac_api", None)
     
     ports = list(context.get("connected_ports", []) or [])
     props = dict(context.get("properties", {}) or {})
@@ -123,7 +123,7 @@ def build_terminal_marker(context):
 
     return {
         "shape": shape,
-        "connection_lengths": build_trim_rec_from_context_uniform(context, trim_len),
+        "connection_lengths": api.build_trim_rec_from_context_uniform(context, trim_len),
     }
 
 
@@ -243,7 +243,7 @@ def _make_center_merge_port(api, port, center, inset):
 
 
 def build_elbow(context):
-    api = context.get("api", None)
+    api = context.get("hvac_api", None)
     
     ports = list(context.get("connected_ports", []) or [])
     props = dict(context.get("properties", {}) or {})
@@ -286,7 +286,7 @@ def build_elbow(context):
     sweep_port_1 = api.copy_port(ports[1], position=s1, direction=u1)
     wire_1 = api.make_section_wire_from_port(sweep_port_0)
     wire_2 = api.make_section_wire_from_port(sweep_port_1)
-    shape = api.make_pipe_shell([wire_1, wire_2], path_wire)
+    shape = api.make_pipe_shell(path_wire, [wire_1, wire_2])
     
     return {
         "shape": shape,
@@ -297,11 +297,6 @@ def build_elbow(context):
             ]
         ),
     }
-
-
-def build_circular_elbow_90(context):
-    return build_elbow(context)
-
 
 # --------------------------------------------------------------------------
 # Transition
@@ -315,7 +310,7 @@ def _safe_transition_length(length, d1, d2):
 
 
 def build_transition(context):
-    api = context.get("api", None)
+    api = context.get("hvac_api", None)
     
     ports = list(context.get("connected_ports", []) or [])
     props = dict(context.get("properties", {}) or {})
@@ -415,7 +410,7 @@ def _make_leg_to_center(api, port, center, trim_length, inner_inset=None):
 # --------------------------------------------------------------------------
 
 def build_tee(context):
-    api = context.get("api", None)
+    api = context.get("hvac_api", None)
     
     center = api.center_from_context(context)
     ports = list(context.get("connected_ports", []) or [])
@@ -466,7 +461,7 @@ def build_circular_tee(context):
 # --------------------------------------------------------------------------
 
 def build_wye(context):
-    api = context.get("api", None)
+    api = context.get("hvac_api", None)
     
     center = api.center_from_context(context)
     ports = list(context.get("connected_ports", []) or [])

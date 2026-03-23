@@ -150,9 +150,9 @@ class HVACLibraryRegistry:
     def call_generator(self, library_id: str, type_def: HVACTypeDef, context: dict):
         module = self.import_generator(library_id, type_def.generator_module)
         func = getattr(module, type_def.generator_function)
-        ctx = dict(context or {})
-        ctx["hvac_api"] = HVACLibraryAPI
-        ctx["hvac_api_version"] = HVACLibraryAPI.API_VERSION
+        # ctx = dict(context or {})
+        context["hvac_api"] = HVACLibraryAPI
+        context["hvac_api_version"] = HVACLibraryAPI.API_VERSION
         return func(context)
 
     def set_search_paths(self, paths):

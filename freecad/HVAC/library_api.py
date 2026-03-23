@@ -25,6 +25,7 @@ import math
 import FreeCAD
 import Part
 
+from . import hvaclib
 
 class HVACLibraryAPI:
     """
@@ -234,11 +235,11 @@ class HVACLibraryAPI:
         
     @staticmethod
     def make_section_wire_from_port(port):
-        profile = api.port_profile(port)
-        center = api.port_position(port)
-        direction = api.port_direction(port)
-        preferred_x = api.port_profile_x_axis(port)
-        section_params = api.port_section_params(port)
+        profile = HVACLibraryAPI.port_profile(port)
+        center = HVACLibraryAPI.port_position(port)
+        direction = HVACLibraryAPI.port_direction(port)
+        preferred_x = HVACLibraryAPI.port_profile_x_axis(port)
+        section_params = HVACLibraryAPI.port_section_params(port)
         
         return HVACLibraryAPI.make_section_wire(profile, section_params, center, direction, profile_x_axis=preferred_x)
             
@@ -255,11 +256,11 @@ class HVACLibraryAPI:
     
     @staticmethod
     def make_section_face_from_port(port):
-        profile = api.port_profile(port)
-        center = api.port_position(port)
-        direction = api.port_direction(port)
-        preferred_x = api.port_profile_x_axis(port)
-        section_params = api.port_section_params(port)
+        profile = HVACLibraryAPI.port_profile(port)
+        center = HVACLibraryAPI.port_position(port)
+        direction = HVACLibraryAPI.port_direction(port)
+        preferred_x = HVACLibraryAPI.port_profile_x_axis(port)
+        section_params = HVACLibraryAPI.port_section_params(port)
         
         return HVACLibraryAPI.make_section_face(profile, section_params, center, direction, profile_x_axis=preferred_x)
     
@@ -305,8 +306,8 @@ class HVACLibraryAPI:
         return shell.shape()
         
     @staticmethod
-    def make_loft(profile_wires, make_solid=True, ruled=True):
-        return Part.makeLoft(profile_wires, make_solid, ruled)
+    def make_loft(profile_wires, solid=True, ruled=True):
+        return Part.makeLoft(profile_wires, bool(solid), bool(ruled))
 
     @staticmethod
     def line_wire(p1, p2):
