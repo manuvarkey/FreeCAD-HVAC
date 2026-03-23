@@ -175,6 +175,7 @@ class DuctSegment:
                 "properties": props,
                 "family": getattr(obj, "Family", ""),
                 "profile": getattr(obj, "Profile", ""),
+                "profile_x_axis": getattr(obj, "ProfileXAxis", None),
                 "type_id": type_id,
                 "library_id": library_id,
                 "segment_key": getattr(obj, "SegmentKey", ""),
