@@ -1,9 +1,9 @@
 {
-  "id": "circular_transition",
-  "label": "Circular Transition",
+  "id": "transition_generic",
+  "label": "Transition - Generic",
   "category": "junction",
   "family": "transition",
-  "profiles": ["circular"],
+  "profiles": ["Circular", "Rectangular"],
   "constraints": {
     "degree": 2
   },
@@ -18,6 +18,6 @@
   ],
   "generator": {
     "module": "junctions",
-    "function": "build_circular_transition"
+    "function": "build_transition"
   }
 }

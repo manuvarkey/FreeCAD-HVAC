@@ -1,9 +1,9 @@
 {
-  "id": "circular_tee",
-  "label": "Circular Tee",
+  "id": "tee_generic",
+  "label": "Tee - Generic",
   "category": "junction",
   "family": "tee",
-  "profiles": ["circular"],
+  "profiles": ["Circular", "Rectangular"],
   "constraints": {
     "degree": 3
   },
@@ -25,6 +25,6 @@
   ],
   "generator": {
     "module": "junctions",
-    "function": "build_circular_tee"
+    "function": "build_tee"
   }
 }

@@ -3,7 +3,7 @@
   "label": "Tee - Marker",
   "category": "junction",
   "family": "tee",
-  "profiles": ["generic"],
+  "profiles": ["Generic"],
   "constraints": {
     "degree": 3
   },

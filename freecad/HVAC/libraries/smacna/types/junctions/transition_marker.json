@@ -3,7 +3,7 @@
   "label": "Transition - Marker",
   "category": "junction",
   "family": "transition",
-  "profiles": ["generic"],
+  "profiles": ["Generic"],
   "constraints": {
     "degree": 2
   },

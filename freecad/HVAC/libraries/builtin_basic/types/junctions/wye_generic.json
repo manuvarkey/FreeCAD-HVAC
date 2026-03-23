@@ -1,9 +1,9 @@
 {
-  "id": "circular_wye",
-  "label": "Circular Wye",
+  "id": "wye_generic",
+  "label": "Wye - Generic",
   "category": "junction",
   "family": "wye",
-  "profiles": ["circular"],
+  "profiles": ["Circular", "Rectangular"],
   "constraints": {
     "degree": 3
   },
@@ -25,6 +25,6 @@
   ],
   "generator": {
     "module": "junctions",
-    "function": "build_circular_wye"
+    "function": "build_wye"
   }
 }

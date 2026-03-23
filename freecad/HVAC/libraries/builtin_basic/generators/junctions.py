@@ -282,10 +282,6 @@ def build_transition(context):
     }
 
 
-def build_circular_transition(context):
-    return build_transition(context)
-
-
 # --------------------------------------------------------------------------
 # Tee / Wye helpers
 # --------------------------------------------------------------------------
@@ -391,10 +387,6 @@ def build_tee(context):
     }
 
 
-def build_circular_tee(context):
-    return build_tee(context)
-
-
 # --------------------------------------------------------------------------
 # Wye
 # --------------------------------------------------------------------------
@@ -440,7 +432,3 @@ def build_wye(context):
             ]
         ),
     }
-
-
-def build_circular_wye(context):
-    return build_wye(context)

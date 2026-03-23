@@ -3,7 +3,7 @@
   "label": "Manifold - Marker",
   "category": "junction",
   "family": "manifold",
-  "profiles": ["generic"],
+  "profiles": ["Generic"],
   "constraints": {
     "degree_min": 5
   },

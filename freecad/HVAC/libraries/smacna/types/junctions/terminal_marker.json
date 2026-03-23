@@ -3,7 +3,7 @@
   "label": "Terminal - Marker",
   "category": "junction",
   "family": "terminal",
-  "profiles": ["generic"],
+  "profiles": ["Generic"],
   "constraints": {
     "degree": 1
   },

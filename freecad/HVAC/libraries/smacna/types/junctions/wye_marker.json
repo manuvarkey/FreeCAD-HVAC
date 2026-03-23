@@ -3,7 +3,7 @@
   "label": "Wye - Marker",
   "category": "junction",
   "family": "wye",
-  "profiles": ["generic"],
+  "profiles": ["Generic"],
   "constraints": {
     "degree": 3
   },
