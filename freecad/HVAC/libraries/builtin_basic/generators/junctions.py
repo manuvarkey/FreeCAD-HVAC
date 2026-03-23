@@ -155,6 +155,66 @@ def build_manifold_marker(context):
 # Generic geometric helpers
 # --------------------------------------------------------------------------    
 
+def _closest_points_on_lines(p0, d0, p1, d1, tol=1e-9):
+    """
+    Return closest points c0 on L0 and c1 on L1 for:
+
+        L0(t) = p0 + t d0
+        L1(s) = p1 + s d1
+
+    d0 and d1 should be normalized.
+    """
+    w0 = p0 - p1
+    a = d0.dot(d0)
+    b = d0.dot(d1)
+    c = d1.dot(d1)
+    d = d0.dot(w0)
+    e = d1.dot(w0)
+
+    denom = a * c - b * b
+    if abs(denom) <= tol:
+        # Nearly parallel lines
+        return None, None
+
+    t = (b * e - c * d) / denom
+    s = (a * e - b * d) / denom
+
+    c0 = p0 + d0 * t
+    c1 = p1 + d1 * s
+    return c0, c1
+
+
+def _virtual_elbow_corner_from_ports(p0, u0, p1, u1, tol=1e-6):
+    """
+    Compute the virtual corner from the two offset segment centerlines.
+
+    u0, u1 point away from the junction, so lines toward the junction use -u0, -u1.
+    """
+    d0 = FreeCAD.Vector(u0)
+    d1 = FreeCAD.Vector(u1)
+    d0.normalize()
+    d1.normalize()
+
+    # Lines traced back toward the junction
+    c0, c1 = _closest_points_on_lines(
+        FreeCAD.Vector(p0), -d0,
+        FreeCAD.Vector(p1), -d1
+    )
+    if c0 is None or c1 is None:
+        raise ValueError("Failed to compute virtual elbow corner")
+
+    # For clean coplanar cases c0 ~= c1; midpoint is robust
+    corner = (c0 + c1) * 0.5
+
+    # Optional sanity check
+    if (c0 - c1).Length > tol:
+        FreeCAD.Console.PrintWarning(
+            "HVAC: elbow centerlines do not intersect exactly; using midpoint of closest points\n"
+        )
+
+    return corner
+    
+    
 def _arc_center_from_points_radius_dirs(p0, p1, u0, u1, radius):
     """
     Compute the center of a circular arc joining p0 -> p1 with given radius,
@@ -248,16 +308,6 @@ def _arc_center_from_points_radius_dirs(p0, p1, u0, u1, radius):
     return c1 if score(c1) <= score(c2) else c2
 
 
-def _make_center_merge_port(api, port, center, inset):
-    """
-    Create a smaller 'inner' port very near the junction center.
-    The section is kept identical; only the position is moved.
-    """
-    u = api.port_direction(port)
-    p = center - (u * (float(inset)))
-    return api.copy_port(port, position=p)
-
-
 # --------------------------------------------------------------------------
 # Elbow
 # --------------------------------------------------------------------------
@@ -287,12 +337,16 @@ def build_elbow(context):
     if radius <= 1e-6:
         radius = 1.5 * _section_size_hint(api, ports[0])
 
-    # Calculate trim from geometry using u0, u1 and radius
+    # Symmetric elbow trim distance measured from the virtual corner
     trim = radius / math.tan(theta / 2.0)
+    corner = _virtual_elbow_corner_from_ports(p0, u0, p1, u1)
     
-    # Find trimed segment mid points (Directions points away from the junction along the connected segment)
-    s0 = p0 + (u0 * trim)
-    s1 = p1 + (u1 * trim)
+    # Tangency points on the two offset segment centerlines
+    s0 = corner + (u0 * trim)
+    s1 = corner + (u1 * trim)
+    
+    trim0 = max(0.0, (s0 - p0).dot(u0))
+    trim1 = max(0.0, (s1 - p1).dot(u1))
     
     # Find arc center and point on arc using bisector
     arc_center = _arc_center_from_points_radius_dirs(s0, s1, u0, u1, radius)
@@ -317,8 +371,8 @@ def build_elbow(context):
         "shape": shape,
         "connection_lengths": api.build_trim_rec_from_port_lengths(
             [
-                (ports[0], trim),
-                (ports[1], trim),
+                (ports[0], trim0),
+                (ports[1], trim1),
             ]
         ),
     }
@@ -386,6 +440,16 @@ def build_circular_transition(context):
 # Tee / Wye helpers
 # --------------------------------------------------------------------------
 
+def _make_center_merge_port(api, port, center, inset):
+    """
+    Create a smaller 'inner' port very near the junction center.
+    The section is kept identical; only the position is moved.
+    """
+    u = api.port_direction(port)
+    p = center - (u * (float(inset)))
+    return api.copy_port(port, position=p)
+    
+    
 def _find_run_pair(api, ports, angle_tol_deg=10.0):
     """
     Return indices (i, j, k) where i,j are the near-collinear run pair
