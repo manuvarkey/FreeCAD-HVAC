@@ -188,11 +188,11 @@ def build_elbow(context):
 
     # Symmetric elbow trim distance measured from the virtual corner
     trim = radius / math.tan(theta / 2.0)
-    corner = api.virtual_corner_for_lines(p0, -u0, p1, -u1)
+    c1, c2 = api.closest_points_on_lines(p0, -u0, p1, -u1)
     
     # Tangency points on the two offset segment centerlines
-    s0 = corner + (u0 * trim)
-    s1 = corner + (u1 * trim)
+    s0 = c1 + (u0 * trim)
+    s1 = c2 + (u1 * trim)
     
     # Calculate trim distances from the tangency points to the original ports
     trim0 = max(0.0, (s0 - p0).dot(u0))
