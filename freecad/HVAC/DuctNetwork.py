@@ -1665,7 +1665,7 @@ class DuctNetwork:
                     self._runtime_param_cache[seg_key] = self._segmentUserParams(segment_obj)
                 self.removeGeometryObject(net, segment_obj)
                 changed = True
-    
+        
         return changed
         
     def syncJunctions(self, net, parser):
@@ -1827,10 +1827,10 @@ class DuctNetwork:
             if junction_obj not in live_objs:
                 self.removeGeometryObject(net, junction_obj)
                 changed = True
-    
+        
         return changed
                             
-    def requestSync(self, obj, initial_sync=None):
+    def requestSync(self, obj, initial_sync=None, force_recompute=False):
         if initial_sync is not None:
             self._initial_sync = bool(initial_sync)
         
@@ -1842,9 +1842,9 @@ class DuctNetwork:
             FreeCAD.Console.PrintMessage("HVAC - Sync requested (Initial sync).\n")
         else:
             FreeCAD.Console.PrintMessage("HVAC - Sync requested.\n")
-        QtCore.QTimer.singleShot(0, lambda o=obj: self._runDeferredSync(o))
+        QtCore.QTimer.singleShot(0, lambda o=obj: self._runDeferredSync(o, force_recompute))
     
-    def _runDeferredSync(self, obj):
+    def _runDeferredSync(self, obj, force_recompute=False):
         self._sync_scheduled = False
     
         if obj is None or obj.Document is None:
@@ -1882,13 +1882,13 @@ class DuctNetwork:
                 # Stage 1: Sync junctions first, so that their execute() writes ConnectionLengthsJson
                 changed_junctions = self.syncJunctions(obj, parser)
                 FreeCAD.Console.PrintMessage("HVAC - Sync - syncJunctions called.\n")
-                if changed_junctions:
+                if changed_junctions or force_recompute:
                     obj.Document.recompute()
     
                 # Stage 2: Sync segments which consume the junction trim data
                 changed_segments = self.syncSegments(obj, parser, initial_sync=False)
                 FreeCAD.Console.PrintMessage("HVAC - Sync - syncSegments called.\n")
-                if changed_segments:
+                if changed_segments or force_recompute:
                     obj.Document.recompute()
                     
             self._initial_sync = False
@@ -1984,7 +1984,7 @@ class DuctNetwork:
             for net in nets_to_sync:
                 proxy = getattr(net, "Proxy", None)
                 if proxy:
-                    proxy.requestSync(net)
+                    proxy.requestSync(net, force_recompute=True)
             
     @staticmethod
     def _restoreSegmentUserParams(obj, params):
