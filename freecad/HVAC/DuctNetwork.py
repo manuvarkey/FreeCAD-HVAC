@@ -802,11 +802,17 @@ class DuctJunction:
 
         if family and getattr(obj, "Family", "") != str(family):
             obj.Family = str(family)
+            # If family changes, set TypeId to default for the family
+            obj.TypeId = hvaclib.default_junction_type_id(family)
             changed = True
 
         if type_id and getattr(obj, "TypeId", "") != str(type_id):
-            obj.TypeId = str(type_id)
-            changed = True
+            _library = getattr(obj, "LibraryId", "")
+            _family = getattr(obj, "Family", "")
+            valid_type_ids = hvaclib.all_junction_type_defs(library_id=_library, family=_family)
+            if type_id in valid_type_ids:
+                obj.TypeId = str(type_id)
+                changed = True
 
         if connected_edge_keys is not None:
             edge_keys = [str(k) for k in connected_edge_keys]
