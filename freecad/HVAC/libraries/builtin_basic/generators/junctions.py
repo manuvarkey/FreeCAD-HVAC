@@ -183,8 +183,9 @@ def build_elbow(context):
         raise ValueError("Elbow cannot be built for opposite directions")
 
     radius = float(props.get("CenterlineRadius", 0.0) or 0.0)
-    if radius <= 1e-6:
-        radius = 1.5 * _section_size_hint(api, ports[0])
+    size_hint =  max(_section_size_hint(api, ports[0]), _section_size_hint(api, ports[1]))
+    if radius < size_hint / 2:
+        radius = 0.6 * size_hint
 
     # Symmetric elbow trim distance measured from the virtual corner
     trim = radius / math.tan(theta / 2.0)
