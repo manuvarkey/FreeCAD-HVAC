@@ -1860,7 +1860,6 @@ class DuctNetwork:
         self._sync_in_progress = True
         try:
             parser = hvaclib.DuctNetworkParser(list(base_folder.OutList))
-            FreeCAD.Console.PrintMessage("HVAC - Sync - Duct network parsed.\n")
             
             if self._initial_sync:  
                 # Do not run junction update on initial sync since edge tags will not be updated in segments
@@ -1879,15 +1878,18 @@ class DuctNetwork:
                 obj.Document.recompute()
                 
             else:  
-                # Stage 1: Sync junctions first, so that their execute() writes ConnectionLengthsJson
+                # Stage 1: Sync segments first to update edge data
+                changed_segments = self.syncSegments(obj, parser, initial_sync=False)
+                if changed_segments or force_recompute:
+                    obj.Document.recompute()
+                    
+                # Stage 2: Sync junctions, for creating ports; so that their execute() writes ConnectionLengthsJson
                 changed_junctions = self.syncJunctions(obj, parser)
-                FreeCAD.Console.PrintMessage("HVAC - Sync - syncJunctions called.\n")
                 if changed_junctions or force_recompute:
                     obj.Document.recompute()
     
-                # Stage 2: Sync segments which consume the junction trim data
+                # Stage 3: Sync segments which consume the junction trim data
                 changed_segments = self.syncSegments(obj, parser, initial_sync=False)
-                FreeCAD.Console.PrintMessage("HVAC - Sync - syncSegments called.\n")
                 if changed_segments or force_recompute:
                     obj.Document.recompute()
                     

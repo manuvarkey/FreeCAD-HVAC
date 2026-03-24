@@ -131,6 +131,53 @@ def default_segment_type_id_for_profile(library_id, profile):
         return ""
     return type_defs[0].id
     
+def classify_junction_family(node_analysis):
+    degree = int(node_analysis.get("degree", 0))
+    collinear_pairs = node_analysis.get("collinear_pairs", [])
+    orthogonal_pairs = node_analysis.get("orthogonal_pairs", [])
+
+    if degree <= 0:
+        return "invalid"
+
+    if degree == 1:
+        return "terminal"
+
+    if degree == 2:
+        if collinear_pairs:
+            return "transition"
+        return "elbow"
+
+    if degree == 3:
+        if collinear_pairs:
+            return "tee"
+        return "wye"
+
+    if degree == 4:
+        if len(collinear_pairs) >= 2 and orthogonal_pairs:
+            return "cross"
+        return "wye"
+
+    return "manifold"
+
+def default_junction_type_id(family):
+    mapping = {
+        "terminal": "terminal_marker",
+        "transition": "transition_generic",
+        "elbow": "elbow_generic",
+        "tee": "tee_generic",
+        "wye": "wye_generic",
+        "cross": "cross_marker",
+        "manifold": "manifold_marker",
+    }
+    return mapping.get(family, "manifold_marker")
+    
+def all_junction_type_defs(library_id=None, family=None):
+    reg = get_hvac_library_registry()
+    lib = reg.get_library(library_id) if library_id else reg.get_active_library()
+    if lib is None:
+        return []
+    return lib.list_types(category="junction", family=family)
+    
 def all_type_defs_for_object(obj):
     reg = get_hvac_library_registry()
     library_id = getattr(obj, "LibraryId", "")
@@ -867,61 +914,6 @@ class DuctNetworkParser:
             "collinear_pairs": collinear_pairs,
             "orthogonal_pairs": orthogonal_pairs,
         }
-
-
-def classify_junction_family(node_analysis):
-    degree = int(node_analysis.get("degree", 0))
-    collinear_pairs = node_analysis.get("collinear_pairs", [])
-    orthogonal_pairs = node_analysis.get("orthogonal_pairs", [])
-
-    if degree <= 0:
-        return "invalid"
-
-    if degree == 1:
-        return "terminal"
-
-    if degree == 2:
-        if collinear_pairs:
-            return "transition"
-        return "elbow"
-
-    if degree == 3:
-        if collinear_pairs:
-            return "tee"
-        return "wye"
-
-    if degree == 4:
-        if len(collinear_pairs) >= 2 and orthogonal_pairs:
-            return "cross"
-        return "wye"
-
-    return "manifold"
-
-
-def default_junction_type_id(family):
-    mapping = {
-        "terminal": "terminal_marker",
-        "transition": "transition_marker",
-        "elbow": "elbow_marker",
-        "tee": "tee_marker",
-        "wye": "wye_marker",
-        "cross": "cross_marker",
-        "manifold": "manifold_marker",
-    }
-    return mapping.get(family, "manifold_marker")
-    
-def all_junction_type_defs(library_id=None, family=None):
-    reg = get_hvac_library_registry()
-    lib = reg.get_library(library_id) if library_id else reg.get_active_library()
-    if lib is None:
-        return []
-    return lib.list_types(category="junction", family=family)
-    
-    
-#------------------------------------------------------------------------------
-# Geometry generation functions
-#------------------------------------------------------------------------------
-
 
 
 #------------------------------------------------------------------------------
