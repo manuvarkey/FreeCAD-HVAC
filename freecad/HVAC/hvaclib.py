@@ -656,16 +656,20 @@ class DuctNetworkParser:
 
     def iter_line_segments_from_sketch(self, sketch_obj, tol=1e-9):
         """
-        Yield (start_point, end_point) for all LINE segments in a Sketch.
-        Sketch line geo is typically Part.LineSegment.
+        Yield (start_point, end_point, tag) for all non-construction LINE segments in a Sketch.
         """
         from .DuctNetwork import DuctSegment
         
-        for slno, geo in enumerate(getattr(sketch_obj, "Geometry", []) or []):
+        geos = getattr(sketch_obj, "Geometry", []) or []
+        for slno, geo in enumerate(geos):
+            # Skip construction geometry
+            try:
+                if sketch_obj.getConstruction(slno):
+                    continue
+            except Exception:
+                pass
             # Accept only straight line segments
             if hasattr(geo, "StartPoint") and hasattr(geo, "EndPoint"):
-                # Filter out arcs/circles/etc by type
-                # Part.LineSegment usually has TypeId or is instance of Part.LineSegment
                 typeid = getattr(geo, "TypeId", "")
                 if "Line" in typeid or (typeid == "" and geo.__class__.__name__ in ("LineSegment", "Line")):
                     sp = geo.StartPoint
