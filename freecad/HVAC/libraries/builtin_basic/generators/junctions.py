@@ -473,13 +473,9 @@ def build_wye(context):
     b_trim_sug = _safe_trim(props.get("TrimLengthB", 0.0), 0.5 * b_size_hint)
     c_trim_sug = _safe_trim(props.get("TrimLengthC", 0.0), 0.5 * c_size_hint)
     
-    port_a_end = api.copy_port(port_a, position=a_pos + a_dir * a_trim_sug)
-    port_b_end = api.copy_port(port_b, position=b_pos + b_dir * b_trim_sug)
-    port_c_end = api.copy_port(port_c, position=c_pos + c_dir * c_trim_sug)
-
-    leg_a = _make_leg_to_center(api, port_a, center, a_trim_sug, inner_inset=0)
-    leg_b = _make_leg_to_center(api, port_b, center, b_trim_sug, inner_inset=0)
-    leg_c = _make_leg_to_center(api, port_c, center, c_trim_sug, inner_inset=0)
+    leg_a = _make_leg_to_center(api, port_a, center, a_trim_sug)
+    leg_b = _make_leg_to_center(api, port_b, center, b_trim_sug)
+    leg_c = _make_leg_to_center(api, port_c, center, c_trim_sug)
 
     shape = api.fuse_shapes([leg_a, leg_b, leg_c])
 
@@ -492,4 +488,93 @@ def build_wye(context):
                 (port_c, c_trim_sug),
             ]
         ),
+    }
+
+# --------------------------------------------------------------------------
+# Cross
+# --------------------------------------------------------------------------
+
+def build_cross(context):
+    return build_manifold(context)
+
+
+# --------------------------------------------------------------------------
+# Manifold
+# --------------------------------------------------------------------------
+
+def build_manifold(context):
+    """
+    Generic multi-port manifold builder.
+
+    Supports any order > 2, i.e. 3-port wye, 4-port cross, higher-order hub/manifold.
+
+    Expected behavior:
+    - finds a common center from all connected ports
+    - creates one trimmed leg from each port to that center
+    - fuses all legs into one fitting
+    - returns per-port connection lengths
+
+    Optional per-port trim properties:
+        TrimLength1, TrimLength2, ..., TrimLengthN
+    and/or
+        TrimLengthA, TrimLengthB, ... for the first 26 ports
+
+    Notes:
+    - This is a simple "all legs meet at a center" manifold.
+    - It is generic in topology order, but not topology-aware.
+      If later you want smarter center selection or smoother branch blending,
+      that can be added separately.
+    """
+    api = context.get("hvac_api", None)
+    if api is None:
+        raise ValueError("Missing hvac_api in context")
+
+    ports = list(context.get("connected_ports", []) or [])
+    props = dict(context.get("properties", {}) or {})
+
+    n_ports = len(ports)
+    if n_ports <= 2:
+        raise ValueError("Manifold requires more than 2 ports")
+
+    # Gather positions first
+    port_positions = [api.port_position(p) for p in ports]
+
+    # Use centroid of all port positions as generic manifold center.
+    # This is more stable for arbitrary order than relying on a 3-port-specific pattern.
+    center = port_positions[0]
+    for p in port_positions[1:]:
+        center = center + p
+    center = center / float(n_ports)
+
+    legs = []
+    trim_records = []
+
+    for idx, port in enumerate(ports):
+        size_hint = _section_size_hint(api, port)
+
+        # Support both numeric and alphabetic trim keys
+        #   TrimLength1, TrimLength2, ...
+        #   TrimLengthA, TrimLengthB, ...
+        trim_key_num = f"TrimLength{idx + 1}"
+        trim_key_alpha = f"TrimLength{chr(ord('A') + idx)}" if idx < 26 else None
+
+        raw_trim = props.get(trim_key_num, None)
+        if raw_trim is None and trim_key_alpha is not None:
+            raw_trim = props.get(trim_key_alpha, None)
+            if raw_trim is None:
+                raw_trim = props.get("TrimLength", None)
+        if raw_trim is None:
+            raw_trim = 0.0
+        
+        trim_sug = _safe_trim(raw_trim, 0.5 * size_hint)
+
+        leg = _make_leg_to_center(api, port, center, trim_sug)
+        legs.append(leg)
+        trim_records.append((port, trim_sug))
+
+    shape = api.fuse_shapes(legs)
+
+    return {
+        "shape": shape,
+        "connection_lengths": api.build_trim_rec_from_port_lengths(trim_records),
     }

@@ -155,7 +155,7 @@ def classify_junction_family(node_analysis):
     if degree == 4:
         if len(collinear_pairs) >= 2 and orthogonal_pairs:
             return "cross"
-        return "wye"
+        return "manifold"
 
     return "manifold"
 
@@ -166,8 +166,8 @@ def default_junction_type_id(family):
         "elbow": "elbow_generic",
         "tee": "tee_generic",
         "wye": "wye_generic",
-        "cross": "cross_marker",
-        "manifold": "manifold_marker",
+        "cross": "cross_generic",
+        "manifold": "manifold_generic",
     }
     return mapping.get(family, "manifold_marker")
     

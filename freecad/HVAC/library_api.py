@@ -345,6 +345,30 @@ class HVACLibraryAPI:
     # Section/profile creation helpers
     # ------------------------------------------------------------------
     @staticmethod
+    def make_line_edge(p0, p1):
+        v0 = HVACLibraryAPI.vec(p0)
+        v1 = HVACLibraryAPI.vec(p1)
+
+        if (v1.sub(v0)).Length <= 1e-9:
+            raise ValueError("Cannot create line edge from coincident points")
+
+        return Part.makeLine(v0, v1)
+
+    @staticmethod
+    def make_wire_from_edges(edges):
+        edge_list = [e for e in (edges or []) if e is not None]
+
+        if not edge_list:
+            raise ValueError("make_wire_from_edges requires at least one edge")
+
+        wire = Part.Wire(edge_list)
+
+        if wire.isNull():
+            raise ValueError("Failed to create wire from edges")
+
+        return wire
+    
+    @staticmethod
     def make_rectangular_wire(center, x_axis, y_axis, width, height):
         c = HVACLibraryAPI.vec(center)
         x = HVACLibraryAPI.unit(x_axis) * (float(width) * 0.5)

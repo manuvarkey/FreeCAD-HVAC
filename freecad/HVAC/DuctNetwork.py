@@ -1091,7 +1091,7 @@ class DuctNetwork:
         library_id = DuctNetwork.getDefaultLibraryId(net)
         profile = DuctNetwork.getDefaultSegmentProfile(net)
         attachement = DuctNetwork.getDefaultAttachment(net)
-        segment = DuctNetwork.getDefaultOffset(net)
+        offset = DuctNetwork.getDefaultOffset(net)
 
         valid_profiles = hvaclib.segment_profiles_for_library(library_id)
         if profile not in valid_profiles:
@@ -1107,7 +1107,7 @@ class DuctNetwork:
             "profile": profile,
             "type_id": type_id,
             "attachment": attachement,
-            "offset": segment,
+            "offset": offset,
         }
 
     @staticmethod
@@ -1222,12 +1222,11 @@ class DuctNetwork:
                     obj.AnalysisJson = analysis_json
                     changed = True
                     
-                default_attachment = DuctNetwork.getDefaultAttachment(net)
+                default_A
                 if getattr(obj, "Attachment", "Center") != default_attachment:
                     obj.Attachment = default_attachment
                     changed = True
-                
-                default_offset = DuctNetwork.getDefaultOffset(net)
+        
                 if FreeCAD.Vector(getattr(obj, "Offset", FreeCAD.Vector(0, 0, 0))) != default_offset:
                     obj.Offset = default_offset
                     changed = True
@@ -2001,8 +2000,8 @@ class DuctNetwork:
             "Profile": str(getattr(obj, "Profile", "")),
             "TypeId": str(getattr(obj, "TypeId", "")),
             "Attachment": str(getattr(obj, "Attachment", "Center")),
-            "Offset": getattr(obj, "Offset", FreeCAD.Vector(0, 0, 0)),
-            "ProfileXAxis": getattr(obj, "ProfileXAxis", FreeCAD.Vector(0, 0, 0)),
+            "Offset": hvaclib.vec_to_xyz(getattr(obj, "Offset", (0, 0, 0))),
+            "ProfileXAxis": hvaclib.vec_to_xyz(getattr(obj, "ProfileXAxis", (0, 0, 0))),
             "Diameter": float(getattr(obj, "Diameter", 0.0)),
             "Width": float(getattr(obj, "Width", 0.0)),
             "Height": float(getattr(obj, "Height", 0.0)),

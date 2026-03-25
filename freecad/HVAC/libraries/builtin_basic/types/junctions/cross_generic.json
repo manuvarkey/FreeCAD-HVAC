@@ -1,0 +1,44 @@
+{
+  "id": "cross_generic",
+  "label": "Cross - Generic",
+  "category": "junction",
+  "family": "cross",
+  "profiles": ["Circular", "Rectangular"],
+  "constraints": {
+    "degree": 4
+  },
+  "properties": [
+    {
+      "name": "TrimLengthA",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for port A",
+      "default": 100.0
+    },
+    {
+      "name": "TrimLengthB",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for port B",
+      "default": 100.0
+    },
+    {
+      "name": "TrimLengthC",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for port C",
+      "default": 100.0
+    },
+    {
+      "name": "TrimLengthD",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for port D",
+      "default": 100.0
+    }
+  ],
+  "generator": {
+    "module": "junctions",
+    "function": "build_cross"
+  }
+}
