@@ -432,6 +432,12 @@ def get_segment_section_params(seg):
             "Width": float(getattr(seg, "Width", 0.0) or 0.0),
             "Height": float(getattr(seg, "Height", 0.0) or 0.0),
         }
+        
+    if profile == "Oval":
+        return {
+            "Width": float(getattr(seg, "Width", 0.0) or 0.0),
+            "Height": float(getattr(seg, "Height", 0.0) or 0.0),
+        }
 
     # Generic fallback for future profiles
     out = {}

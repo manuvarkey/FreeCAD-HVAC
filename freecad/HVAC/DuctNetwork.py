@@ -1221,12 +1221,13 @@ class DuctNetwork:
                 if hasattr(obj, "AnalysisJson") and obj.AnalysisJson != analysis_json:
                     obj.AnalysisJson = analysis_json
                     changed = True
-                    
-                default_A
+                
+                default_attachment = DuctNetwork.getDefaultAttachment(net)
                 if getattr(obj, "Attachment", "Center") != default_attachment:
                     obj.Attachment = default_attachment
                     changed = True
-        
+                
+                default_offset = DuctNetwork.getDefaultOffset(net)
                 if FreeCAD.Vector(getattr(obj, "Offset", FreeCAD.Vector(0, 0, 0))) != default_offset:
                     obj.Offset = default_offset
                     changed = True

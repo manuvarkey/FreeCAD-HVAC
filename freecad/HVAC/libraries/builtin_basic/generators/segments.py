@@ -68,3 +68,28 @@ def build_circular_straight(context):
         profile_x_axis=profile_x_axis,
     )
     return {"shape": shape}
+
+
+def build_oval_straight(context):
+    api = context["hvac_api"]
+    
+    sp = context["start_point"]
+    ep = context["end_point"]
+
+    props = dict(context.get("properties", {}) or {})
+    width = float(props.get("Width", 200.0))
+    height = float(props.get("Height", 100.0))
+    profile_x_axis = context.get("profile_x_axis")
+
+    shape = api.make_straight_shape(
+        start_point=sp,
+        end_point=ep,
+        profile="Oval",
+        section_params={
+            "Width": width,
+            "Height": height,
+        },
+        profile_x_axis=profile_x_axis,
+    )
+
+    return {"shape": shape}

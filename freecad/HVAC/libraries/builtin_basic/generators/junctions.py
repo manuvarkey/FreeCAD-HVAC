@@ -37,6 +37,8 @@ def _section_size_hint(api, port):
         return max(api.port_diameter(port), 1.0)
     if profile == "Rectangular":
         return max(api.port_width(port), api.port_height(port), 1.0)
+    if profile == "Oval":
+        return max(api.port_width(port), api.port_height(port), 1.0)
     return 1.0
 
 

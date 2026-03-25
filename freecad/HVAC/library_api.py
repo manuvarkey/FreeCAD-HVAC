@@ -393,6 +393,64 @@ class HVACLibraryAPI:
         r = float(diameter) * 0.5
         circle = Part.Circle(c, n, r)
         return Part.Wire([Part.Edge(circle)])
+        
+    @staticmethod
+    def make_oval_wire(center, x_axis, y_axis, width, height):
+        """
+        Flat-oval / obround section.
+        Major axis along x_axis, minor axis along y_axis.
+    
+        width  = total overall width
+        height = total overall height
+    
+        Requires width >= height > 0.
+        """
+        c = HVACLibraryAPI.vec(center)
+        x = HVACLibraryAPI.unit(x_axis)
+        y = HVACLibraryAPI.unit(y_axis)
+    
+        width = float(width or 0.0)
+        height = float(height or 0.0)
+    
+        if width <= 0.0 or height <= 0.0:
+            raise ValueError("Oval section requires positive Width and Height")
+    
+        if width < height:
+            raise ValueError("Oval section currently requires Width >= Height")
+    
+        r = 0.5 * height
+        straight = width - height
+    
+        # Degenerates to a circle when width == height
+        if straight <= HVACLibraryAPI.EPS:
+            return HVACLibraryAPI.make_circular_wire(c, x.cross(y), height)
+    
+        half_straight = 0.5 * straight
+    
+        left_center = c - x * half_straight
+        right_center = c + x * half_straight
+    
+        p_lt = left_center + y * r
+        p_lb = left_center - y * r
+        p_rt = right_center + y * r
+        p_rb = right_center - y * r
+    
+        # top and bottom straight edges
+        e_top = Part.makeLine(p_lt, p_rt)
+        e_bottom = Part.makeLine(p_rb, p_lb)
+    
+        normal = x.cross(y)
+        if normal.Length <= HVACLibraryAPI.EPS:
+            raise ValueError("Invalid oval frame")
+        normal.normalize()
+    
+        # Left semicircle: top -> bottom
+        left_arc = Part.Arc(p_lt, left_center - x * r, p_lb).toShape()
+    
+        # Right semicircle: bottom -> top
+        right_arc = Part.Arc(p_rb, right_center + x * r, p_rt).toShape()
+    
+        return Part.Wire([e_top, right_arc, e_bottom, left_arc])
 
     @staticmethod
     def make_section_wire(profile, section_params, center, direction, profile_x_axis=None):
@@ -416,6 +474,11 @@ class HVACLibraryAPI:
             if width <= 0.0 or height <= 0.0:
                 raise ValueError("Rectangular section requires positive Width and Height")
             return HVACLibraryAPI.make_rectangular_wire(center, x_axis, y_axis, width, height)
+            
+        if profile == "Oval":
+            width = float(params.get("Width", 0.0) or 0.0)
+            height = float(params.get("Height", 0.0) or 0.0)
+            return HVACLibraryAPI.make_oval_wire(center, x_axis, y_axis, width, height)
 
         raise ValueError("Unsupported profile '{}'".format(profile))
         
