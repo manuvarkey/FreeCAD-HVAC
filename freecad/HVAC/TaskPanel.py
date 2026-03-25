@@ -178,6 +178,104 @@ class TaskPanelEditDuctNetwork:
         return True
 
 
+class TaskPanelNetworkTypeDefaults:
+    """Task panel to edit network-level type defaults."""
+
+    def __init__(self, network_obj, apply_callback=None):
+        self.network_obj = network_obj
+        self.apply_callback = apply_callback
+
+        self.form = QtWidgets.QWidget()
+        self.form.setWindowTitle(translate("HVAC_NetworkTypeDefaults", "HVAC Type Defaults"))
+
+        layout = QtWidgets.QVBoxLayout(self.form)
+
+        title = QtWidgets.QLabel(
+            translate("HVAC_NetworkTypeDefaults", "Network: {}").format(network_obj.Label)
+        )
+        layout.addWidget(title)
+
+        layout.addWidget(QtWidgets.QLabel(
+            translate("HVAC_NetworkTypeDefaults", "Default library:")
+        ))
+        self.library_combo = QtWidgets.QComboBox()
+        layout.addWidget(self.library_combo)
+
+        layout.addWidget(QtWidgets.QLabel(
+            translate("HVAC_NetworkTypeDefaults", "Default segment profile:")
+        ))
+        self.profile_combo = QtWidgets.QComboBox()
+        layout.addWidget(self.profile_combo)
+
+        # note = QtWidgets.QLabel(
+        #     translate(
+        #         "HVAC_NetworkTypeDefaults",
+        #         "Junction types are auto selected based on parser/classifier output unless manually overridden."
+        #     )
+        # )
+        # note.setWordWrap(True)
+        # layout.addWidget(note)
+
+        self._populateLibraries()
+        self._loadFromNetwork()
+
+        self.library_combo.currentIndexChanged.connect(self._refreshProfiles)
+
+    def _populateLibraries(self):
+        reg = hvaclib.get_hvac_library_registry()
+        self.library_combo.clear()
+        for lib in reg.list_libraries():
+            self.library_combo.addItem(lib.label, lib.id)
+
+    def _refreshProfiles(self):
+        library_id = self.library_combo.currentData()
+        current_profile = self.profile_combo.currentData()
+
+        self.profile_combo.clear()
+        if not library_id:
+            return
+
+        profiles = hvaclib.segment_profiles_for_library(library_id)
+        for profile in profiles:
+            self.profile_combo.addItem(profile, profile)
+
+        if current_profile:
+            idx = self.profile_combo.findData(current_profile)
+            if idx >= 0:
+                self.profile_combo.setCurrentIndex(idx)
+            elif profiles:
+                self.profile_combo.setCurrentIndex(0)
+        elif profiles:
+            self.profile_combo.setCurrentIndex(0)
+
+    def _loadFromNetwork(self):
+        lib_id = getattr(self.network_obj, "DefaultLibraryId", "")
+        if lib_id:
+            idx = self.library_combo.findData(lib_id)
+            if idx >= 0:
+                self.library_combo.setCurrentIndex(idx)
+
+        self._refreshProfiles()
+
+        profile = getattr(self.network_obj, "DefaultSegmentProfile", "")
+        if profile:
+            idx = self.profile_combo.findData(profile)
+            if idx >= 0:
+                self.profile_combo.setCurrentIndex(idx)
+
+    def accept(self):
+        if self.apply_callback:
+            self.apply_callback(
+                self.network_obj,
+                library_id=self.library_combo.currentData(),
+                segment_profile=self.profile_combo.currentData(),
+            )
+        return True
+
+    def reject(self):
+        return True
+        
+
 class TaskPanelTypeEditor:
     """Task panel to edit library/type selection for selected HVAC geometry objects."""
 
@@ -300,98 +398,236 @@ class TaskPanelTypeEditor:
         return True
 
 
-class TaskPanelNetworkTypeDefaults:
-    """Task panel to edit network-level type defaults."""
+class TaskPanelSegmentPlacementEditor:
+    """Live editor for attachment, offset and profile X axis."""
 
-    def __init__(self, network_obj, apply_callback=None):
-        self.network_obj = network_obj
+    def __init__(self, objects, apply_callback=None):
+        self.objects = [o for o in (objects or []) if o is not None]
         self.apply_callback = apply_callback
+        self._loading = False
+        self._attachment_buttons = {}
+        self._axis_buttons = {}
 
         self.form = QtWidgets.QWidget()
-        self.form.setWindowTitle(translate("HVAC_NetworkTypeDefaults", "HVAC Type Defaults"))
+        self.form.setWindowTitle(
+            translate("HVAC_EditPlacement", "Edit Segment Placement")
+        )
 
         layout = QtWidgets.QVBoxLayout(self.form)
 
-        title = QtWidgets.QLabel(
-            translate("HVAC_NetworkTypeDefaults", "Network: {}").format(network_obj.Label)
+        info_text = translate(
+            "HVAC_EditPlacement",
+            "Selected objects: {}"
+        ).format(len(self.objects))
+        self.info_label = QtWidgets.QLabel(info_text)
+        layout.addWidget(self.info_label)
+
+        self.object_names = QtWidgets.QListWidget()
+        self.object_names.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        for obj in self.objects:
+            self.object_names.addItem("{} ({})".format(obj.Label, obj.Name))
+        if len(self.objects) > 1:
+            layout.addWidget(self.object_names)
+            
+        layout.addWidget(self._makeSeparator())
+
+        # Attachment
+        layout.addWidget(QtWidgets.QLabel(
+            translate("HVAC_EditPlacement", "Attachment:")
+        ))
+        layout.addLayout(self._buildAttachmentGrid())
+        
+        layout.addWidget(self._makeSeparator())
+
+        # Offset
+        layout.addWidget(QtWidgets.QLabel(
+            translate("HVAC_EditPlacement", "Offset:")
+        ))
+        layout.addLayout(self._buildOffsetEditors())
+        
+        layout.addWidget(self._makeSeparator())
+        
+        # Profile X axis
+        layout.addWidget(QtWidgets.QLabel(
+            translate("HVAC_EditPlacement", "Profile X axis:")
+        ))
+        layout.addLayout(self._buildAxisButtons())
+
+        self._loading = True
+        try:
+            self._loadFromSelection()
+        finally:
+            self._loading = False
+
+    def _makeSeparator(self):
+        line = QtWidgets.QFrame()
+        line.setFrameShape(QtWidgets.QFrame.HLine)
+        line.setFrameShadow(QtWidgets.QFrame.Sunken)
+        line.setLineWidth(1)
+        line.setMidLineWidth(0)
+        return line
+    
+    def _buildAttachmentGrid(self):
+        grid = QtWidgets.QGridLayout()
+        
+        self.attachment_group = QtWidgets.QButtonGroup(self.form)
+        self.attachment_group.setExclusive(True)
+
+        items = [
+            ("TopLeft",       "↖", 0, 0),
+            ("TopCenter",     "↑", 0, 1),
+            ("TopRight",      "↗", 0, 2),
+            ("CenterLeft",    "←", 1, 0),
+            ("Center",        "•", 1, 1),
+            ("CenterRight",   "→", 1, 2),
+            ("BottomLeft",    "↙", 2, 0),
+            ("BottomCenter",  "↓", 2, 1),
+            ("BottomRight",   "↘", 2, 2),
+        ]
+
+        for key, text, r, c in items:
+            btn = QtWidgets.QToolButton()
+            btn.setText(text)
+            btn.setCheckable(True)
+            btn.setToolTip(key)
+            btn.setMinimumSize(40, 32)
+            self.attachment_group.addButton(btn)
+            self._attachment_buttons[key] = btn
+            grid.addWidget(btn, r, c)
+
+        self.attachment_group.buttonClicked.connect(lambda _btn: self._applyNow())
+        return grid
+
+    def _buildOffsetEditors(self):
+        row = QtWidgets.QGridLayout()
+
+        self.offset_x = QtWidgets.QDoubleSpinBox()
+        self.offset_y = QtWidgets.QDoubleSpinBox()
+        self.offset_z = QtWidgets.QDoubleSpinBox()
+
+        for w in (self.offset_x, self.offset_y, self.offset_z):
+            w.setDecimals(3)
+            w.setRange(-1e6, 1e6)
+            w.setSingleStep(10.0)
+            w.editingFinished.connect(self._applyNow)
+
+        row.addWidget(QtWidgets.QLabel("X"), 0, 0)
+        row.addWidget(self.offset_x, 0, 1)
+        row.addWidget(QtWidgets.QLabel("Y"), 1, 0)
+        row.addWidget(self.offset_y, 1, 1)
+        row.addWidget(QtWidgets.QLabel("Z"), 2, 0)
+        row.addWidget(self.offset_z, 2, 1)
+
+        return row
+
+    def _buildAxisButtons(self):
+        row = QtWidgets.QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(1)
+        
+        self.axis_group = QtWidgets.QButtonGroup(self.form)
+        self.axis_group.setExclusive(True)
+
+        axes = [
+            ("Auto", FreeCAD.Vector(0, 0, 0)),
+            ("X",    FreeCAD.Vector(1, 0, 0)),
+            ("Y",    FreeCAD.Vector(0, 1, 0)),
+            ("Z",    FreeCAD.Vector(0, 0, 1)),
+        ]
+
+        for label, vec in axes:
+            btn = QtWidgets.QToolButton()
+            btn.setText(label)
+            btn.setCheckable(True)
+            btn._axis_vec = FreeCAD.Vector(vec)
+            self.axis_group.addButton(btn)
+            self._axis_buttons[label] = btn
+            row.addWidget(btn)
+
+        self.axis_group.buttonClicked.connect(lambda _btn: self._applyNow())
+        return row
+
+    def _commonValue(self, getter):
+        vals = []
+        for obj in self.objects:
+            try:
+                vals.append(getter(obj))
+            except Exception:
+                vals.append(None)
+
+        if not vals:
+            return None
+
+        first = vals[0]
+        for v in vals[1:]:
+            if v != first:
+                return None
+        return first
+
+    def _loadFromSelection(self):
+        attachment = self._commonValue(
+            lambda o: str(getattr(o, "Attachment", "Center"))
         )
-        layout.addWidget(title)
+        if attachment in self._attachment_buttons:
+            self._attachment_buttons[attachment].setChecked(True)
+        elif "Center" in self._attachment_buttons:
+            self._attachment_buttons["Center"].setChecked(True)
 
-        layout.addWidget(QtWidgets.QLabel(
-            translate("HVAC_NetworkTypeDefaults", "Default library:")
-        ))
-        self.library_combo = QtWidgets.QComboBox()
-        layout.addWidget(self.library_combo)
+        offset = self._commonValue(
+            lambda o: FreeCAD.Vector(getattr(o, "Offset", FreeCAD.Vector(0, 0, 0)))
+        )
+        if offset is not None:
+            self.offset_x.setValue(offset.x)
+            self.offset_y.setValue(offset.y)
+            self.offset_z.setValue(offset.z)
 
-        layout.addWidget(QtWidgets.QLabel(
-            translate("HVAC_NetworkTypeDefaults", "Default segment profile:")
-        ))
-        self.profile_combo = QtWidgets.QComboBox()
-        layout.addWidget(self.profile_combo)
+        axis = self._commonValue(
+            lambda o: FreeCAD.Vector(getattr(o, "ProfileXAxis", FreeCAD.Vector(0, 0, 0)))
+        )
 
-        # note = QtWidgets.QLabel(
-        #     translate(
-        #         "HVAC_NetworkTypeDefaults",
-        #         "Junction types are auto selected based on parser/classifier output unless manually overridden."
-        #     )
-        # )
-        # note.setWordWrap(True)
-        # layout.addWidget(note)
+        if axis is None or axis == FreeCAD.Vector(0, 0, 0):
+            self._axis_buttons["Auto"].setChecked(True)
+        elif axis == FreeCAD.Vector(1, 0, 0):
+            self._axis_buttons["X"].setChecked(True)
+        elif axis == FreeCAD.Vector(0, 1, 0):
+            self._axis_buttons["Y"].setChecked(True)
+        elif axis == FreeCAD.Vector(0, 0, 1):
+            self._axis_buttons["Z"].setChecked(True)
+        else:
+            self._axis_buttons["Auto"].setChecked(True)
 
-        self._populateLibraries()
-        self._loadFromNetwork()
+    def _selectedAttachment(self):
+        for key, btn in self._attachment_buttons.items():
+            if btn.isChecked():
+                return key
+        return "Center"
 
-        self.library_combo.currentIndexChanged.connect(self._refreshProfiles)
+    def _selectedProfileXAxis(self):
+        for btn in self.axis_group.buttons():
+            if btn.isChecked():
+                return FreeCAD.Vector(btn._axis_vec)
+        return FreeCAD.Vector(0, 0, 0)
 
-    def _populateLibraries(self):
-        reg = hvaclib.get_hvac_library_registry()
-        self.library_combo.clear()
-        for lib in reg.list_libraries():
-            self.library_combo.addItem(lib.label, lib.id)
+    def _currentOffset(self):
+        return FreeCAD.Vector(
+            self.offset_x.value(),
+            self.offset_y.value(),
+            self.offset_z.value(),
+        )
 
-    def _refreshProfiles(self):
-        library_id = self.library_combo.currentData()
-        current_profile = self.profile_combo.currentData()
-
-        self.profile_combo.clear()
-        if not library_id:
+    def _applyNow(self):
+        if self._loading or not self.apply_callback:
             return
 
-        profiles = hvaclib.segment_profiles_for_library(library_id)
-        for profile in profiles:
-            self.profile_combo.addItem(profile, profile)
-
-        if current_profile:
-            idx = self.profile_combo.findData(current_profile)
-            if idx >= 0:
-                self.profile_combo.setCurrentIndex(idx)
-            elif profiles:
-                self.profile_combo.setCurrentIndex(0)
-        elif profiles:
-            self.profile_combo.setCurrentIndex(0)
-
-    def _loadFromNetwork(self):
-        lib_id = getattr(self.network_obj, "DefaultLibraryId", "")
-        if lib_id:
-            idx = self.library_combo.findData(lib_id)
-            if idx >= 0:
-                self.library_combo.setCurrentIndex(idx)
-
-        self._refreshProfiles()
-
-        profile = getattr(self.network_obj, "DefaultSegmentProfile", "")
-        if profile:
-            idx = self.profile_combo.findData(profile)
-            if idx >= 0:
-                self.profile_combo.setCurrentIndex(idx)
+        self.apply_callback(
+            self.objects,
+            attachment=self._selectedAttachment(),
+            offset=self._currentOffset(),
+            profile_x_axis=self._selectedProfileXAxis(),
+        )
 
     def accept(self):
-        if self.apply_callback:
-            self.apply_callback(
-                self.network_obj,
-                library_id=self.library_combo.currentData(),
-                segment_profile=self.profile_combo.currentData(),
-            )
+        # Live-apply panel; nothing extra on OK.
         return True
 
     def reject(self):

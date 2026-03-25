@@ -60,6 +60,7 @@ class HVAC(Gui.Workbench):
                                 "Separator",
                                 'HVAC_EditBaseObject',
                                 'HVAC_EditType',
+                                'HVAC_EditPlacement',
                                 'HVAC_ResetTypesToDefaults',
                                 "Separator",
                                 'HVAC_CreateSketch',
@@ -73,6 +74,7 @@ class HVAC(Gui.Workbench):
                                 "Separator",
                                 'HVAC_EditBaseObject',
                                 'HVAC_EditType',
+                                'HVAC_EditPlacement',
                                 'HVAC_ResetTypesToDefaults',
                                 "Separator",
                                 'HVAC_CreateSketch',
@@ -86,6 +88,7 @@ class HVAC(Gui.Workbench):
                                 "Separator",
                                 'HVAC_EditBaseObject',
                                 'HVAC_EditType',
+                                'HVAC_EditPlacement',
                                 'HVAC_ResetTypesToDefaults',
                                 "Separator",
                                 'HVAC_CreateSketch',
@@ -176,6 +179,7 @@ class HVAC(Gui.Workbench):
                                 "HVAC_EditNetworkTypeDefaults", 
                                 "HVAC_EditBaseObject", 
                                 "HVAC_EditType",
+                                'HVAC_EditPlacement',
                                 "HVAC_ResetTypesToDefaults",]
                 self.title = translate("HVAC", "Modify")
 

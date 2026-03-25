@@ -1941,6 +1941,7 @@ class DuctNetwork:
             "TypeId": str(getattr(obj, "TypeId", "")),
             "Attachment": str(getattr(obj, "Attachment", "Center")),
             "Offset": getattr(obj, "Offset", FreeCAD.Vector(0, 0, 0)),
+            "ProfileXAxis": getattr(obj, "ProfileXAxis", FreeCAD.Vector(0, 0, 0)),
             "Diameter": float(getattr(obj, "Diameter", 0.0)),
             "Width": float(getattr(obj, "Width", 0.0)),
             "Height": float(getattr(obj, "Height", 0.0)),
@@ -1949,6 +1950,51 @@ class DuctNetwork:
             "FlowRate": float(getattr(obj, "FlowRate", 0.0)),
             "Velocity": float(getattr(obj, "Velocity", 0.0)),
         }
+    
+    @staticmethod
+    def _restoreSegmentUserParams(obj, params):
+        if not isinstance(params, dict):
+            return False
+    
+        changed = False
+    
+        def set_if_needed(prop, value):
+            nonlocal changed
+            try:
+                if getattr(obj, prop) != value:
+                    setattr(obj, prop, value)
+                    changed = True
+            except Exception:
+                pass
+    
+        if "LibraryId" in params:
+            set_if_needed("LibraryId", params["LibraryId"])
+        if "Profile" in params:
+            set_if_needed("Profile", params["Profile"])
+        if "TypeId" in params:
+            set_if_needed("TypeId", params["TypeId"])
+        if "Attachment" in params:
+            set_if_needed("Attachment", params["Attachment"])
+        if "Offset" in params:
+            set_if_needed("Offset", params["Offset"])
+        if "ProfileXAxis" in params:
+            set_if_needed("ProfileXAxis", params["ProfileXAxis"])
+        if "Diameter" in params:
+            set_if_needed("Diameter", params["Diameter"])
+        if "Width" in params:
+            set_if_needed("Width", params["Width"])
+        if "Height" in params:
+            set_if_needed("Height", params["Height"])
+        if "InsulationThickness" in params:
+            set_if_needed("InsulationThickness", params["InsulationThickness"])
+        if "Roughness" in params:
+            set_if_needed("Roughness", params["Roughness"])
+        if "FlowRate" in params:
+            set_if_needed("FlowRate", params["FlowRate"])
+        if "Velocity" in params:
+            set_if_needed("Velocity", params["Velocity"])
+    
+        return changed
     
     @staticmethod
     def applyTypeSelection(objects, library_id="", type_id=""):
@@ -2017,49 +2063,42 @@ class DuctNetwork:
                 proxy = getattr(net, "Proxy", None)
                 if proxy:
                     proxy.requestSync(net, force_recompute=True)
-            
+     
     @staticmethod
-    def _restoreSegmentUserParams(obj, params):
-        if not isinstance(params, dict):
-            return False
+    def applyPlacementSelection(objects, attachment=None, offset=None, profile_x_axis=None):
+        doc = FreeCAD.ActiveDocument
+        if doc is None:
+            return
     
+        nets_to_sync = set()
         changed = False
+        for obj in objects or []:
+            if obj is None or not hvaclib.isDuctSegment(obj):
+                continue
     
-        def set_if_needed(prop, value):
-            nonlocal changed
+            net = DuctNetwork.getOwnerNetwork(obj)
+            if net is not None:
+                nets_to_sync.add(net)
+    
+            if attachment is not None and getattr(obj, "Attachment", "") != attachment:
+                obj.Attachment = attachment
+                changed = True
+            if offset is not None and getattr(obj, "Offset", FreeCAD.Vector(0,0,0)) != offset:
+                obj.Offset = offset
+                changed = True
+            if profile_x_axis is not None and getattr(obj, "ProfileXAxis", FreeCAD.Vector(0,0,0)) != profile_x_axis:
+                obj.ProfileXAxis = profile_x_axis
+                changed = True
+    
             try:
-                if getattr(obj, prop) != value:
-                    setattr(obj, prop, value)
-                    changed = True
+                obj.touch()
             except Exception:
                 pass
-    
-        if "LibraryId" in params:
-            set_if_needed("LibraryId", params["LibraryId"])
-        if "Profile" in params:
-            set_if_needed("Profile", params["Profile"])
-        if "TypeId" in params:
-            set_if_needed("TypeId", params["TypeId"])
-        if "Attachment" in params:
-            set_if_needed("Attachment", params["Attachment"])
-        if "Offset" in params:
-            set_if_needed("Offset", params["Offset"])
-        if "Diameter" in params:
-            set_if_needed("Diameter", params["Diameter"])
-        if "Width" in params:
-            set_if_needed("Width", params["Width"])
-        if "Height" in params:
-            set_if_needed("Height", params["Height"])
-        if "InsulationThickness" in params:
-            set_if_needed("InsulationThickness", params["InsulationThickness"])
-        if "Roughness" in params:
-            set_if_needed("Roughness", params["Roughness"])
-        if "FlowRate" in params:
-            set_if_needed("FlowRate", params["FlowRate"])
-        if "Velocity" in params:
-            set_if_needed("Velocity", params["Velocity"])
-    
-        return changed
+        if changed:
+            for net in nets_to_sync:
+                proxy = getattr(net, "Proxy", None)
+                if proxy:
+                    proxy.requestSync(net, force_recompute=True)       
     
     ## Trim map generation from junctions
     

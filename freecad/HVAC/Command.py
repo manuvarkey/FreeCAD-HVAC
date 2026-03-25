@@ -287,6 +287,43 @@ class CommandEditType:
         Gui.Control.showDialog(self.task_panel)
 
 
+class CommandEditPlacement:
+    """Edit attachment, offset and profile X axis of selected duct segments."""
+
+    def __init__(self):
+        self.task_panel = None
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("ModifyDuctsIcon.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_EditPlacement', 'Edit Placement'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_EditPlacement',
+                'Edit attachment, user offset and profile X axis of selected duct segments'
+            ),
+            'CmdType': 'ForEdit',
+        }
+
+    def IsActive(self):
+        if Gui.ActiveDocument is None:
+            return False
+        selected_geom = hvaclib.selectedGeometryObjects() or []
+        return any(hvaclib.isDuctSegment(o) for o in selected_geom)
+
+    def Activated(self):
+        from .TaskPanel import TaskPanelSegmentPlacementEditor
+        selected_geom = hvaclib.selectedGeometryObjects() or []
+        selected_segments = [o for o in selected_geom if hvaclib.isDuctSegment(o)]
+        if not selected_segments:
+            return
+
+        self.task_panel = TaskPanelSegmentPlacementEditor(
+            selected_segments,
+            apply_callback=DuctNetwork.DuctNetwork.applyPlacementSelection,
+        )
+        Gui.Control.showDialog(self.task_panel)
+        
+        
 class CommandEditNetworkTypeDefaults:
     """Edit network-level HVAC type defaults."""
 
@@ -296,7 +333,7 @@ class CommandEditNetworkTypeDefaults:
     def GetResources(self):
         return {
             'Pixmap': hvaclib.get_icon_path("ModifyDuctsIcon.svg"),
-            'MenuText': QT_TRANSLATE_NOOP('HVAC_NetworkTypeDefaults', 'Network Type Defaults'),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_NetworkTypeDefaults', 'Network Defaults'),
             'ToolTip': QT_TRANSLATE_NOOP('HVAC_NetworkTypeDefaults', 'Edit default HVAC library and segment auto-type settings for the active network'),
             'CmdType': 'ForEdit',
         }
@@ -326,7 +363,7 @@ class CommandResetTypesToNetworkDefaults:
     def GetResources(self):
         return {
             'Pixmap': hvaclib.get_icon_path("ModifyDuctsIcon.svg"),
-            'MenuText': QT_TRANSLATE_NOOP('HVAC_ResetTypesToDefaults', 'Reset Types to Network Defaults'),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_ResetTypesToDefaults', 'Reset Types to Defaults'),
             'ToolTip': QT_TRANSLATE_NOOP(
                 'HVAC_ResetTypesToDefaults',
                 'Reset selected duct segments or junctions to their owner network defaults'
@@ -384,6 +421,7 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand("HVAC_CreateSketch", CommandCreateSketch())
     FreeCAD.Gui.addCommand("HVAC_CreateLine", CommandCreateLine())
     FreeCAD.Gui.addCommand('HVAC_EditType', CommandEditType())
+    FreeCAD.Gui.addCommand('HVAC_EditPlacement', CommandEditPlacement())
     FreeCAD.Gui.addCommand('HVAC_EditNetworkTypeDefaults', CommandEditNetworkTypeDefaults())
     FreeCAD.Gui.addCommand('HVAC_ResetTypesToDefaults', CommandResetTypesToNetworkDefaults())
     FreeCAD.Gui.addCommand('HVAC_ReloadLibraries', CommandReloadHVACLibraries())  # Debug method
