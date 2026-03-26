@@ -87,7 +87,7 @@ class DuctNetworkParser:
 
         # Build data structures
         if objs:
-            self._compile_lines_from_objects(objs)
+            self.compile_lines_from_objects(objs)
         self.build_graph()
 
     ## Data Parser Methods
@@ -120,18 +120,6 @@ class DuctNetworkParser:
         if node_id == end_node:
             return "end"
         return ""
-
-    def _compile_lines_from_objects(self, objs):
-        self.lines_map = {}
-        self.all_lines = []
-        for obj in objs:
-            if isWire(obj):
-                for sp, ep, tag in self._iter_line_segments_from_shape(obj):
-                    self._parse_obj(obj, sp, ep, tag)
-            elif isSketch(obj):
-                for sp, ep, tag in self._iter_line_segments_from_sketch(obj):
-                    self._parse_obj(obj, sp, ep, tag)
-        return self.lines_map, self.all_lines
 
     def _parse_obj(self, obj, sp, ep, tag):
         obj_name = getattr(obj, "Name", None)
@@ -192,6 +180,18 @@ class DuctNetworkParser:
                     yield (vec_to_xyz(v1), vec_to_xyz(v2), tag)
 
     ## Graph build utilities
+    
+    def compile_lines_from_objects(self, objs):
+        self.lines_map = {}
+        self.all_lines = []
+        for obj in objs:
+            if isWire(obj):
+                for sp, ep, tag in self._iter_line_segments_from_shape(obj):
+                    self._parse_obj(obj, sp, ep, tag)
+            elif isSketch(obj):
+                for sp, ep, tag in self._iter_line_segments_from_sketch(obj):
+                    self._parse_obj(obj, sp, ep, tag)
+        return self.lines_map, self.all_lines
 
     def build_graph(self, tol=1e-6):
         """

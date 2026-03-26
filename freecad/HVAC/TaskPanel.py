@@ -297,7 +297,7 @@ class TaskPanelNetworkTypeDefaults:
         return row
     
     def _populateLibraries(self):
-        reg = hvaclib.get_hvac_library_registry()
+        reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
         self.library_combo.clear()
         for lib in reg.list_libraries():
             self.library_combo.addItem(lib.label, lib.id)
@@ -310,7 +310,7 @@ class TaskPanelNetworkTypeDefaults:
         if not library_id:
             return
 
-        profiles = hvaclib.segment_profiles_for_library(library_id)
+        profiles = hvaclib.HVACLibraryService.segment_profiles_for_library(library_id)
         for profile in profiles:
             self.profile_combo.addItem(profile, profile)
 
@@ -418,7 +418,7 @@ class TaskPanelTypeEditor:
 
     def _populateLibraries(self):
         self.library_combo.clear()
-        reg = hvaclib.get_hvac_library_registry()
+        reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
         for lib in reg.list_libraries():
             self.library_combo.addItem(lib.label, lib.id)
 
@@ -455,7 +455,7 @@ class TaskPanelTypeEditor:
         if not library_id:
             return
 
-        reg = hvaclib.get_hvac_library_registry()
+        reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
         lib = reg.get_library(library_id)
         if lib is None:
             return
