@@ -47,7 +47,7 @@ class CommandCreateDuctNetwork:
     def GetResources(self):
         return {'Pixmap': hvaclib.get_icon_path("CreateDuctsIcon.svg"),
                 'MenuText': QT_TRANSLATE_NOOP('HVAC_CreateDuctNetwork', 'Create Network'),
-                'ToolTip': QT_TRANSLATE_NOOP('HVAC_CreateDuctNetwork', 'Create HVAC Duct Network from Sketch/ Line base Geometries')}
+                'ToolTip': QT_TRANSLATE_NOOP('HVAC_CreateDuctNetwork', 'Create a new HVAC Duct Network')}
 
     def IsActive(self):
         if Gui.ActiveDocument:
@@ -69,7 +69,7 @@ class CommandActivateDuctNetwork:
         return {
             'Pixmap': hvaclib.get_icon_path("ActivateDuctsIcon.svg"),
             "MenuText": QT_TRANSLATE_NOOP("HVAC_ActivateDuctNetwork", "Activate Network"),
-            "ToolTip": QT_TRANSLATE_NOOP("HVAC_ActivateDuctNetwork", "Sets a HVAC duct network as the active one for editing."),
+            "ToolTip": QT_TRANSLATE_NOOP("HVAC_ActivateDuctNetwork", "Sets an HVAC duct network as the active for editing."),
             "CmdType": "ForEdit",
         }
 
@@ -110,7 +110,7 @@ class CommandModifyDuctNetwork:
     def GetResources(self):
         return {'Pixmap': hvaclib.get_icon_path("ModifyDuctsIcon.svg"),
                 'MenuText': QT_TRANSLATE_NOOP('HVAC_ModifyDuctNetwork', 'Modify Network'),
-                'ToolTip': QT_TRANSLATE_NOOP('HVAC_ModifyDuctNetwork',  'Modify the selected HVAC Duct Network')}
+                'ToolTip': QT_TRANSLATE_NOOP('HVAC_ModifyDuctNetwork',  'Modify base geometry for the selected HVAC Duct Network')}
 
     def IsActive(self):
         if Gui.ActiveDocument:
@@ -139,7 +139,7 @@ class CommandEditBaseObject:
     def GetResources(self):
         return {'Pixmap': hvaclib.get_icon_path("ModifyRouting.svg"),
                 'MenuText': QT_TRANSLATE_NOOP('HVAC_EditBaseObject', 'Modify routing'),
-                'ToolTip': QT_TRANSLATE_NOOP('HVAC_EditBaseObject',  'Modify routing of selected duct')}
+                'ToolTip': QT_TRANSLATE_NOOP('HVAC_EditBaseObject',  'Modify routing of selected duct segment')}
 
     def IsActive(self):
         if Gui.ActiveDocument:
@@ -259,7 +259,7 @@ class CommandEditType:
         return {
             'Pixmap': hvaclib.get_icon_path("EditType.svg"),
             'MenuText': QT_TRANSLATE_NOOP('HVAC_EditType', 'Edit Type'),
-            'ToolTip': QT_TRANSLATE_NOOP('HVAC_EditType', 'Edit library/type of selected duct segments or junctions'),
+            'ToolTip': QT_TRANSLATE_NOOP('HVAC_EditType', 'Edit library/ type of selected duct segment(s) or junction(s)'),
             'CmdType': 'ForEdit',
         }
 
@@ -304,7 +304,7 @@ class CommandEditPlacement:
             'MenuText': QT_TRANSLATE_NOOP('HVAC_EditPlacement', 'Edit Placement'),
             'ToolTip': QT_TRANSLATE_NOOP(
                 'HVAC_EditPlacement',
-                'Edit attachment, user offset and profile X axis of selected duct segments'
+                'Edit Attachment, User offset and Profile X axis of selected duct segment(s)'
             ),
             'CmdType': 'ForEdit',
         }
@@ -339,7 +339,7 @@ class CommandEditNetworkTypeDefaults:
         return {
             'Pixmap': hvaclib.get_icon_path("Defaults.svg"),
             'MenuText': QT_TRANSLATE_NOOP('HVAC_NetworkTypeDefaults', 'Network Defaults'),
-            'ToolTip': QT_TRANSLATE_NOOP('HVAC_NetworkTypeDefaults', 'Edit default HVAC library and segment auto-type settings for the active network'),
+            'ToolTip': QT_TRANSLATE_NOOP('HVAC_NetworkTypeDefaults', 'Edit default settings for the active network'),
             'CmdType': 'ForEdit',
         }
 
@@ -368,10 +368,10 @@ class CommandResetTypesToNetworkDefaults:
     def GetResources(self):
         return {
             'Pixmap': hvaclib.get_icon_path("ResetType.svg"),
-            'MenuText': QT_TRANSLATE_NOOP('HVAC_ResetTypesToDefaults', 'Reset Types to Defaults'),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_ResetTypesToDefaults', 'Reset to Defaults'),
             'ToolTip': QT_TRANSLATE_NOOP(
                 'HVAC_ResetTypesToDefaults',
-                'Reset selected duct segments or junctions to their owner network defaults'
+                'Reset the type and placement options of selected duct segment(s) to their owner network defaults'
             ),
             'CmdType': 'ForEdit',
         }
