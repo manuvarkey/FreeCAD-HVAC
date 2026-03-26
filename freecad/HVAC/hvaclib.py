@@ -357,12 +357,37 @@ def get_obj_by_name(name, doc=None):
         doc = FreeCAD.ActiveDocument
     obj = doc.getObject(name)
     return obj
+    
+def makeLineKey(obj_name, source_index):
+    """Make a unique line key from an object name and source index."""
+    source_index = int(source_index)
+    obj = FreeCAD.ActiveDocument.getObject(obj_name)
+    if (obj and len(getattr(obj, "Geometry", [])) > source_index and \
+                hasattr(obj.Geometry[source_index], "Tag") and 
+                obj.Geometry[source_index].Tag):
+        if isSketch(obj):
+            return obj.Geometry[source_index].Tag
+        elif isWire(obj):
+            return "{}_{}".format(getattr(obj, "Name", ""), 
+                                getattr(obj.Geometry[source_index], "Tag", ""))
+    return '{}_{}'.format(obj_name, source_index)
 
 
 #------------------------------------------------------------------------------
 # Object data manipulation
 #------------------------------------------------------------------------------
 
+def vec_quant(p):
+    """
+    Collapse points by tolerance using quantization.
+    Points within ~tol map to the same key.
+    """
+    t = 1e-6
+    return (
+        int(round(p[0] / t)),
+        int(round(p[1] / t)),
+        int(round(p[2] / t)),
+    )
 
 def vec_to_xyz(v):
     """Return (x,y,z) tuple from a FreeCAD.Vector-like object."""

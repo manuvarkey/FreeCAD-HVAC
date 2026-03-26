@@ -26,12 +26,11 @@ import math
 
 import FreeCAD
 
+from . import hvaclib
 from .hvaclib import (
     isWire,
     isSketch,
     vec_to_xyz,
-    get_segment_section_params,
-    compute_port_position,
     nx
 )
 
@@ -97,8 +96,7 @@ class DuctNetworkParser:
         Collapse points by tolerance using quantization.
         Points within ~tol map to the same key.
         """
-        from .DuctNetwork import DuctJunction
-        return DuctJunction.makeSimpleKey(p)
+        return hvaclib.vec_quant(p)
 
     def _get_node_id(self, p):
         k = self._key(p)
@@ -151,7 +149,7 @@ class DuctNetworkParser:
                     ep = geo.EndPoint
                     # Skip degenerate lines
                     if (sp.sub(ep)).Length > tol:
-                        tag = DuctSegment.makeKey(sketch_obj.Name, slno)
+                        tag = hvaclib.makeLineKey(sketch_obj.Name, slno)
                         yield (vec_to_xyz(sp), vec_to_xyz(ep), tag)
 
     def _iter_line_segments_from_shape(self, obj, tol=1e-9):
@@ -174,9 +172,7 @@ class DuctNetworkParser:
                 v1 = e.Vertexes[0].Point
                 v2 = e.Vertexes[-1].Point
                 if (v1.sub(v2)).Length > tol:
-                    tag = "{}_{}".format(getattr(obj, "Name", ""), getattr(e, "Tag", ""))
-                    #TODO make use of DuctSegment.makeKey()
-                    tag = DuctSegment.makeKey(obj.Name, slno)
+                    tag = hvaclib.makeLineKey(obj.Name, slno)
                     yield (vec_to_xyz(v1), vec_to_xyz(v2), tag)
 
     ## Graph build utilities
@@ -271,7 +267,7 @@ class DuctNetworkParser:
             seg_obj = segment_map.get(edge_key)
 
             if seg_obj:
-                section_params = get_segment_section_params(seg_obj)
+                section_params = hvaclib.get_segment_section_params(seg_obj)
                 profile = getattr(seg_obj, "Profile", "")
                 attachment = getattr(seg_obj, "Attachment", "Center")
                 user_offset = getattr(seg_obj, "Offset", FreeCAD.Vector(0,0,0))
@@ -285,7 +281,7 @@ class DuctNetworkParser:
 
             base_point = FreeCAD.Vector(node_point)  # parser node position
 
-            final_pos = compute_port_position(
+            final_pos = hvaclib.compute_port_position(
                 base_point,
                 direction_seg_ref,  # Use segment reference for computation of port position
                 section_params,

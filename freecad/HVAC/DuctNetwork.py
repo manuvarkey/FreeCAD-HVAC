@@ -506,20 +506,6 @@ class DuctSegment:
         return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctSegment)
 
     @staticmethod
-    def makeKey(obj_name, source_index):
-        source_index = int(source_index)
-        obj = FreeCAD.ActiveDocument.getObject(obj_name)
-        if (obj and len(getattr(obj, "Geometry", [])) > source_index and \
-                    hasattr(obj.Geometry[source_index], "Tag") and 
-                    obj.Geometry[source_index].Tag):
-            if hvaclib.isSketch(obj):
-                return obj.Geometry[source_index].Tag
-            elif hvaclib.isWire(obj):
-                return "{}_{}".format(getattr(obj, "Name", ""), 
-                                    getattr(obj.Geometry[source_index], "Tag", ""))
-        return '{}_{}'.format(obj_name, source_index)
-
-    @staticmethod
     def labelFor(source_obj, source_index):
         return "{} [{}]".format(source_obj.Label if source_obj else "Segment", int(source_index))
 
@@ -850,19 +836,6 @@ class DuctJunction:
     @staticmethod
     def isDuctJunction(obj):
         return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunction)
-
-    @staticmethod
-    def makeSimpleKey(p):
-        """
-        Collapse points by tolerance using quantization.
-        Points within ~tol map to the same key.
-        """
-        t = 1e-6
-        return (
-            int(round(p[0] / t)),
-            int(round(p[1] / t)),
-            int(round(p[2] / t)),
-        )
     
     @staticmethod
     def labelFor(family, node_id):
@@ -1393,7 +1366,7 @@ class DuctNetwork:
                 continue
             key = getattr(child, "SegmentKey", "")
             if not key and getattr(child, "SourceObjectName", ""):
-                key = DuctSegment.makeKey(child.SourceObjectName, child.SourceIndex)
+                key = hvaclib.makeLineKey(child.SourceObjectName, child.SourceIndex)
             if key:
                 segments[key] = child
         return segments
@@ -1835,7 +1808,7 @@ class DuctNetwork:
                 junction_obj = None
                 matched_old_key = None
                 for old_key, junc in existing_junctions.items():
-                    if DuctJunction.makeSimpleKey(junc.CenterPoint) == DuctJunction.makeSimpleKey(point):
+                    if hvaclib.vec_quant(junc.CenterPoint) == hvaclib.vec_quant(point):
                         junction_obj = junc
                         matched_old_key = old_key
                         break
