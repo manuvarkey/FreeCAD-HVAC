@@ -33,6 +33,7 @@ translate = FreeCAD.Qt.translate
 from . import hvaclib
 from . import Observer
 from . import TaskPanel
+from .NetworkParser import DuctNetworkParser
 
 
 class DuctManagedFolder:
@@ -1962,7 +1963,7 @@ class DuctNetwork:
     
         self._sync_in_progress = True
         try:
-            parser = hvaclib.DuctNetworkParser(list(base_folder.OutList))
+            parser = DuctNetworkParser(list(base_folder.OutList))
             
             if self._initial_sync:  
                 # Do not run junction update on initial sync since edge tags will not be updated in segments
