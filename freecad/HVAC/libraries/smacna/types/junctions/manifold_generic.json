@@ -1,0 +1,23 @@
+{
+  "id": "manifold_generic",
+  "label": "Manifold - Generic",
+  "category": "junction",
+  "family": "manifold",
+  "profiles": ["Circular", "Rectangular", "Oval"],
+  "constraints": {
+    "degree_min": 5
+  },
+  "properties": [
+    {
+      "name": "TrimLength",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for ports",
+      "default": 100.0
+    }
+  ],
+  "generator": {
+    "module": "junctions",
+    "function": "build_manifold"
+  }
+}
