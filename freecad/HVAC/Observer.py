@@ -56,7 +56,7 @@ class NewSketchObserver:
         # Called when a new object is created in the document
         if self._finished or self.created_sketch is not None:
             return
-        if obj and obj.Document == self.doc and hvaclib.obj_is_sketch(obj):
+        if obj and obj.Document == self.doc and hvaclib.isSketch(obj):
             self.created_sketch = obj
 
     def check_finished(self):
@@ -197,9 +197,9 @@ class DuctNetworkChangeObserver:
             return
 
         # React only to properties relevant to geometry updates
-        if hvaclib.obj_is_sketch(obj):
+        if hvaclib.isSketch(obj):
             relevant_props = ("Geometry", "Shape", "Placement")
-        elif hvaclib.obj_is_wire(obj):
+        elif hvaclib.isWire(obj):
             relevant_props = ("Points", "Shape", "Placement")
         else:
             return
@@ -286,7 +286,7 @@ class DuctNetworkChangeObserver:
         proxy = getattr(net, "Proxy", None)
         if proxy:
             # Patch: turn off snapper for wire objects
-            if hvaclib.obj_is_wire(obj):
+            if hvaclib.isWire(obj):
                 try:
                     if hasattr(Gui, "Snapper") and Gui.Snapper:
                         try:
@@ -324,7 +324,7 @@ class DuctNetworkChangeObserver:
         obj = getattr(in_edit, "Object", None) if in_edit else None
 
         # Check if the object type is relevant
-        if not ( hvaclib.obj_is_sketch(obj) or hvaclib.obj_is_wire(obj) ):
+        if not ( hvaclib.isSketch(obj) or hvaclib.isWire(obj) ):
             if self._edited_base_obj is not None:
                 self._finishEditedBaseObject()
             return

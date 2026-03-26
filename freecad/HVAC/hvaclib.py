@@ -80,319 +80,162 @@ else:
 # Library management
 #------------------------------------------------------------------------------
 
-
-def get_default_library_search_paths():
-    return [
-        get_file_path("libraries"),
-    ]
-
-def get_hvac_library_registry():
-    reg = hvac_library_registry()
-    if not getattr(reg, "_search_paths", None):
-        reg.set_search_paths(get_default_library_search_paths())
-    reg.ensure_loaded()
-    return reg
-
-def get_active_hvac_library():
-    reg = get_hvac_library_registry()
-    return reg.get_active_library()
+class HVACLibraryService:
     
-def reload_hvac_libraries():
-    reg = get_hvac_library_registry()
-    reg.reload()
-    return reg
-    
-def segment_profiles_for_library(library_id):
-    reg = get_hvac_library_registry()
-    lib = reg.get_library(library_id)
-    if lib is None:
-        return []
-    return lib.list_profiles(category="segment", family="straight_segment")
+    @staticmethod
+    def get_hvac_library_registry():
+        reg = hvac_library_registry()
+        if not getattr(reg, "_search_paths", None):
+            reg.set_search_paths(get_default_library_search_paths())
+        reg.ensure_loaded()
+        return reg
+        
+    @staticmethod
+    def get_active_hvac_library():
+        reg = HVACLibraryService.get_hvac_library_registry()
+        return reg.get_active_library()
 
-def default_segment_profile_for_library(library_id):
-    reg = get_hvac_library_registry()
-    lib = reg.get_library(library_id)
-    if lib is None:
-        return ""
-    return lib.default_profile(category="segment", family="straight_segment")
+    @staticmethod
+    def reload_hvac_libraries():
+        reg = HVACLibraryService.get_hvac_library_registry()
+        reg.reload()
+        return reg
 
-def default_segment_type_id_for_profile(library_id, profile):
-    reg = get_hvac_library_registry()
-    lib = reg.get_library(library_id)
-    if lib is None:
-        return ""
+    @staticmethod
+    def segment_profiles_for_library(library_id):
+        reg = HVACLibraryService.get_hvac_library_registry()
+        lib = reg.get_library(library_id)
+        if lib is None:
+            return []
+        return lib.list_profiles(category="segment", family="straight_segment")
 
-    type_defs = lib.list_types(
-        category="segment",
-        family="straight_segment",
-        profile=profile if profile else None,
-    )
-    if not type_defs:
-        return ""
-    return type_defs[0].id
-    
-def classify_junction_family(node_analysis):
-    degree = int(node_analysis.get("degree", 0))
-    collinear_pairs = node_analysis.get("collinear_pairs", [])
-    orthogonal_pairs = node_analysis.get("orthogonal_pairs", [])
+    @staticmethod
+    def default_segment_profile_for_library(library_id):
+        reg = HVACLibraryService.get_hvac_library_registry()
+        lib = reg.get_library(library_id)
+        if lib is None:
+            return ""
+        return lib.default_profile(category="segment", family="straight_segment")
 
-    if degree <= 0:
-        return "invalid"
+    @staticmethod
+    def default_segment_type_id_for_profile(library_id, profile):
+        reg = HVACLibraryService.get_hvac_library_registry()
+        lib = reg.get_library(library_id)
+        if lib is None:
+            return ""
 
-    if degree == 1:
-        return "terminal"
+        type_defs = lib.list_types(
+            category="segment",
+            family="straight_segment",
+            profile=profile if profile else None,
+        )
+        if not type_defs:
+            return ""
+        return type_defs[0].id
 
-    if degree == 2:
-        if collinear_pairs:
-            return "transition"
-        return "elbow"
+    @staticmethod
+    def classify_junction_family(node_analysis):
+        degree = int(node_analysis.get("degree", 0))
+        collinear_pairs = node_analysis.get("collinear_pairs", [])
+        orthogonal_pairs = node_analysis.get("orthogonal_pairs", [])
 
-    if degree == 3:
-        if collinear_pairs:
-            return "tee"
-        return "wye"
+        if degree <= 0:
+            return "invalid"
 
-    if degree == 4:
-        if len(collinear_pairs) >= 2 and orthogonal_pairs:
-            return "cross"
+        if degree == 1:
+            return "terminal"
+
+        if degree == 2:
+            if collinear_pairs:
+                return "transition"
+            return "elbow"
+
+        if degree == 3:
+            if collinear_pairs:
+                return "tee"
+            return "wye"
+
+        if degree == 4:
+            if len(collinear_pairs) >= 2 and orthogonal_pairs:
+                return "cross"
+            return "manifold"
+
         return "manifold"
 
-    return "manifold"
+    @staticmethod
+    def default_junction_type_id(family):
+        mapping = {
+            "terminal": "terminal_marker",
+            "transition": "transition_generic",
+            "elbow": "elbow_generic",
+            "tee": "tee_generic",
+            "wye": "wye_generic",
+            "cross": "cross_generic",
+            "manifold": "manifold_generic",
+        }
+        return mapping.get(family, "manifold_marker")
 
-def default_junction_type_id(family):
-    mapping = {
-        "terminal": "terminal_marker",
-        "transition": "transition_generic",
-        "elbow": "elbow_generic",
-        "tee": "tee_generic",
-        "wye": "wye_generic",
-        "cross": "cross_generic",
-        "manifold": "manifold_generic",
-    }
-    return mapping.get(family, "manifold_marker")
-    
-def all_junction_type_defs(library_id=None, family=None):
-    reg = get_hvac_library_registry()
-    lib = reg.get_library(library_id) if library_id else reg.get_active_library()
-    if lib is None:
-        return []
-    return lib.list_types(category="junction", family=family)
-    
-def all_type_defs_for_object(obj):
-    reg = get_hvac_library_registry()
-    library_id = getattr(obj, "LibraryId", "")
-    family = getattr(obj, "Family", "")
-    profile = getattr(obj, "Profile", "")
+    @staticmethod
+    def all_junction_type_defs(library_id=None, family=None):
+        reg = HVACLibraryService.get_hvac_library_registry()
+        lib = reg.get_library(library_id) if library_id else reg.get_active_library()
+        if lib is None:
+            return []
+        return lib.list_types(category="junction", family=family)
 
-    lib = reg.get_library(library_id) if library_id else reg.get_active_library()
-    if lib is None:
-        return []
+    @staticmethod
+    def all_type_defs_for_object(obj):
+        reg = HVACLibraryService.get_hvac_library_registry()
+        library_id = getattr(obj, "LibraryId", "")
+        family = getattr(obj, "Family", "")
+        profile = getattr(obj, "Profile", "")
 
-    if isDuctSegment(obj):
-        return lib.list_types(category="segment")
+        lib = reg.get_library(library_id) if library_id else reg.get_active_library()
+        if lib is None:
+            return []
 
-    if isDuctJunction(obj):
-        return lib.list_types(
-            category="junction",
-            family=family or None,
-            profile=profile or None,
-        )
+        if isDuctSegment(obj):
+            return lib.list_types(category="segment")
 
-    return []
-    
-def type_labels_for_object(obj):
-    out = []
-    for tdef in all_type_defs_for_object(obj):
-        out.append((tdef.label, tdef.id))
-    return out
-    
-def segment_end_for_node(parser, edge_ref, node_id):
-    """
-    Return 'start' if node_id is the start node of edge_ref,
-    'end' if it is the end node.
-    """
-    start_node, end_node = parser.edge_nodes(edge_ref)
-    if node_id == start_node:
-        return "start"
-    if node_id == end_node:
-        return "end"
-    return ""
-    
-def debug_print_loaded_libraries():
-    reg = get_hvac_library_registry()
-    libs = reg.list_libraries()
-    if not libs:
-        FreeCAD.Console.PrintWarning("HVAC - No libraries loaded.\n")
-        return
-
-    for lib in libs:
-        FreeCAD.Console.PrintMessage(
-            "HVAC - Library loaded: {} ({}) with {} types\n".format(
-                lib.label, lib.id, len(lib.types_by_id)
+        if isDuctJunction(obj):
+            return lib.list_types(
+                category="junction",
+                family=family or None,
+                profile=profile or None,
             )
-        )
+
+        return []
+
+    @staticmethod
+    def type_labels_for_object(obj):
+        out = []
+        for tdef in HVACLibraryService.all_type_defs_for_object(obj):
+            out.append((tdef.label, tdef.id))
+        return out
+
+    @staticmethod
+    def debug_print_loaded_libraries():
+        reg = HVACLibraryService.get_hvac_library_registry()
+        libs = reg.list_libraries()
+        if not libs:
+            FreeCAD.Console.PrintWarning("HVAC - No libraries loaded.\n")
+            return
+
+        for lib in libs:
+            FreeCAD.Console.PrintMessage(
+                "HVAC - Library loaded: {} ({}) with {} types\n".format(
+                    lib.label, lib.id, len(lib.types_by_id)
+                )
+            )
 
 
-#------------------------------------------------------------------------------
-# State management
-#------------------------------------------------------------------------------
+@dataclass(frozen=True)
+class EdgeRef:
+    """Stable reference to an edge created from (obj_name, local_line_index)."""
+    obj_name: str
+    local_index: int
+    tag: str
 
-
-def isDuctNetwork(obj):
-    from .DuctNetwork import DuctNetwork
-    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctNetwork)
-    
-def isDuctSegment(obj):
-    from .DuctNetwork import DuctSegment
-    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctSegment)
-    
-def isDuctJunction(obj):
-    from .DuctNetwork import DuctJunction
-    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunction)
-    
-def isDuctManagedFolder(obj):
-    from .DuctNetwork import DuctManagedFolder
-    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctManagedFolder)
-
-def activeHVACNetwork():
-    doc = Gui.ActiveDocument
-
-    if doc is None or doc.ActiveView is None:
-        return None
-    active_network = doc.ActiveView.getActiveObject(DUCT_NETWORK_CONTEXT_KEY)
-
-    if active_network:
-        return active_network
-
-def allHVACNetworks(doc: FreeCAD.Document | None = None) -> list | None:
-    from .DuctNetwork import DuctNetwork
-    doc = FreeCAD.ActiveDocument if doc is None else doc
-    if doc is None:
-        return None
-    hvac_networks = []
-    if hasattr(doc, "Objects"):
-        hvac_networks = [
-            n for n in doc.Objects 
-            if DuctNetwork.isDuctNetwork(n)
-        ]
-    return hvac_networks
-
-def selectedHVACNetworks():
-    from .DuctNetwork import DuctNetwork
-    objs = Gui.Selection.getSelection()
-    if objs:
-        filtered = [o for o in objs if DuctNetwork.isDuctNetwork(o)]
-        return filtered
-    return None
-
-def selectedGeometryObjects():
-    from .DuctNetwork import DuctSegment, DuctJunction
-    objs = Gui.Selection.getSelection()
-    if objs:
-        filtered = [
-            o for o in objs
-            if DuctSegment.isDuctSegment(o) or DuctJunction.isDuctJunction(o)
-        ]
-        return filtered
-    return None
-    
-def selectedBaseObjects():
-    from .DuctNetwork import DuctNetwork
-    objs = Gui.Selection.getSelection()
-    if objs:
-        filtered = [o for o in objs if DuctNetwork.isBaseObject(o)]
-        return filtered
-    return None
-    
-def getOwnerNetwork(obj):
-    from .DuctNetwork import DuctNetwork
-    return DuctNetwork.getOwnerNetwork(obj)
-
-def refreshState():
-    if not FreeCAD.GuiUp:
-        return
-    
-    # Recompute document
-    doc = FreeCAD.ActiveDocument
-    if doc:
-        FreeCAD.ActiveDocument.recompute()
-    
-    # Refresh TaskWatchers
-    def _do_refresh():
-        """Refresh HVAC task watchers after commands that change watcher conditions"""
-        try:
-            wb = Gui.activeWorkbench()
-            if wb and hasattr(wb, "refreshWatchers"):
-                wb.refreshWatchers()
-        except Exception as e:
-            FreeCAD.Console.PrintError(traceback.format_exc())
-            FreeCAD.Console.PrintWarning("HVAC - refreshState: {}".format(e))
-    
-    QtCore.QTimer.singleShot(0, _do_refresh)
-    
-
-#------------------------------------------------------------------------------
-# Object query
-#------------------------------------------------------------------------------
-
-
-def obj_is_sketch(obj):
-    # Robust check for Sketcher objects
-    try:
-        return hasattr(obj, "TypeId") and (
-            obj.TypeId.startswith("Sketcher::SketchObject")
-            or obj.TypeId.startswith("Sketcher::SketchObjectPython")
-        )
-    except:
-        return None
-
-def obj_is_wire(obj):
-    # Draft Wire is usually Part::Feature (or FeaturePython) with Draft properties
-    try:
-        return (
-            obj.TypeId == "Part::FeaturePython"
-            and hasattr(obj, "Proxy")
-            and hasattr(obj.Proxy, "Type")
-            and getattr(obj.Proxy, "Type") == "Wire"
-        )
-    except:
-        return None
-
-def get_obj_name(obj):
-    # Get object name from FreeCAD object
-    return getattr(obj, "Name", "")
-
-def get_obj_by_name(name, doc=None):
-    # Get object by name from FreeCAD document
-    if doc is None:
-        doc = FreeCAD.ActiveDocument
-    obj = doc.getObject(name)
-    return obj
-
-
-#------------------------------------------------------------------------------
-# Object data manipulation
-#------------------------------------------------------------------------------
-
-
-def vec_to_xyz(v):
-    """Return (x,y,z) tuple from a FreeCAD.Vector-like object."""
-    return (float(v.x), float(v.y), float(v.z))
-
-# Attachment offset with duct direction along Z axis +ve direction
-# Viewed from start of duct, X axis -> To Left, Y axis -> To Top
-ATTACH_MAP = {
-    "TopLeft": (1, 1), "TopCenter": (0, 1), "TopRight": (-1, 1),
-    "CenterLeft": (1, 0), "Center": (0, 0), "CenterRight": (-1, 0),
-    "BottomLeft": (1, -1), "BottomCenter": (0, -1), "BottomRight": (-1, -1),
-}
-
-def get_segment_profile_x_axis(seg):
-    try:
-        v = FreeCAD.Vector(getattr(seg, "ProfileXAxis", FreeCAD.Vector(0, 0, 0)))
-    except Exception:
-        v = FreeCAD.Vector(0, 0, 0)
-    return v
 
 @dataclass
 class JunctionPort:
@@ -414,204 +257,6 @@ class JunctionPort:
     attachment: str
     user_offset: tuple
     profile_x_axis: tuple | None = None
-
-def get_segment_section_params(seg):
-    """
-    Return generic section parameters for a segment.
-    This is profile-dependent and intentionally not reduced to a single diameter.
-    """
-    profile = str(getattr(seg, "Profile", "") or "")
-
-    if profile == "Circular":
-        return {
-            "Diameter": float(getattr(seg, "Diameter", 0.0) or 0.0),
-        }
-
-    if profile == "Rectangular":
-        return {
-            "Width": float(getattr(seg, "Width", 0.0) or 0.0),
-            "Height": float(getattr(seg, "Height", 0.0) or 0.0),
-        }
-        
-    if profile == "Oval":
-        return {
-            "Width": float(getattr(seg, "Width", 0.0) or 0.0),
-            "Height": float(getattr(seg, "Height", 0.0) or 0.0),
-        }
-
-    # Generic fallback for future profiles
-    out = {}
-    for name in ("Diameter", "Width", "Height"):
-        if hasattr(seg, name):
-            try:
-                out[name] = float(getattr(seg, name) or 0.0)
-            except Exception:
-                pass
-    return out
-    
-def get_section_extents(section_params):
-    # rectangular
-    if "Width" in section_params and "Height" in section_params:
-        return float(section_params["Width"]), float(section_params["Height"])
-    # circular (use diameter as box)
-    if "Diameter" in section_params:
-        d = float(section_params["Diameter"])
-        return d, d
-    # fallback
-    return 0.0, 0.0
-    
-def make_profile_frame(direction, preferred_x=None, origin=None):
-    """
-    Build a right-handed frame with:
-      z_dir = normalized(direction)
-      x_dir = preferred cross-section X axis projected onto the normal plane
-      y_dir = z_dir cross x_dir
-
-    preferred_x:
-      - None or zero-length => automatic stable frame
-      - otherwise projected to plane normal to z_dir
-    """
-    z_dir = FreeCAD.Vector(direction)
-    if z_dir.Length <= 1e-12:
-        raise ValueError("Direction vector too small")
-    z_dir.normalize()
-
-    x_dir = None
-    if preferred_x is not None:
-        px = FreeCAD.Vector(preferred_x)
-        if px.Length > 1e-12:
-            # Remove tangent component so X stays in section plane
-            px = px - z_dir * px.dot(z_dir)
-            if px.Length > 1e-12:
-                px.normalize()
-                x_dir = px
-    
-    if x_dir is None:
-        ref = FreeCAD.Vector(0, 0, 1)
-        if abs(z_dir.dot(ref)) > 0.99:
-            ref = FreeCAD.Vector(1, 0, 0)
-        x_dir = ref.cross(z_dir)
-        if x_dir.Length <= 1e-12:
-            raise ValueError("Failed to compute X axis")
-        x_dir.normalize()
-
-    y_dir = z_dir.cross(x_dir)
-    if y_dir.Length <= 1e-12:
-        raise ValueError("Failed to compute Y axis")
-    y_dir.normalize()
-
-    # Re-orthogonalize X for numerical cleanliness
-    x_dir = y_dir.cross(z_dir)
-    x_dir.normalize()
-
-    mat = FreeCAD.Matrix()
-    mat.A11, mat.A12, mat.A13 = x_dir.x, y_dir.x, z_dir.x
-    mat.A21, mat.A22, mat.A23 = x_dir.y, y_dir.y, z_dir.y
-    mat.A31, mat.A32, mat.A33 = x_dir.z, y_dir.z, z_dir.z
-
-    placement = FreeCAD.Placement(mat)
-    if origin is not None:
-        placement.Base = origin
-
-    return placement, x_dir, y_dir, z_dir
-
-def compute_port_position(base_point, direction, section_params, attachment, user_offset_vec, profile_x_axis):
-    ax, ay = ATTACH_MAP.get(str(attachment or "Center"), (0, 0))
-    W, H = get_section_extents(section_params)
-    _, local_x, local_y, local_z = make_profile_frame(direction, preferred_x=profile_x_axis)
-    attach_offset = (-ax * W * 0.5) * local_x + (-ay * H * 0.5) * local_y
-    return base_point + attach_offset + user_offset_vec
-    
-def resolve_endpoint(node_point, direction, seg_obj):
-    return compute_port_position(
-        node_point,
-        direction,
-        get_segment_section_params(seg_obj),
-        getattr(seg_obj, "Attachment", "Center"),
-        getattr(seg_obj, "Offset", FreeCAD.Vector(0,0,0)),
-        get_segment_profile_x_axis(seg_obj)
-    )
-
-def build_junction_ports(parser, node_id, edge_refs, segment_map=None):
-    """
-    Build generic port descriptors for a junction node.
-
-    segment_map:
-        dict { segment_key : DuctSegment object }
-    """
-    ports = []
-    segment_map = segment_map or {}
-
-    node_point = FreeCAD.Vector(*parser.node_xyz(node_id))
-
-    for edge_ref in edge_refs:
-        edge_key = edge_ref.tag
-        segment_end = segment_end_for_node(parser, edge_ref, node_id)
-        if segment_end not in ("start", "end"):
-            continue
-
-        sp, ep = parser.edge_line(edge_ref)
-        sp_vec = FreeCAD.Vector(*sp)
-        ep_vec = FreeCAD.Vector(*ep)
-
-        # Direction points away from the junction along the connected segment
-        if segment_end == "start":
-            other = ep_vec
-        else:
-            other = sp_vec
-
-        direction_port_ref = other - node_point
-        direction_seg_ref = ep_vec - sp_vec
-        if direction_port_ref.Length <= 1e-9:
-            continue
-        direction_port_ref.normalize()
-
-        seg_obj = segment_map.get(edge_key)
-        
-        if seg_obj:
-            section_params = get_segment_section_params(seg_obj)
-            profile = getattr(seg_obj, "Profile", "")
-            attachment = getattr(seg_obj, "Attachment", "Center")
-            user_offset = getattr(seg_obj, "Offset", FreeCAD.Vector(0,0,0))
-            profile_x = get_segment_profile_x_axis(seg_obj)
-        else:
-            section_params = {}
-            profile = ""
-            attachment = "Center"
-            user_offset = FreeCAD.Vector(0,0,0)
-            profile_x = FreeCAD.Vector(0,0,0)
-        
-        base_point = FreeCAD.Vector(node_point)  # parser node position
-        
-        final_pos = compute_port_position(
-            base_point,
-            direction_seg_ref,  # Use segment reference for computation of port position
-            section_params,
-            attachment,
-            user_offset,
-            profile_x
-        )
-        
-        ports.append(JunctionPort(
-            edge_key = edge_key,
-            segment_end = segment_end,
-            position = vec_to_xyz(final_pos),
-            direction = vec_to_xyz(direction_port_ref),  # Use port reference convention
-            profile = profile,
-            section_params = section_params,
-            attachment = attachment,
-            user_offset = vec_to_xyz(user_offset),
-            profile_x_axis = vec_to_xyz(profile_x) if profile_x.Length > 1e-12 else None
-        ))
-
-    return ports
-
-@dataclass(frozen=True)
-class EdgeRef:
-    """Stable reference to an edge created from (obj_name, local_line_index)."""
-    obj_name: str
-    local_index: int
-    tag: str
 
 
 class DuctNetworkParser:
@@ -635,24 +280,53 @@ class DuctNetworkParser:
 
         # Build data structures
         if objs:
-            self.compile_lines_from_objects(objs)
+            self._compile_lines_from_objects(objs)
         self.build_graph()
 
     ## Data Parser Methods
+    
+    def _key(self, p):
+        """
+        Collapse points by tolerance using quantization.
+        Points within ~tol map to the same key.
+        """
+        from .DuctNetwork import DuctJunction
+        return DuctJunction.makeSimpleKey(p)
 
-    def compile_lines_from_objects(self, objs):
+    def _get_node_id(self, p):
+        k = self._key(p)
+        nid = self.node_id_by_key.get(k)
+        if nid is None:
+            nid = len(self.node_id_by_key) + 1  # start node ids from 1
+            self.node_id_by_key[k] = nid
+            self.node_point[nid] = p
+        return nid
+        
+    def _segment_end_for_node(self, edge_ref, node_id):
+        """
+        Return 'start' if node_id is the start node of edge_ref,
+        'end' if it is the end node.
+        """
+        start_node, end_node = self.edge_nodes(edge_ref)
+        if node_id == start_node:
+            return "start"
+        if node_id == end_node:
+            return "end"
+        return ""
+
+    def _compile_lines_from_objects(self, objs):
         self.lines_map = {}
         self.all_lines = []
         for obj in objs:
-            if obj_is_wire(obj):
-                for sp, ep, tag in self.iter_line_segments_from_shape(obj):
-                    self.parse_obj(obj, sp, ep, tag)
-            elif obj_is_sketch(obj):
-                for sp, ep, tag in self.iter_line_segments_from_sketch(obj):
-                    self.parse_obj(obj, sp, ep, tag)
+            if isWire(obj):
+                for sp, ep, tag in self._iter_line_segments_from_shape(obj):
+                    self._parse_obj(obj, sp, ep, tag)
+            elif isSketch(obj):
+                for sp, ep, tag in self._iter_line_segments_from_sketch(obj):
+                    self._parse_obj(obj, sp, ep, tag)
         return self.lines_map, self.all_lines
 
-    def parse_obj(self, obj, sp, ep, tag):
+    def _parse_obj(self, obj, sp, ep, tag):
         obj_name = getattr(obj, "Name", None)
         if obj_name:
             if obj_name not in self.lines_map:
@@ -660,7 +334,7 @@ class DuctNetworkParser:
             self.lines_map[obj_name].append((sp, ep, tag))
             self.all_lines.append((sp, ep, tag))
 
-    def iter_line_segments_from_sketch(self, sketch_obj, tol=1e-9):
+    def _iter_line_segments_from_sketch(self, sketch_obj, tol=1e-9):
         """
         Yield (start_point, end_point, tag) for all non-construction LINE segments in a Sketch.
         """
@@ -685,7 +359,7 @@ class DuctNetworkParser:
                         tag = DuctSegment.makeKey(sketch_obj.Name, slno)
                         yield (vec_to_xyz(sp), vec_to_xyz(ep), tag)
 
-    def iter_line_segments_from_shape(self, obj, tol=1e-9):
+    def _iter_line_segments_from_shape(self, obj, tol=1e-9):
         """
         Yield (start_point, end_point) for all straight edges in obj.Shape.
         Works for Draft Wire (and many Part-based objects) as long as Shape exists.
@@ -711,23 +385,6 @@ class DuctNetworkParser:
                     yield (vec_to_xyz(v1), vec_to_xyz(v2), tag)
 
     ## Graph build utilities
-
-    def _key(self, p):
-        """
-        Collapse points by tolerance using quantization.
-        Points within ~tol map to the same key.
-        """
-        from .DuctNetwork import DuctJunction
-        return DuctJunction.makeSimpleKey(p)
-
-    def _get_node_id(self, p):
-        k = self._key(p)
-        nid = self.node_id_by_key.get(k)
-        if nid is None:
-            nid = len(self.node_id_by_key) + 1  # start node ids from 1
-            self.node_id_by_key[k] = nid
-            self.node_point[nid] = p
-        return nid
 
     def build_graph(self, tol=1e-6):
         """
@@ -767,8 +424,85 @@ class DuctNetworkParser:
 
         self.graph = G
         return G
-
+        
+    ## Junction/ port building
+    
+    def build_junction_ports(self, node_id, edge_refs, segment_map=None):
+        """
+        Build generic port descriptors for a junction node.
+    
+        segment_map:
+            dict { segment_key : DuctSegment object }
+        """
+        ports = []
+        segment_map = segment_map or {}
+    
+        node_point = FreeCAD.Vector(*self.node_xyz(node_id))
+    
+        for edge_ref in edge_refs:
+            edge_key = edge_ref.tag
+            segment_end = self._segment_end_for_node(edge_ref, node_id)
+            if segment_end not in ("start", "end"):
+                continue
+    
+            sp, ep = self.edge_line(edge_ref)
+            sp_vec = FreeCAD.Vector(*sp)
+            ep_vec = FreeCAD.Vector(*ep)
+    
+            # Direction points away from the junction along the connected segment
+            if segment_end == "start":
+                other = ep_vec
+            else:
+                other = sp_vec
+    
+            direction_port_ref = other - node_point
+            direction_seg_ref = ep_vec - sp_vec
+            if direction_port_ref.Length <= 1e-9:
+                continue
+            direction_port_ref.normalize()
+    
+            seg_obj = segment_map.get(edge_key)
+            
+            if seg_obj:
+                section_params = get_segment_section_params(seg_obj)
+                profile = getattr(seg_obj, "Profile", "")
+                attachment = getattr(seg_obj, "Attachment", "Center")
+                user_offset = getattr(seg_obj, "Offset", FreeCAD.Vector(0,0,0))
+                profile_x = getattr(seg_obj, "ProfileXAxis", FreeCAD.Vector(0, 0, 0))
+            else:
+                section_params = {}
+                profile = ""
+                attachment = "Center"
+                user_offset = FreeCAD.Vector(0,0,0)
+                profile_x = FreeCAD.Vector(0,0,0)
+            
+            base_point = FreeCAD.Vector(node_point)  # parser node position
+            
+            final_pos = compute_port_position(
+                base_point,
+                direction_seg_ref,  # Use segment reference for computation of port position
+                section_params,
+                attachment,
+                user_offset,
+                profile_x
+            )
+            
+            ports.append(JunctionPort(
+                edge_key = edge_key,
+                segment_end = segment_end,
+                position = vec_to_xyz(final_pos),
+                direction = vec_to_xyz(direction_port_ref),  # Use port reference convention
+                profile = profile,
+                section_params = section_params,
+                attachment = attachment,
+                user_offset = vec_to_xyz(user_offset),
+                profile_x_axis = vec_to_xyz(profile_x) if profile_x.Length > 1e-12 else None
+            ))
+    
+        return ports
+    
     ## Convenience queries
+    
     def node_count(self):
         return len(self.node_point)
 
@@ -913,11 +647,269 @@ class DuctNetworkParser:
             "orthogonal_pairs": orthogonal_pairs,
         }
 
+#------------------------------------------------------------------------------
+# State management
+#------------------------------------------------------------------------------
+
+def refreshState():
+    if not FreeCAD.GuiUp:
+        return
+    
+    # Recompute document
+    doc = FreeCAD.ActiveDocument
+    if doc:
+        FreeCAD.ActiveDocument.recompute()
+    
+    # Refresh TaskWatchers
+    def _do_refresh():
+        """Refresh HVAC task watchers after commands that change watcher conditions"""
+        try:
+            wb = Gui.activeWorkbench()
+            if wb and hasattr(wb, "refreshWatchers"):
+                wb.refreshWatchers()
+        except Exception as e:
+            FreeCAD.Console.PrintError(traceback.format_exc())
+            FreeCAD.Console.PrintWarning("HVAC - refreshState: {}".format(e))
+    
+    QtCore.QTimer.singleShot(0, _do_refresh)
+    
+
+#------------------------------------------------------------------------------
+# Object query
+#------------------------------------------------------------------------------
+
+def activeHVACNetwork():
+    doc = Gui.ActiveDocument
+
+    if doc is None or doc.ActiveView is None:
+        return None
+    active_network = doc.ActiveView.getActiveObject(DUCT_NETWORK_CONTEXT_KEY)
+
+    if active_network:
+        return active_network
+
+def allHVACNetworks(doc: FreeCAD.Document | None = None) -> list | None:
+    from .DuctNetwork import DuctNetwork
+    doc = FreeCAD.ActiveDocument if doc is None else doc
+    if doc is None:
+        return None
+    hvac_networks = []
+    if hasattr(doc, "Objects"):
+        hvac_networks = [
+            n for n in doc.Objects 
+            if DuctNetwork.isDuctNetwork(n)
+        ]
+    return hvac_networks
+
+def selectedHVACNetworks():
+    from .DuctNetwork import DuctNetwork
+    objs = Gui.Selection.getSelection()
+    if objs:
+        filtered = [o for o in objs if DuctNetwork.isDuctNetwork(o)]
+        return filtered
+    return None
+
+def selectedGeometryObjects():
+    from .DuctNetwork import DuctSegment, DuctJunction
+    objs = Gui.Selection.getSelection()
+    if objs:
+        filtered = [
+            o for o in objs
+            if DuctSegment.isDuctSegment(o) or DuctJunction.isDuctJunction(o)
+        ]
+        return filtered
+    return None
+    
+def selectedBaseObjects():
+    from .DuctNetwork import DuctNetwork
+    objs = Gui.Selection.getSelection()
+    if objs:
+        filtered = [o for o in objs if DuctNetwork.isBaseObject(o)]
+        return filtered
+    return None
+    
+def getOwnerNetwork(obj):
+    from .DuctNetwork import DuctNetwork
+    return DuctNetwork.getOwnerNetwork(obj)
+    
+def isDuctNetwork(obj):
+    from .DuctNetwork import DuctNetwork
+    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctNetwork)
+    
+def isDuctSegment(obj):
+    from .DuctNetwork import DuctSegment
+    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctSegment)
+    
+def isDuctJunction(obj):
+    from .DuctNetwork import DuctJunction
+    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunction)
+    
+def isDuctManagedFolder(obj):
+    from .DuctNetwork import DuctManagedFolder
+    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctManagedFolder)
+
+def isSketch(obj):
+    # Robust check for Sketcher objects
+    try:
+        return hasattr(obj, "TypeId") and (
+            obj.TypeId.startswith("Sketcher::SketchObject")
+            or obj.TypeId.startswith("Sketcher::SketchObjectPython")
+        )
+    except:
+        return None
+
+def isWire(obj):
+    # Draft Wire is usually Part::Feature (or FeaturePython) with Draft properties
+    try:
+        return (
+            obj.TypeId == "Part::FeaturePython"
+            and hasattr(obj, "Proxy")
+            and hasattr(obj.Proxy, "Type")
+            and getattr(obj.Proxy, "Type") == "Wire"
+        )
+    except:
+        return None
+
+def get_obj_name(obj):
+    # Get object name from FreeCAD object
+    return getattr(obj, "Name", "")
+
+def get_obj_by_name(name, doc=None):
+    # Get object by name from FreeCAD document
+    if doc is None:
+        doc = FreeCAD.ActiveDocument
+    obj = doc.getObject(name)
+    return obj
+
+
+#------------------------------------------------------------------------------
+# Object data manipulation
+#------------------------------------------------------------------------------
+
+
+def vec_to_xyz(v):
+    """Return (x,y,z) tuple from a FreeCAD.Vector-like object."""
+    return (float(v.x), float(v.y), float(v.z))
+
+# Attachment offset with duct direction along Z axis +ve direction
+# Viewed from start of duct, X axis -> To Left, Y axis -> To Top
+ATTACH_MAP = {
+    "TopLeft": (1, 1), "TopCenter": (0, 1), "TopRight": (-1, 1),
+    "CenterLeft": (1, 0), "Center": (0, 0), "CenterRight": (-1, 0),
+    "BottomLeft": (1, -1), "BottomCenter": (0, -1), "BottomRight": (-1, -1),
+}
+
+def get_segment_section_params(seg):
+    """
+    Return generic section parameters for a segment.
+    This is profile-dependent.
+    """
+    profile = str(getattr(seg, "Profile", "") or "")
+
+    if profile == "Circular":
+        return {
+            "Diameter": float(getattr(seg, "Diameter", 0.0) or 0.0),
+        }
+
+    if profile == "Rectangular":
+        return {
+            "Width": float(getattr(seg, "Width", 0.0) or 0.0),
+            "Height": float(getattr(seg, "Height", 0.0) or 0.0),
+        }
+        
+    if profile == "Oval":
+        return {
+            "Width": float(getattr(seg, "Width", 0.0) or 0.0),
+            "Height": float(getattr(seg, "Height", 0.0) or 0.0),
+        }
+
+    # Generic fallback for future profiles
+    out = {}
+    for name in ("Diameter", "Width", "Height"):
+        if hasattr(seg, name):
+            try:
+                out[name] = float(getattr(seg, name) or 0.0)
+            except Exception:
+                pass
+    return out
+    
+def get_section_extents(section_params):
+    # rectangular
+    if "Width" in section_params and "Height" in section_params:
+        return float(section_params["Width"]), float(section_params["Height"])
+    # circular (use diameter as box)
+    if "Diameter" in section_params:
+        d = float(section_params["Diameter"])
+        return d, d
+    # fallback
+    return 0.0, 0.0
+    
+def make_profile_frame(direction, preferred_x=None, origin=None):
+    """
+    Build a right-handed frame with:
+      z_dir = normalized(direction)
+      x_dir = preferred cross-section X axis projected onto the normal plane
+      y_dir = z_dir cross x_dir
+
+    preferred_x:
+      - None or zero-length => automatic stable frame
+      - otherwise projected to plane normal to z_dir
+    """
+    z_dir = FreeCAD.Vector(direction)
+    if z_dir.Length <= 1e-12:
+        raise ValueError("Direction vector too small")
+    z_dir.normalize()
+
+    x_dir = None
+    if preferred_x is not None:
+        px = FreeCAD.Vector(preferred_x)
+        if px.Length > 1e-12:
+            # Remove tangent component so X stays in section plane
+            px = px - z_dir * px.dot(z_dir)
+            if px.Length > 1e-12:
+                px.normalize()
+                x_dir = px
+    
+    if x_dir is None:
+        ref = FreeCAD.Vector(0, 0, 1)
+        if abs(z_dir.dot(ref)) > 0.99:
+            ref = FreeCAD.Vector(1, 0, 0)
+        x_dir = ref.cross(z_dir)
+        if x_dir.Length <= 1e-12:
+            raise ValueError("Failed to compute X axis")
+        x_dir.normalize()
+
+    y_dir = z_dir.cross(x_dir)
+    if y_dir.Length <= 1e-12:
+        raise ValueError("Failed to compute Y axis")
+    y_dir.normalize()
+
+    # Re-orthogonalize X for numerical cleanliness
+    x_dir = y_dir.cross(z_dir)
+    x_dir.normalize()
+
+    mat = FreeCAD.Matrix()
+    mat.A11, mat.A12, mat.A13 = x_dir.x, y_dir.x, z_dir.x
+    mat.A21, mat.A22, mat.A23 = x_dir.y, y_dir.y, z_dir.y
+    mat.A31, mat.A32, mat.A33 = x_dir.z, y_dir.z, z_dir.z
+
+    placement = FreeCAD.Placement(mat)
+    if origin is not None:
+        placement.Base = origin
+
+    return placement, x_dir, y_dir, z_dir
+
+def compute_port_position(base_point, direction, section_params, attachment, user_offset_vec, profile_x_axis):
+    ax, ay = ATTACH_MAP.get(str(attachment or "Center"), (0, 0))
+    W, H = get_section_extents(section_params)
+    _, local_x, local_y, local_z = make_profile_frame(direction, preferred_x=profile_x_axis)
+    attach_offset = (-ax * W * 0.5) * local_x + (-ay * H * 0.5) * local_y
+    return base_point + attach_offset + user_offset_vec
+
 
 #------------------------------------------------------------------------------
 # Return paths...
 #------------------------------------------------------------------------------
-
 
 def get_module_path():
     """Function returns HVAC module path."""
@@ -943,6 +935,11 @@ def get_icon_path(icon_name: str):
     """Function returns path for icon file."""
     s_path = os.path.join(get_icon_base_path(), icon_name)
     return s_path
+    
+def get_default_library_search_paths():
+    return [
+        get_file_path("libraries"),
+    ]
 
 
 #------------------------------------------------------------------------------

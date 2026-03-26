@@ -106,7 +106,7 @@ class TaskPanelEditDuctNetwork:
 
     def valid_obj(self, obj):
         """Return True if the object is valid for selection."""
-        return hvaclib.obj_is_sketch(obj) or hvaclib.obj_is_wire(obj)
+        return hvaclib.isSketch(obj) or hvaclib.isWire(obj)
 
     def get_valid_selection(self, include_derived=True):
         """Return a list of valid objects for selection."""

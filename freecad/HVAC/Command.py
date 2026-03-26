@@ -161,9 +161,9 @@ class CommandEditBaseObject:
         if base_objs:
             base = DuctNetwork.DuctNetwork.getOwnerBaseObject(base_objs[0])
             if base:
-                if hvaclib.obj_is_sketch(base):
+                if hvaclib.isSketch(base):
                     Gui.ActiveDocument.setEdit(base.Name)
-                elif hvaclib.obj_is_wire(base):
+                elif hvaclib.isWire(base):
                     Gui.Selection.clearSelection()
                     Gui.Selection.addSelection(base)
                     Gui.ActiveDocument.setEdit(base)

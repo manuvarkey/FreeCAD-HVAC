@@ -152,7 +152,7 @@ class DuctSegment:
             if not library_id or not type_id:
                 return
 
-            reg = hvaclib.get_hvac_library_registry()
+            reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
             type_def = reg.resolve_type(library_id, type_id)
             if type_def is None:
                 raise ValueError(
@@ -256,7 +256,7 @@ class DuctSegment:
             obj.Height = 100.0
 
         if not getattr(obj, "LibraryId", ""):
-            lib = hvaclib.get_active_hvac_library()
+            lib = hvaclib.HVACLibraryService.get_active_hvac_library()
             if lib:
                 obj.LibraryId = lib.id
 
@@ -296,7 +296,7 @@ class DuctSegment:
                 pass
 
     def applyTypeSchema(self, obj):
-        reg = hvaclib.get_hvac_library_registry()
+        reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
         lib_id = getattr(obj, "LibraryId", "")
         type_id = getattr(obj, "TypeId", "")
         if not lib_id or not type_id:
@@ -511,9 +511,9 @@ class DuctSegment:
         if (obj and len(getattr(obj, "Geometry", [])) > source_index and \
                     hasattr(obj.Geometry[source_index], "Tag") and 
                     obj.Geometry[source_index].Tag):
-            if hvaclib.obj_is_sketch(obj):
+            if hvaclib.isSketch(obj):
                 return obj.Geometry[source_index].Tag
-            elif hvaclib.obj_is_wire(obj):
+            elif hvaclib.isWire(obj):
                 return "{}_{}".format(getattr(obj, "Name", ""), 
                                     getattr(obj.Geometry[source_index], "Tag", ""))
         return '{}_{}'.format(obj_name, source_index)
@@ -617,7 +617,7 @@ class DuctJunction:
             return
 
         try:
-            reg = hvaclib.get_hvac_library_registry()
+            reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
             type_def = reg.resolve_type(library_id, type_id)
             if type_def is None:
                 raise ValueError(
@@ -684,7 +684,7 @@ class DuctJunction:
         self._addProperty(obj, "App::PropertyString", "AnalysisJson", "HVAC", "Serialized topology analysis")
 
         if not getattr(obj, "LibraryId", ""):
-            lib = hvaclib.get_active_hvac_library()
+            lib = hvaclib.HVACLibraryService.get_active_hvac_library()
             if lib:
                 obj.LibraryId = lib.id
 
@@ -712,7 +712,7 @@ class DuctJunction:
                 pass
 
     def applyTypeSchema(self, obj):
-        reg = hvaclib.get_hvac_library_registry()
+        reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
         lib_id = getattr(obj, "LibraryId", "")
         type_id = getattr(obj, "TypeId", "")
         if not lib_id or not type_id:
@@ -803,13 +803,13 @@ class DuctJunction:
         if family and getattr(obj, "Family", "") != str(family):
             obj.Family = str(family)
             # If family changes, set TypeId to default for the family
-            obj.TypeId = hvaclib.default_junction_type_id(family)
+            obj.TypeId = hvaclib.HVACLibraryService.default_junction_type_id(family)
             changed = True
 
         if type_id and getattr(obj, "TypeId", "") != str(type_id):
             _library = getattr(obj, "LibraryId", "")
             _family = getattr(obj, "Family", "")
-            valid_type_ids = hvaclib.all_junction_type_defs(library_id=_library, family=_family)
+            valid_type_ids = hvaclib.HVACLibraryService.all_junction_type_defs(library_id=_library, family=_family)
             if type_id in valid_type_ids:
                 obj.TypeId = str(type_id)
                 changed = True
@@ -1018,12 +1018,12 @@ class DuctNetwork:
             )
 
         if not getattr(obj, "DefaultLibraryId", ""):
-            lib = hvaclib.get_active_hvac_library()
+            lib = hvaclib.HVACLibraryService.get_active_hvac_library()
             if lib:
                 obj.DefaultLibraryId = lib.id
 
         if not getattr(obj, "DefaultSegmentProfile", ""):
-            obj.DefaultSegmentProfile = hvaclib.default_segment_profile_for_library(
+            obj.DefaultSegmentProfile = hvaclib.HVACLibraryService.default_segment_profile_for_library(
                 getattr(obj, "DefaultLibraryId", "")
             )
             
@@ -1062,7 +1062,7 @@ class DuctNetwork:
         lib_id = DuctNetwork.getDefaultLibraryId(net)
         if not lib_id:
             return None
-        reg = hvaclib.get_hvac_library_registry()
+        reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
         return reg.get_library(lib_id)
 
     @staticmethod
@@ -1072,7 +1072,7 @@ class DuctNetwork:
             return profile
 
         lib_id = DuctNetwork.getDefaultLibraryId(net)
-        return hvaclib.default_segment_profile_for_library(lib_id)
+        return hvaclib.HVACLibraryService.default_segment_profile_for_library(lib_id)
         
     @staticmethod
     def getDefaultAttachment(net):
@@ -1095,11 +1095,11 @@ class DuctNetwork:
         attachement = DuctNetwork.getDefaultAttachment(net)
         offset = DuctNetwork.getDefaultOffset(net)
 
-        valid_profiles = hvaclib.segment_profiles_for_library(library_id)
+        valid_profiles = hvaclib.HVACLibraryService.segment_profiles_for_library(library_id)
         if profile not in valid_profiles:
-            profile = hvaclib.default_segment_profile_for_library(library_id)
+            profile = hvaclib.HVACLibraryService.default_segment_profile_for_library(library_id)
 
-        type_id = hvaclib.default_segment_type_id_for_profile(
+        type_id = hvaclib.HVACLibraryService.default_segment_type_id_for_profile(
             library_id,
             profile,
         )
@@ -1134,7 +1134,7 @@ class DuctNetwork:
 
         effective_library_id = library_id or getattr(net, "DefaultLibraryId", "")
 
-        valid_profiles = hvaclib.segment_profiles_for_library(effective_library_id)
+        valid_profiles = hvaclib.HVACLibraryService.segment_profiles_for_library(effective_library_id)
 
         if segment_profile and segment_profile in valid_profiles:
             if getattr(net, "DefaultSegmentProfile", "") != segment_profile:
@@ -1193,9 +1193,9 @@ class DuctNetwork:
             if DuctSegment.isDuctSegment(obj):
                 default_profile = DuctNetwork.getDefaultSegmentProfile(net)
                 if not default_profile:
-                    default_profile = hvaclib.default_segment_profile_for_library(default_lib.id)
+                    default_profile = hvaclib.HVACLibraryService.default_segment_profile_for_library(default_lib.id)
 
-                default_type_id = hvaclib.default_segment_type_id_for_profile(
+                default_type_id = hvaclib.HVACLibraryService.default_segment_type_id_for_profile(
                     default_lib.id,
                     default_profile,
                 )
@@ -1236,7 +1236,7 @@ class DuctNetwork:
 
             elif DuctJunction.isDuctJunction(obj):
                 family = getattr(obj, "Family", "")
-                default_type_id = hvaclib.default_junction_type_id(family)
+                default_type_id = hvaclib.HVACLibraryService.default_junction_type_id(family)
 
                 if hasattr(obj, "LibraryId") and obj.LibraryId != default_lib.id:
                     obj.LibraryId = default_lib.id
@@ -1313,7 +1313,7 @@ class DuctNetwork:
         # Install observer before running the command
         def callback(net, objs):
             for obj in objs:
-                if hvaclib.obj_is_wire(obj):
+                if hvaclib.isWire(obj):
                     DuctNetwork.addBaseObject(net, obj)
             DuctNetwork.showAllJunctionGeometry(net)
                 
@@ -1337,7 +1337,7 @@ class DuctNetwork:
             return False
         if net.Document != obj.Document:
             return False
-        if not (hvaclib.obj_is_sketch(obj) or hvaclib.obj_is_wire(obj)):
+        if not (hvaclib.isSketch(obj) or hvaclib.isWire(obj)):
             return False
         if obj in net.Base.OutList:
             return False
@@ -1525,7 +1525,7 @@ class DuctNetwork:
     def isBaseObject(obj):
         if obj is None:
             return False
-        if not (hvaclib.obj_is_sketch(obj) or hvaclib.obj_is_wire(obj)):
+        if not (hvaclib.isSketch(obj) or hvaclib.isWire(obj)):
             return False
             
         for net in hvaclib.allHVACNetworks(obj.Document):
@@ -1684,12 +1684,12 @@ class DuctNetwork:
             # Get library ID, profile and type_id for segment, defaulting to active library if not set
             library_id = getattr(segment_obj, "LibraryId", "") or self.getDefaultLibraryId(net)
             profile = getattr(segment_obj, "Profile", "")
-            valid_profiles = hvaclib.segment_profiles_for_library(library_id)
+            valid_profiles = hvaclib.HVACLibraryService.segment_profiles_for_library(library_id)
             if profile not in valid_profiles:
-                profile = hvaclib.default_segment_profile_for_library(library_id)
+                profile = hvaclib.HVACLibraryService.default_segment_profile_for_library(library_id)
             type_id = getattr(segment_obj, "TypeId", "")
             if not type_id:
-                type_id = hvaclib.default_segment_type_id_for_profile(library_id, profile)
+                type_id = hvaclib.HVACLibraryService.default_segment_type_id_for_profile(library_id, profile)
             
             # Update metadata based on updated data
             meta_changed = segment_obj.Proxy.updateMetadata(
@@ -1775,7 +1775,7 @@ class DuctNetwork:
                 continue
     
             # Run classification for identifying junction family
-            family = hvaclib.classify_junction_family(analysis)
+            family = hvaclib.HVACLibraryService.classify_junction_family(analysis)
             point = analysis["point"]
             node_key = analysis["node_key"]
     
@@ -1784,8 +1784,7 @@ class DuctNetwork:
                 for edge_ref in analysis["edge_refs"]
             ]
     
-            port_objs = hvaclib.build_junction_ports(
-                parser,
+            port_objs = parser.build_junction_ports(
                 node_id,
                 analysis["edge_refs"],
                 segment_map=segment_map,
@@ -1861,7 +1860,7 @@ class DuctNetwork:
                 )
                 # Get and set default segment properties from default library
                 default_lib_id = default_lib.id
-                default_type_id = hvaclib.default_junction_type_id(family)
+                default_type_id = hvaclib.HVACLibraryService.default_junction_type_id(family)
                 if hasattr(junction_obj, "LibraryId"):
                     junction_obj.LibraryId = default_lib_id
                 if hasattr(junction_obj, "TypeId"):
@@ -1886,7 +1885,7 @@ class DuctNetwork:
             library_id = getattr(junction_obj, "LibraryId", "") or default_lib.id
             type_id = getattr(junction_obj, "TypeId", "")
             if not type_id:
-                type_id = hvaclib.default_junction_type_id(family)
+                type_id = hvaclib.HVACLibraryService.default_junction_type_id(family)
             
             # Update metadata based on updated data
             meta_changed = junction_obj.Proxy.updateMetadata(
@@ -2080,7 +2079,7 @@ class DuctNetwork:
             return
         
         nets_to_sync = set()
-        reg = hvaclib.get_hvac_library_registry()
+        reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
         changed = False
 
         for obj in objects or []:
@@ -2102,10 +2101,10 @@ class DuctNetwork:
                     changed = True
 
             if hvaclib.isDuctSegment(obj):
-                valid_profiles = hvaclib.segment_profiles_for_library(obj.LibraryId)
+                valid_profiles = hvaclib.HVACLibraryService.segment_profiles_for_library(obj.LibraryId)
                 current_profile = getattr(obj, "Profile", "")
                 if current_profile not in valid_profiles:
-                    new_profile = hvaclib.default_segment_profile_for_library(obj.LibraryId)
+                    new_profile = hvaclib.HVACLibraryService.default_segment_profile_for_library(obj.LibraryId)
                     if new_profile and obj.Profile != new_profile:
                         obj.Profile = new_profile
                         changed = True
@@ -2233,7 +2232,14 @@ class DuctNetwork:
         
     @staticmethod
     def resolveSegmentEndpoint(base_point, direction, seg_obj):
-        return hvaclib.resolve_endpoint(base_point, direction, seg_obj)
+        return hvaclib.compute_port_position(
+            base_point,
+            direction,
+            hvaclib.get_segment_section_params(seg_obj),
+            getattr(seg_obj, "Attachment", "Center"),
+            getattr(seg_obj, "Offset", FreeCAD.Vector(0,0,0)),
+            getattr(seg_obj, "ProfileXAxis", FreeCAD.Vector(0, 0, 0))
+        )
     
     @staticmethod
     def resolveSegmentEndTrims(trim_entry):
