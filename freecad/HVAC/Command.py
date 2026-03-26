@@ -148,25 +148,30 @@ class CommandEditBaseObject:
                 o for o in (hvaclib.selectedGeometryObjects() or [])
                 if hvaclib.isDuctSegment(o)
             ]
-            if active_hvac_network and selected_geom:
+            selected_base_obj = hvaclib.selectedBaseObjects()
+            if active_hvac_network and (selected_geom or selected_base_obj):
                 return True
         else:
             return False
 
     def Activated(self):
-        base_objs = [
+        selected_geo_objs = [
             o for o in (hvaclib.selectedGeometryObjects() or [])
             if hvaclib.isDuctSegment(o)
         ]
-        if base_objs:
-            base = DuctNetwork.DuctNetwork.getOwnerBaseObject(base_objs[0])
-            if base:
-                if hvaclib.isSketch(base):
-                    Gui.ActiveDocument.setEdit(base.Name)
-                elif hvaclib.isWire(base):
-                    Gui.Selection.clearSelection()
-                    Gui.Selection.addSelection(base)
-                    Gui.ActiveDocument.setEdit(base)
+        selected_base_objs = hvaclib.selectedBaseObjects()
+        if selected_geo_objs:
+            base = DuctNetwork.DuctNetwork.getOwnerBaseObject(selected_geo_objs[0])
+        elif selected_base_objs:
+            base = selected_base_objs[0]
+            
+        if base:
+            if hvaclib.isSketch(base):
+                Gui.ActiveDocument.setEdit(base.Name)
+            elif hvaclib.isWire(base):
+                Gui.Selection.clearSelection()
+                Gui.Selection.addSelection(base)
+                Gui.ActiveDocument.setEdit(base)
 
 
 class CommandDeleteDuctNetwork:
