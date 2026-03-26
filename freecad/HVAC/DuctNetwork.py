@@ -190,9 +190,9 @@ class DuctSegment:
                 obj.Shape = shape
 
         except Exception as e:
-            FreeCAD.Console.PrintError(traceback.format_exc())
+            # FreeCAD.Console.PrintError(traceback.format_exc())
             FreeCAD.Console.PrintError(
-                "HVAC - Error generating segment '{}': {}\n".format(obj.Label, e)
+                "HVAC - DuctSegment - Execute - Error generating segment '{}': {}\n".format(obj.Label, e)
             )
 
     def setProperties(self, obj):
@@ -650,9 +650,9 @@ class DuctJunction:
                 obj.ConnectionLengthsJson = lengths_json
 
         except Exception as e:
-            FreeCAD.Console.PrintError(traceback.format_exc())
+            # FreeCAD.Console.PrintError(traceback.format_exc())
             FreeCAD.Console.PrintError(
-                "HVAC - Error generating junction '{}': {}\n".format(obj.Label, e)
+                "HVAC - DuctJunction - Execute Error generating junction '{}': {}\n".format(obj.Label, e)
             )
 
     def setProperties(self, obj):
