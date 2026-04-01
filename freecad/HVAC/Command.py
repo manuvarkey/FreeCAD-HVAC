@@ -219,7 +219,7 @@ class CommandCreateSketch:
     def GetResources(self):
         return {
             'Pixmap': hvaclib.get_icon_path("NewSketch.svg"),
-            "MenuText": QT_TRANSLATE_NOOP('HVAC_CreateSketch', 'New Sketch Route'),
+            "MenuText": QT_TRANSLATE_NOOP('HVAC_CreateSketch', 'New Sketch'),
             "ToolTip": QT_TRANSLATE_NOOP('HVAC_CreateSketch', 'Create a constrained sketch for defining routing of ducts inside the active duct network')
         }
 
@@ -241,7 +241,7 @@ class CommandCreateLine:
     def GetResources(self):
         return {
             'Pixmap': hvaclib.get_icon_path("CreateWire.svg"),
-            "MenuText": QT_TRANSLATE_NOOP("HVAC_CreateLine", "New Line Route"),
+            "MenuText": QT_TRANSLATE_NOOP("HVAC_CreateLine", "New Straight"),
             "ToolTip": QT_TRANSLATE_NOOP(
                 "HVAC_CreateLine",
                 "Create straight duct routes inside the active duct network"
@@ -266,7 +266,7 @@ class CommandCreateSpline:
     def GetResources(self):
         return {
             'Pixmap': hvaclib.get_icon_path("CreateSpline.svg"),
-            "MenuText": QT_TRANSLATE_NOOP("HVAC_CreateSpline", "New Curved Route"),
+            "MenuText": QT_TRANSLATE_NOOP("HVAC_CreateSpline", "New Curved"),
             "ToolTip": QT_TRANSLATE_NOOP(
                 "HVAC_CreateLine",
                 "Create curved duct routes inside the active duct network"
