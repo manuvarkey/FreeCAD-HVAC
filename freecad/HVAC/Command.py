@@ -171,17 +171,6 @@ class CommandEditBaseObject:
             elif hvaclib.isWire(base):
                 Gui.Selection.clearSelection()
                 Gui.Selection.addSelection(base)
-                
-                # Install observer before running the command
-                from . import Observer
-                def callback(net, objs):
-                    pass
-                net = hvaclib.activeHVACNetwork()
-                obs = Observer.NewDraftLineObserver(net, callback)
-                FreeCAD.addDocumentObserver(obs)
-                
-                # Set change workbench and set edit mode
-                Gui.activateWorkbench("DraftWorkbench")                
                 Gui.ActiveDocument.setEdit(base)
 
 
@@ -218,9 +207,9 @@ class CommandCreateSketch:
     
     def GetResources(self):
         return {
-            'Pixmap': hvaclib.get_icon_path("NewSketch.svg"),
+            "Pixmap": "Sketcher_NewSketch",
             "MenuText": QT_TRANSLATE_NOOP('HVAC_CreateSketch', 'New Sketch'),
-            "ToolTip": QT_TRANSLATE_NOOP('HVAC_CreateSketch', 'Create a constrained sketch for defining routing of ducts inside the active duct network')
+            "ToolTip": QT_TRANSLATE_NOOP('HVAC_CreateSketch', 'Create a new sketch inside the active duct network')
         }
 
     def IsActive(self):
@@ -240,11 +229,11 @@ class CommandCreateLine:
 
     def GetResources(self):
         return {
-            'Pixmap': hvaclib.get_icon_path("CreateWire.svg"),
-            "MenuText": QT_TRANSLATE_NOOP("HVAC_CreateLine", "New Straight"),
+            "Pixmap": "Draft_Line",
+            "MenuText": QT_TRANSLATE_NOOP("HVAC_CreateLine", "New Line"),
             "ToolTip": QT_TRANSLATE_NOOP(
                 "HVAC_CreateLine",
-                "Create straight duct routes inside the active duct network"
+                "Create line objects inside the active duct network"
             ),
         }
 
@@ -255,31 +244,6 @@ class CommandCreateLine:
         net = hvaclib.activeHVACNetwork()
         if net:
             DuctNetwork.DuctNetwork.createDraftLineInteractive(net)
-            
-            
-class CommandCreateSpline:
-    """Interactively adds Draft Spline object to the currently active network."""
-
-    def QT_TRANSLATE_NOOP(self, text):
-        return text
-
-    def GetResources(self):
-        return {
-            'Pixmap': hvaclib.get_icon_path("CreateSpline.svg"),
-            "MenuText": QT_TRANSLATE_NOOP("HVAC_CreateSpline", "New Curved"),
-            "ToolTip": QT_TRANSLATE_NOOP(
-                "HVAC_CreateLine",
-                "Create curved duct routes inside the active duct network"
-            ),
-        }
-
-    def IsActive(self):
-        return FreeCAD.ActiveDocument is not None and hvaclib.activeHVACNetwork() is not None
-
-    def Activated(self):
-        net = hvaclib.activeHVACNetwork()
-        if net:
-            DuctNetwork.DuctNetwork.createDraftLineInteractive(net, linetype='BSpline')
           
             
 class CommandEditType:
@@ -461,7 +425,6 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_ActivateDuctNetwork', CommandActivateDuctNetwork())
     FreeCAD.Gui.addCommand("HVAC_CreateSketch", CommandCreateSketch())
     FreeCAD.Gui.addCommand("HVAC_CreateLine", CommandCreateLine())
-    FreeCAD.Gui.addCommand("HVAC_CreateSpline", CommandCreateSpline())
     FreeCAD.Gui.addCommand('HVAC_EditType', CommandEditType())
     FreeCAD.Gui.addCommand('HVAC_EditPlacement', CommandEditPlacement())
     FreeCAD.Gui.addCommand('HVAC_EditNetworkTypeDefaults', CommandEditNetworkTypeDefaults())

@@ -58,14 +58,13 @@ class HVAC(Gui.Workbench):
                                 'HVAC_ModifyDuctNetwork',
                                 'HVAC_EditNetworkTypeDefaults',
                                 "Separator",
-                                'HVAC_CreateSketch',
-                                'HVAC_CreateLine',
-                                'HVAC_CreateSpline',
                                 'HVAC_EditBaseObject',
-                                "Separator",
                                 'HVAC_EditType',
                                 'HVAC_EditPlacement',
-                                'HVAC_ResetTypesToDefaults'
+                                'HVAC_ResetTypesToDefaults',
+                                "Separator",
+                                'HVAC_CreateSketch',
+                                'HVAC_CreateLine'
                                 ]
 
         self.submenu_commands = ['HVAC_CreateDuctNetwork',
@@ -73,14 +72,13 @@ class HVAC(Gui.Workbench):
                                 'HVAC_ModifyDuctNetwork',
                                 'HVAC_EditNetworkTypeDefaults',
                                 "Separator",
-                                'HVAC_CreateSketch',
-                                'HVAC_CreateLine',
-                                'HVAC_CreateSpline',
                                 'HVAC_EditBaseObject',
-                                "Separator",
                                 'HVAC_EditType',
                                 'HVAC_EditPlacement',
-                                'HVAC_ResetTypesToDefaults'
+                                'HVAC_ResetTypesToDefaults',
+                                "Separator",
+                                'HVAC_CreateSketch',
+                                'HVAC_CreateLine'
                                 ]
 
         self.contextmenu_commands = ['HVAC_CreateDuctNetwork',
@@ -88,14 +86,13 @@ class HVAC(Gui.Workbench):
                                 'HVAC_ModifyDuctNetwork',
                                 'HVAC_EditNetworkTypeDefaults',
                                 "Separator",
-                                'HVAC_CreateSketch',
-                                'HVAC_CreateLine',
-                                'HVAC_CreateSpline',
                                 'HVAC_EditBaseObject',
-                                "Separator",
                                 'HVAC_EditType',
                                 'HVAC_EditPlacement',
-                                'HVAC_ResetTypesToDefaults'
+                                'HVAC_ResetTypesToDefaults',
+                                "Separator",
+                                'HVAC_CreateSketch',
+                                'HVAC_CreateLine'
                                 ]
 
         self.appendMenu(QT_TRANSLATE_NOOP("Workbench", "HVAC"), self.submenu_commands)
@@ -133,16 +130,6 @@ class HVAC(Gui.Workbench):
         self.setWatchers()
         
     def setWatchers(self):
-        
-        def is_network_active():
-            doc = FreeCAD.ActiveDocument
-            active_network = hvaclib.activeHVACNetwork()
-            return active_network and active_network.Document == doc
-        
-        def is_object_selected():
-            sel_base = Gui.Selection.getSelectionEx()[0] if Gui.Selection.getSelectionEx() else None
-            sel_geo = sel_base.Object if sel_base else None
-            return sel_geo is not None
 
         class HVACCreateWatcher:
             """Shows 'Create HVAC Network' when no Duct Network exists in the document."""
@@ -163,7 +150,7 @@ class HVAC(Gui.Workbench):
 
             def __init__(self):
                 self.commands = ["HVAC_ActivateDuctNetwork"]
-                self.title = translate("HVAC", "Start")
+                self.title = translate("HVAC", "Activate")
 
             def shouldShow(self):
                 doc = FreeCAD.ActiveDocument
@@ -171,55 +158,50 @@ class HVAC(Gui.Workbench):
                 hvac_network = hvaclib.activeHVACNetwork()
                 return hvac_networks and (hvac_network is None or hvac_network.Document != doc)
 
-        class HVACEditWatcher:
+        class HVACBaseWatcher:
+            """Base class for watchers that require an active HVAC Network."""
+
+            def __init__(self):
+                self.hvac_network = None
+
+            def shouldShow(self):
+                # Show if there is an active document
+                doc = FreeCAD.ActiveDocument
+                self.hvac_network = hvaclib.activeHVACNetwork()
+                return self.hvac_network is not None and self.hvac_network.Document == doc
+
+        class HVACEditWatcher(HVACBaseWatcher):
             """Shows 'Edit Network' when an HVAC Network is active."""
 
             def __init__(self):
                 super().__init__()
                 self.commands = ["HVAC_ModifyDuctNetwork", 
-                                "HVAC_EditNetworkTypeDefaults"]
-                self.title = translate("HVAC", "Network")
-                
+                                "HVAC_EditNetworkTypeDefaults", 
+                                "HVAC_EditBaseObject", 
+                                "HVAC_EditType",
+                                'HVAC_EditPlacement',
+                                "HVAC_ResetTypesToDefaults",]
+                self.title = translate("HVAC", "Modify")
+
             def shouldShow(self):
-                # Show if there is an active document and no object is selected
-                return is_network_active()
+                return super().shouldShow()
                 
-        class HVACRoutingWatcher:
-            """Shows 'Routing Tools' when an HVAC Network is active."""
+        class HVACToolsWatcher(HVACBaseWatcher):
+            """Shows 'Tools' when an HVAC Network is active."""
 
             def __init__(self):
                 super().__init__()
-                self.commands = ['HVAC_CreateSketch',
-                                 'HVAC_CreateLine',
-                                 'HVAC_CreateSpline',
-                                 'HVAC_EditBaseObject']
-                self.title = translate("HVAC", "Routing Tools")
-                
-            def shouldShow(self):
-                # Show if there is an active document
-                return is_network_active()
-        
-        class HVACEditObjectWatcher:
-            """Shows 'Edit Object' when an object is selected."""
+                self.commands = ["HVAC_CreateSketch", "HVAC_CreateLine"]
+                self.title = translate("HVAC", "Tools")
 
-            def __init__(self):
-                super().__init__()
-                self.commands = ['HVAC_EditType',
-                                 'HVAC_EditPlacement',
-                                 'HVAC_ResetTypesToDefaults']
-                self.title = translate("HVAC", "Edit Tools")
-                
             def shouldShow(self):
-                # Show if there is an active document and an object is selected
-                return is_network_active() and is_object_selected()
-                
+                return super().shouldShow()
 
         self.watchers = [
             HVACCreateWatcher(),
             HVACActivateWatcher(),
             HVACEditWatcher(),
-            HVACRoutingWatcher(),
-            HVACEditObjectWatcher(),
+            HVACToolsWatcher()
         ]
         Gui.Control.addTaskWatcher(self.watchers)
         

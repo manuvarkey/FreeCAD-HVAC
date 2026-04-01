@@ -22,7 +22,6 @@
 ################################################################################
 
 """This module implements HVAC duct description classes."""
-from cmath import e
 import json
 import traceback
 import FreeCAD, Part
@@ -177,12 +176,12 @@ class DuctSegment:
             profile_x_axis = getattr(obj, "ProfileXAxis", None)
         
             path_edge = None
-            path_kind = "Unknown"
+            path_kind = "Line"
             start_dir = getattr(obj, "StartDirection", None)
             end_dir = getattr(obj, "EndDirection", None)
         
             if edge is not None:
-                routed_edge, rsp, rep, rsd, red = self.makeTrimmedShiftedEdge(
+                trimmed_center_edge, routed_edge, rsp, rep, rsd, red = self.makeTrimmedShiftedEdge(
                     edge=edge,
                     trim_start=getattr(obj, "TrimStart", 0.0),
                     trim_end=getattr(obj, "TrimEnd", 0.0),
@@ -195,13 +194,13 @@ class DuctSegment:
         
                 if routed_edge is not None:
                     path_edge = routed_edge
-                    path_kind = hvaclib.EdgeKind(routed_edge)
+                    path_kind = hvaclib.parse_edge_info(routed_edge)["path_kind"]
                     start_point = rsp
                     end_point = rep
                     start_dir = rsd
                     end_dir = red
                 else:
-                    path_kind = hvaclib.EdgeKind(edge)
+                    path_kind = hvaclib.parse_edge_info(edge)["path_kind"]
     
             context = {
                 "obj": obj,
@@ -465,92 +464,45 @@ class DuctSegment:
             return edge
     
     @staticmethod
-    def computeEdgeTrimData(edge, trim_start, trim_end):
-        """
-        Compute effective trim lengths and corresponding curve parameters.
-
-        Returns:
-            raw_length, ts, te, fp, lp, p1, p2
-
-        where:
-            raw_length : original edge length
-            ts, te     : effective trim lengths from start/end
-            fp, lp     : first/last parameters of original edge
-            p1, p2     : parameter interval after trimming
-        """
-        if edge is None:
-            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-
-        raw_length = float(edge.Length)
-        fp = float(edge.FirstParameter)
-        lp = float(edge.LastParameter)
-
-        if raw_length <= 1e-9:
-            return raw_length, 0.0, 0.0, fp, lp, fp, lp
-
-        ts = max(0.0, float(trim_start or 0.0))
-        te = max(0.0, float(trim_end or 0.0))
-
-        # Prevent over-trimming
-        max_total = max(0.0, raw_length - 1e-9)
-        total_trim = ts + te
-        if total_trim > max_total:
-            scale = max_total / total_trim if total_trim > 0.0 else 0.0
-            ts *= scale
-            te *= scale
-
-        # Convert trim lengths to edge parameters
-        try:
-            p1 = edge.getParameterByLength(ts) if ts > 0.0 else fp
-            p2 = edge.getParameterByLength(raw_length - te) if te > 0.0 else lp
-            eff_sp = edge.valueAt(p1)
-            eff_ep = edge.valueAt(p2)
-        except Exception:
-            # Fallback approximation for curves where getParameterByLength fails
-            r1 = ts / raw_length if raw_length > 1e-12 else 0.0
-            r2 = te / raw_length if raw_length > 1e-12 else 0.0
-            p1 = fp + (lp - fp) * r1
-            p2 = lp - (lp - fp) * r2
-            
-        # Get edge directions
-        try:
-            d1 = edge.tangentAt(p1)
-        except Exception:
-            d1 = eff_ep - eff_sp
-        try:
-            d2 = edge.tangentAt(p2)
-        except Exception:
-            d2 = eff_ep - eff_sp
-            
-        # Get path length
-        trim_path_length = raw_length - (ts + te)
-
-        return ts, te, fp, lp, p1, p2, eff_sp, eff_ep, d1, d2, trim_path_length
-
-    @staticmethod
     def makeTrimmedEdge(edge, trim_start, trim_end):
         """
         Return a trimmed copy of the given edge based on length trimmed
         from the start and end.
-
+    
         Returns:
             trimmed_edge, ts, te
         """
         if edge is None:
             return None, 0.0, 0.0
-
-        ts, te, fp, lp, p1, p2, eff_sp, eff_ep, d1, d2, raw_length = DuctSegment.computeEdgeTrimData(
-            edge, 
-            trim_start,
-            trim_end
-        )
-
+    
+        raw_length = float(edge.Length)
         if raw_length <= 1e-9:
             return edge.copy(), 0.0, 0.0
-
+    
+        ts = max(0.0, float(trim_start or 0.0))
+        te = max(0.0, float(trim_end or 0.0))
+    
+        max_total = max(0.0, raw_length - 1e-9)
+        if ts + te > max_total:
+            scale = max_total / (ts + te) if (ts + te) > 0 else 0.0
+            ts *= scale
+            te *= scale
+    
+        fp = float(edge.FirstParameter)
+        lp = float(edge.LastParameter)
+    
+        try:
+            p1 = edge.getParameterByLength(ts) if ts > 0 else fp
+            p2 = edge.getParameterByLength(raw_length - te) if te > 0 else lp
+        except Exception:
+            r1 = ts / raw_length if raw_length > 1e-12 else 0.0
+            r2 = te / raw_length if raw_length > 1e-12 else 0.0
+            p1 = fp + (lp - fp) * r1
+            p2 = lp - (lp - fp) * r2
+    
         if p2 <= p1:
             return None, ts, te
-
+    
         try:
             trimmed = edge.Curve.toShape(p1, p2)
         except Exception:
@@ -558,8 +510,8 @@ class DuctSegment:
                 trimmed = edge.trim(p1, p2)
             except Exception:
                 trimmed = None
-
-        return ts, te, eff_sp, eff_ep, d1, d2, raw_length, trimmed
+                
+        return trimmed, ts, te
         
     @staticmethod
     def makeTrimmedShiftedEdge(edge, trim_start, trim_end,
@@ -586,14 +538,32 @@ class DuctSegment:
         # ----------------------------------------------------------
         # Step 1: trim original edge
         # ----------------------------------------------------------
-        ts, te, sp, ep, sd, ed, raw_length, trimmed_edge = DuctSegment.makeTrimmedEdge(edge, trim_start, trim_end)
+        trimmed_edge, ts, te = DuctSegment.makeTrimmedEdge(edge, trim_start, trim_end)
         if trimmed_edge is None:
             return None, None, None, None, None, None
+    
+        fp = float(trimmed_edge.FirstParameter)
+        lp = float(trimmed_edge.LastParameter)
+    
+        sp = trimmed_edge.valueAt(fp)
+        ep = trimmed_edge.valueAt(lp)
+    
+        try:
+            sd = trimmed_edge.tangentAt(fp)
+        except Exception:
+            sd = ep - sp
+        try:
+            ed = trimmed_edge.tangentAt(lp)
+        except Exception:
+            ed = ep - sp
+    
+        sd = DuctSegment._unit(sd, ep - sp)
+        ed = DuctSegment._unit(ed, ep - sp)
     
         # ----------------------------------------------------------
         # Step 2: compute attachment/user offset shift at start/end
         # ----------------------------------------------------------
-        shift = hvaclib.compute_port_position(
+        start_shift = hvaclib.compute_port_position(
             base_point=FreeCAD.Vector(0, 0, 0),
             direction=sd,
             section_params=section_params,
@@ -601,17 +571,29 @@ class DuctSegment:
             user_offset_vec=user_offset,
             profile_x_axis=profile_x_axis,
         )
+        end_shift = hvaclib.compute_port_position(
+            base_point=FreeCAD.Vector(0, 0, 0),
+            direction=ed,
+            section_params=section_params,
+            attachment=attachment,
+            user_offset_vec=user_offset,
+            profile_x_axis=profile_x_axis,
+        )
     
-        rsp = sp + shift
-        rep = ep + shift
+        rsp = sp + start_shift
+        rep = ep + end_shift
     
         # ----------------------------------------------------------
         # Step 3: build shifted curve copy
         # ----------------------------------------------------------
-        routed_edge = trimmed_edge.translate(shift)
+        routed_edge = hvaclib.make_offset_path_copy(
+            trimmed_edge,
+            start_shift,
+            end_shift,
+        )
     
         if routed_edge is None:
-            routed_edge = trimmed_edge
+            routed_edge = trimmed_edge.copy()
     
         rfp = float(routed_edge.FirstParameter)
         rlp = float(routed_edge.LastParameter)
@@ -628,12 +610,10 @@ class DuctSegment:
         rsd = DuctSegment._unit(rsd, rep - rsp)
         red = DuctSegment._unit(red, rep - rsp)
     
-        return routed_edge, rsp, rep, rsd, red
+        return trimmed_edge, routed_edge, rsp, rep, rsd, red
     
     @staticmethod
-    def computeTrimDataBasic(start_point, end_point, trim_start, trim_end):
-        """Compute trim parameters for a segment defined by start_point and end_point, returning trimmed start/end points and lengths."""
-        
+    def computeTrimmedSegmentPoints(start_point, end_point, trim_start, trim_end):
         sp = FreeCAD.Vector(*start_point) if not hasattr(start_point, "x") else FreeCAD.Vector(start_point)
         ep = FreeCAD.Vector(*end_point) if not hasattr(end_point, "x") else FreeCAD.Vector(end_point)
     
@@ -659,7 +639,68 @@ class DuctSegment:
         eff_ep = ep - direction * te
         eff_len = (eff_ep - eff_sp).Length
     
-        return ts, te, eff_sp, eff_ep, direction, direction, eff_len
+        return eff_sp, eff_ep, ts, te, eff_len
+
+    @staticmethod
+    def computeTrimmedSegmentState(start_point, end_point, trim_start, trim_end, edge=None):
+        """
+        Generic trimming for both straight and curved segments.
+
+        Returns:
+            eff_sp, eff_ep, ts, te, eff_len, eff_start_dir, eff_end_dir
+        """
+        sp = DuctSegment._vec(start_point)
+        ep = DuctSegment._vec(end_point)
+
+        # Fallback straight case
+        if edge is None:
+            vec = ep - sp
+            raw_length = vec.Length
+            if raw_length <= 1e-9:
+                d = FreeCAD.Vector(1, 0, 0)
+                return sp, ep, 0.0, 0.0, 0.0, d, d
+
+            d = FreeCAD.Vector(vec)
+            d.normalize()
+
+            ts = max(0.0, float(trim_start or 0.0))
+            te = max(0.0, float(trim_end or 0.0))
+            max_total = max(0.0, raw_length - 1e-9)
+            if ts + te > max_total:
+                scale = max_total / (ts + te) if (ts + te) > 0 else 0.0
+                ts *= scale
+                te *= scale
+
+            eff_sp = sp + d * ts
+            eff_ep = ep - d * te
+            eff_len = (eff_ep - eff_sp).Length
+            return eff_sp, eff_ep, ts, te, eff_len, d, d
+
+        trimmed_edge, ts, te = DuctSegment.makeTrimmedEdge(edge, trim_start, trim_end)
+        if trimmed_edge is None:
+            d = DuctSegment._unit(ep - sp, FreeCAD.Vector(1, 0, 0))
+            return sp, ep, 0.0, 0.0, 0.0, d, d, None
+    
+        eff_sp = trimmed_edge.Vertexes[0].Point
+        eff_ep = trimmed_edge.Vertexes[-1].Point
+        eff_len = float(trimmed_edge.Length)
+    
+        fp = float(trimmed_edge.FirstParameter)
+        lp = float(trimmed_edge.LastParameter)
+    
+        try:
+            d1 = trimmed_edge.tangentAt(fp)
+        except Exception:
+            d1 = eff_ep - eff_sp
+        try:
+            d2 = trimmed_edge.tangentAt(lp)
+        except Exception:
+            d2 = eff_ep - eff_sp
+    
+        d1 = DuctSegment._unit(d1, eff_ep - eff_sp)
+        d2 = DuctSegment._unit(d2, eff_ep - eff_sp)
+    
+        return eff_sp, eff_ep, ts, te, eff_len, d1, d2, trimmed_edge
 
     def updateMetadata(
         self,
@@ -741,21 +782,26 @@ class DuctSegment:
         
         if start_point is not None and end_point is not None and trim_start is not None and trim_end is not None:
             if edge:
-                ts, te, fp, lp, p1, p2, eff_sp, eff_ep, eff_sd, eff_ed, eff_len = DuctSegment.computeEdgeTrimData(
-                    edge, 
+                eff_sp, eff_ep, ts, te, eff_len, eff_sd, eff_ed, trimmed_edge = self.computeTrimmedSegmentState(
+                    start_vec,
+                    end_vec,
                     trim_start if trim_start is not None else getattr(obj, "TrimStart", 0.0),
-                    trim_end if trim_end is not None else getattr(obj, "TrimEnd", 0.0)
+                    trim_end if trim_end is not None else getattr(obj, "TrimEnd", 0.0),
+                    edge=edge,
                 )
-                path_kind = hvaclib.EdgeKind(edge)
+                info = hvaclib.parse_edge_info(trimmed_edge)
+                path_kind = info["path_kind"]
             else:
-                trim_start, trim_end, eff_sp, eff_ep, eff_sd, eff_ed, eff_len = DuctSegment.computeTrimDataBasic(
+                eff_sp, eff_ep, trim_start, trim_end, eff_len = self.computeTrimmedSegmentPoints(
                     start_point,
                     end_point,
                     trim_start,
                     trim_end,
                 )
-                path_kind = "straight"
-                
+                path_kind = "Line"
+                eff_sd = (end_vec - start_vec).normalize()
+                eff_ed = eff_sd
+            
             if eff_sp is not None and getattr(obj, "EffectiveStartPoint", None) != eff_sp:
                 obj.EffectiveStartPoint = eff_sp
                 changed = True
@@ -1433,7 +1479,7 @@ class DuctNetwork:
     ## Library defaults management
     
     @staticmethod
-    def defaultSegmentSelection(net, kind='straight'):
+    def defaultSegmentSelection(net):
         """
         Return network default segment library/profile/type.
         Used only when creating a new segment or resetting one to defaults.
@@ -1447,10 +1493,10 @@ class DuctNetwork:
         if profile not in valid_profiles:
             profile = hvaclib.HVACLibraryService.default_segment_profile_for_library(library_id)
 
-        if kind == "straight":
-            type_id = hvaclib.HVACLibraryService.default_segment_type_id(library_id, profile, curved=False)
-        else:
-            type_id = hvaclib.HVACLibraryService.default_segment_type_id(library_id, profile, curved=True)
+        type_id = hvaclib.HVACLibraryService.default_segment_type_id_for_profile(
+            library_id,
+            profile,
+        )
         
         return {
             "library_id": library_id,
@@ -1544,19 +1590,10 @@ class DuctNetwork:
                 if not default_profile:
                     default_profile = hvaclib.HVACLibraryService.default_segment_profile_for_library(default_lib.id)
 
-                kind = hvaclib.BaseCurveKind(obj.SourceObjectName, obj.SourceIndex)
-                if kind == "straight":
-                    default_type_id = hvaclib.HVACLibraryService.default_segment_type_id(
-                        default_lib.id,
-                        default_profile,
-                        curved=False,
-                    )
-                else:
-                    default_type_id = hvaclib.HVACLibraryService.default_segment_type_id(
-                        default_lib.id,
-                        default_profile,
-                        curved=True,
-                    )
+                default_type_id = hvaclib.HVACLibraryService.default_segment_type_id_for_profile(
+                    default_lib.id,
+                    default_profile,
+                )
 
                 if hasattr(obj, "LibraryId") and obj.LibraryId != default_lib.id:
                     obj.LibraryId = default_lib.id
@@ -1655,7 +1692,7 @@ class DuctNetwork:
         Gui.runCommand("Sketcher_NewSketch")
 
     @staticmethod
-    def createDraftLineInteractive(obj, linetype='Line'):
+    def createDraftLineInteractive(obj):
         """
         Open the standard Draft Line command and, after the user exits the tool,
         move all newly created Draft line objects under obj.Base.
@@ -1678,13 +1715,10 @@ class DuctNetwork:
         obs = Observer.NewDraftLineObserver(obj, callback)
         FreeCAD.addDocumentObserver(obs)
         
-        # Launch the built-in Draft Line/ BSpline creation command
+        # Launch the built-in Draft line creation command
         DuctNetwork.hideAllJunctionGeometry(obj)
         Gui.activateWorkbench("DraftWorkbench")
-        if linetype=='Line':
-            Gui.runCommand("Draft_Line")
-        elif linetype=='BSpline':
-            Gui.runCommand("Draft_BSpline")
+        Gui.runCommand("Draft_Line")
 
     @staticmethod
     def addBaseObject(net, obj):
@@ -1998,10 +2032,8 @@ class DuctNetwork:
                     source_obj=source_obj,
                     source_index=edge_ref.local_index,
                 )
-                
                 # Get and set default segment properties from default library
-                kind = hvaclib.BaseCurveKind(edge_ref.obj_name, edge_ref.local_index)
-                defaults = self.defaultSegmentSelection(net, kind=kind)
+                defaults = self.defaultSegmentSelection(net)
                 if hasattr(segment_obj, "LibraryId"):
                     segment_obj.LibraryId = defaults["library_id"]
                 if hasattr(segment_obj, "Profile"):
@@ -2052,11 +2084,7 @@ class DuctNetwork:
                 profile = hvaclib.HVACLibraryService.default_segment_profile_for_library(library_id)
             type_id = getattr(segment_obj, "TypeId", "")
             if not type_id:
-                kind = hvaclib.BaseCurveKind(edge_ref.obj_name, edge_ref.local_index)
-                if kind == "straight":
-                    type_id = hvaclib.HVACLibraryService.default_segment_type_id(library_id, profile, curved=False)
-                else:
-                    type_id = hvaclib.HVACLibraryService.default_segment_type_id(library_id, profile, curved=True)
+                type_id = hvaclib.HVACLibraryService.default_segment_type_id_for_profile(library_id, profile)
             
             # Update metadata based on updated data
             meta_changed = segment_obj.Proxy.updateMetadata(

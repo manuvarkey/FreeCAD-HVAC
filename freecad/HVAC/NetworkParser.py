@@ -252,7 +252,7 @@ class DuctNetworkParser:
             tag = hvaclib.makeLineKey(sketch_obj.Name, slno)
     
             # Build a Part edge from sketch geometry
-            kind = hvaclib.GeomType(geo)
+            kind = hvaclib.SketchGeomType(geo)
             if kind == "Unknown":
                 continue
 
@@ -285,7 +285,7 @@ class DuctNetworkParser:
     
         for slno, edge in enumerate(getattr(shape, "Edges", []) or []):
             curve = getattr(edge, "Curve", None)
-            kind = hvaclib.GeomType(curve)
+            kind = hvaclib.EdgeType(edge)
             if curve is None or kind == "Unknown":
                 continue
     
