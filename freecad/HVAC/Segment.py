@@ -39,11 +39,11 @@ class DuctSegment:
 
     def __init__(self, obj, owner=None, key="", source_obj=None, source_index=0):
         obj.Proxy = self
+        self.Object = obj
         self._allow_delete = False
         self.setProperties(obj)
         self.applyOwnerDefaults(obj, owner)
         self.updateMetadata(
-            obj,
             owner=owner,
             key=key,
             source_obj=source_obj,
@@ -52,17 +52,18 @@ class DuctSegment:
 
     def onDocumentRestored(self, obj):
         obj.Proxy = self
+        self.Object = obj
         self._allow_delete = False
         self.setProperties(obj)
 
-    def __getstate__(self):
+    def dumps(self):
         return None
 
-    def __setstate__(self, state):
-        self._allow_delete = False
+    def loads(self, state):
+        pass
 
     def execute(self, obj):
-        edge = self.resolveSourceEdge(obj)
+        edge = self.resolveSourceEdge()
 
         start_point = getattr(obj, "EffectiveStartPoint", None) or getattr(obj, "StartPoint", None)
         end_point = getattr(obj, "EffectiveEndPoint", None) or getattr(obj, "EndPoint", None)
@@ -155,10 +156,10 @@ class DuctSegment:
                 obj.EndTrimPlaneJson = result["end_trim_plane_json"] or ""
     
         except Exception as e:
-            FreeCAD.Console.PrintError(traceback.format_exc())
-            FreeCAD.Console.PrintError(
+            FreeCAD.Console.PrintWarning(
                 "HVAC - DuctSegment - Execute - Error generating segment '{}': {}\n".format(obj.Label, e)
             )
+            FreeCAD.Console.PrintMessage(traceback.format_exc())
 
     def setProperties(self, obj):
         self._addProperty(obj, "App::PropertyString", "OwnerNetworkName", "HVAC", "Owning duct network")
@@ -274,7 +275,8 @@ class DuctSegment:
         if not getattr(obj, "ProfileXAxis", None):
             obj.ProfileXAxis = FreeCAD.Vector(0, 0, 0)
                 
-    def applyTypeSchema(self, obj):
+    def applyTypeSchema(self):
+        obj = self.Object
         reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
         lib_id = getattr(obj, "LibraryId", "")
         type_id = getattr(obj, "TypeId", "")
@@ -325,8 +327,7 @@ class DuctSegment:
     
         return changed
     
-    @staticmethod
-    def resolveSourceEdge(obj):
+    def resolveSourceEdge(self):
         """
         Resolve the live source edge for this segment using:
             - owning network
@@ -337,6 +338,7 @@ class DuctSegment:
             - Sketch geometry: line / arc / bspline / bezier
             - Shape edges: line / arc / bspline
         """
+        obj = self.Object
         owner = hvaclib.getOwnerNetwork(obj)
         if owner is None or owner.Document is None:
             return None
@@ -385,8 +387,7 @@ class DuctSegment:
             edge = edges[source_index]        
             return edge
     
-    @staticmethod
-    def computeEdgeTrimData(edge, trim_start, trim_end):
+    def computeEdgeTrimData(self, edge, trim_start, trim_end):
         """
         Compute effective trim lengths and corresponding curve parameters.
 
@@ -448,8 +449,7 @@ class DuctSegment:
 
         return ts, te, fp, lp, p1, p2, eff_sp, eff_ep, d1, d2, trim_path_length
 
-    @staticmethod
-    def makeTrimmedEdge(edge, trim_start, trim_end):
+    def makeTrimmedEdge(self, edge, trim_start, trim_end):
         """
         Return a trimmed copy of the given edge based on length trimmed
         from the start and end.
@@ -460,7 +460,7 @@ class DuctSegment:
         if edge is None:
             return 0.0, 0.0, None, None, None, None, 0.0, None
 
-        ts, te, fp, lp, p1, p2, eff_sp, eff_ep, d1, d2, raw_length = DuctSegment.computeEdgeTrimData(
+        ts, te, fp, lp, p1, p2, eff_sp, eff_ep, d1, d2, raw_length = self.computeEdgeTrimData(
             edge, 
             trim_start,
             trim_end
@@ -482,8 +482,7 @@ class DuctSegment:
 
         return ts, te, eff_sp, eff_ep, d1, d2, raw_length, trimmed
         
-    @staticmethod
-    def makeTrimmedShiftedEdge(edge, trim_start, trim_end,
+    def makeTrimmedShiftedEdge(self, edge, trim_start, trim_end,
                                profile, section_params,
                                attachment="Center",
                                user_offset=None,
@@ -507,7 +506,7 @@ class DuctSegment:
         # ----------------------------------------------------------
         # Step 1: trim original edge
         # ----------------------------------------------------------
-        ts, te, sp, ep, sd, ed, raw_length, trimmed_edge = DuctSegment.makeTrimmedEdge(edge, trim_start, trim_end)
+        ts, te, sp, ep, sd, ed, raw_length, trimmed_edge = self.makeTrimmedEdge(edge, trim_start, trim_end)
         if trimmed_edge is None:
             return None, None, None, None, None, None
     
@@ -551,8 +550,7 @@ class DuctSegment:
     
         return routed_edge, rsp, rep, rsd, red
     
-    @staticmethod
-    def computeTrimDataBasic(start_point, end_point, trim_start, trim_end):
+    def computeTrimDataBasic(self, start_point, end_point, trim_start, trim_end):
         """Compute trim parameters for a segment defined by start_point and end_point, returning trimmed start/end points and lengths."""
         
         sp = FreeCAD.Vector(*start_point) if not hasattr(start_point, "x") else FreeCAD.Vector(start_point)
@@ -584,7 +582,6 @@ class DuctSegment:
 
     def updateMetadata(
         self,
-        obj,
         owner=None,
         key="",
         source_obj=None,
@@ -601,6 +598,7 @@ class DuctSegment:
         profile="",
         analysis_json=None,
     ):
+        obj = self.Object
         changed = False
 
         if owner and getattr(obj, "OwnerNetworkName", "") != owner.Name:
@@ -658,18 +656,18 @@ class DuctSegment:
                 obj.CenterlineLength = length
                 changed = True
 
-        edge = self.resolveSourceEdge(obj)
+        edge = self.resolveSourceEdge()
         
         if start_point is not None and end_point is not None and trim_start is not None and trim_end is not None:
             if edge:
-                ts, te, fp, lp, p1, p2, eff_sp, eff_ep, eff_sd, eff_ed, eff_len = DuctSegment.computeEdgeTrimData(
+                ts, te, fp, lp, p1, p2, eff_sp, eff_ep, eff_sd, eff_ed, eff_len = self.computeEdgeTrimData(
                     edge, 
                     trim_start if trim_start is not None else getattr(obj, "TrimStart", 0.0),
                     trim_end if trim_end is not None else getattr(obj, "TrimEnd", 0.0)
                 )
                 path_kind = hvaclib.EdgeKind(edge)
             else:
-                trim_start, trim_end, eff_sp, eff_ep, eff_sd, eff_ed, eff_len = DuctSegment.computeTrimDataBasic(
+                trim_start, trim_end, eff_sp, eff_ep, eff_sd, eff_ed, eff_len = self.computeTrimDataBasic(
                     start_point,
                     end_point,
                     trim_start,
@@ -737,10 +735,6 @@ class DuctSegment:
         return segment
 
     @staticmethod
-    def isDuctSegment(obj):
-        return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctSegment)
-
-    @staticmethod
     def labelFor(source_obj, source_index):
         return "{} [{}]".format(source_obj.Label if source_obj else "Segment", int(source_index))
 
@@ -748,18 +742,9 @@ class DuctSegment:
     def _addProperty(obj, prop_type, prop_name, group, description):
         if prop_name not in obj.PropertiesList:
             obj.addProperty(prop_type, prop_name, group, description)
-            
-    @staticmethod
-    def _vec(v):
-        if v is None:
-            return None
-        if hasattr(v, "x"):
-            return FreeCAD.Vector(v)
-        return FreeCAD.Vector(float(v[0]), float(v[1]), float(v[2]))
 
-    @staticmethod
-    def _unit(v, fallback=None):
-        vv = DuctSegment._vec(v)
+    def _unit(self, v, fallback=None):
+        vv = hvaclib.vec(v)
         if vv is None or vv.Length <= 1e-9:
             if fallback is None:
                 return FreeCAD.Vector(1, 0, 0)
@@ -781,13 +766,11 @@ class DuctSegmentViewProvider:
     def attach(self, vobj):
         self.Object = vobj.Object
 
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        state.pop("Object", None)
-        return state
+    def dumps(self):
+        return None
 
-    def __setstate__(self, state):
-        self.__dict__.update(state)
+    def loads(self, state):
+        pass
 
     def getIcon(self):
         return hvaclib.get_icon_path("DuctsIcon.svg")

@@ -9,7 +9,7 @@
 #   under the terms of the GNU Lesser General Public License as published      #
 #   by the Free Software Foundation; either version 2.1 of the License, or     #
 #   (at your option) any later version.                                        #
-#                                                                              #
+#                                      `                                        #
 #   This addon is distributed in the hope that it will be useful,              #
 #   but WITHOUT ANY WARRANTY; without even the implied warranty of             #
 #   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.                       #
@@ -84,7 +84,7 @@ class NewSketchObserver:
             FreeCAD.removeDocumentObserver(self)
             # Resume sync after sketching is done and request sync
             if self.network_obj and hasattr(self.network_obj, "Proxy") and self.network_obj.Proxy:
-                self.network_obj.Proxy.resumeSync(self.network_obj, request_sync=True)
+                self.network_obj.Proxy.resumeSync(request_sync=True)
 
 
 class NewDraftLineObserver:
@@ -144,7 +144,7 @@ class NewDraftLineObserver:
             FreeCAD.removeDocumentObserver(self)
             # Resume sync after creation is done and request sync
             if self.network_obj and hasattr(self.network_obj, "Proxy") and self.network_obj.Proxy:
-                self.network_obj.Proxy.resumeSync(self.network_obj, request_sync=True)
+                self.network_obj.Proxy.resumeSync(request_sync=True)
             # Switch back workbench to HVAC
             Gui.activateWorkbench(hvaclib.WORKBENCH_NAME)
                 
@@ -245,7 +245,7 @@ class DuctNetworkChangeObserver:
                     
         self._sync_in_progress = True
         try:
-            proxy.requestSync(net)
+            proxy.requestSync()
         finally:
             self._sync_in_progress = False
 
@@ -261,7 +261,7 @@ class DuctNetworkChangeObserver:
                 if hvaclib.isDuctNetwork(obj):
                     proxy = getattr(obj, "Proxy", None)
                     if proxy:
-                        proxy.requestSync(obj, initial_sync=True)
+                        proxy.requestSync(initial_sync=True)
         finally:
             self._sync_in_progress = False
             self._undo_redo_in_progress = False
@@ -302,10 +302,10 @@ class DuctNetworkChangeObserver:
                 except Exception:
                     pass
             
-            proxy.setBaseObjectEditing(net, obj, False)            
+            proxy.setBaseObjectEditing(obj, False)            
             # Resume sync after editing is done and request sync
             if net and hasattr(net, "Proxy") and net.Proxy:
-                net.Proxy.resumeSync(net, request_sync=True)
+                net.Proxy.resumeSync(request_sync=True)
 
     def _checkEditedBaseObject(self):
         """
@@ -351,7 +351,7 @@ class DuctNetworkChangeObserver:
         # Hide the geometry belonging to that base object
         proxy = getattr(net, "Proxy", None)
         if proxy:
-            proxy.setBaseObjectEditing(net, obj, True)
+            proxy.setBaseObjectEditing(obj, True)
             
         # Suspend sync to prevent transient sync requests while editing
         if net and hasattr(net, "Proxy") and net.Proxy:

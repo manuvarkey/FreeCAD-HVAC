@@ -172,7 +172,7 @@ class CommandCreateVirtualJunction:
                     points.add(hvaclib.vec_to_xyz(point))
 
             # Case 2: Terminal Junction selected
-            if DuctJunction.isDuctJunction(sel.Object):
+            if hvaclib.isDuctJunction(sel.Object):
                 ana_nid = sel.Object.NodeId
                 geo_points = parser.node_group_members_xyz(ana_nid)
                 if geo_points:
@@ -211,8 +211,8 @@ class CommandCreateVirtualJunction:
 
         # Reject overlap with existing virtual junction definitions
         used = set()
-        for vj in DuctNetwork.collectVirtualJunctionObjects(net):
-            used.update(DuctJunctionVirtual.getMemberNodeKeys(vj))
+        for vj in net.Proxy.collectVirtualJunctionObjects():
+            used.update(vj.Proxy.getMemberNodeKeys())
             
         overlap = used.intersection(member_keys)
         if overlap:
@@ -227,8 +227,8 @@ class CommandCreateVirtualJunction:
         doc = net.Document
         doc.openTransaction("Create Virtual Junction")
         try:
-            DuctNetwork.addVirtualJunctionObject(net, member_keys, member_points)
-            net.Proxy.requestSync(net)
+            net.Proxy.addVirtualJunctionObject(member_keys, member_points)
+            net.Proxy.requestSync()
             doc.commitTransaction()
         except Exception:
             doc.abortTransaction()
@@ -334,7 +334,7 @@ class CommandCreateSketch:
     def Activated(self):
         net = hvaclib.activeHVACNetwork()
         if net:
-            Network.DuctNetwork.createSketchInteractive(net)
+            net.Proxy.createSketchInteractive()
             
             
 class CommandCreateLine:
@@ -359,7 +359,7 @@ class CommandCreateLine:
     def Activated(self):
         net = hvaclib.activeHVACNetwork()
         if net:
-            Network.DuctNetwork.createDraftLineInteractive(net)
+            net.Proxy.createDraftLineInteractive()
             
             
 class CommandCreateSpline:
@@ -384,7 +384,7 @@ class CommandCreateSpline:
     def Activated(self):
         net = hvaclib.activeHVACNetwork()
         if net:
-            Network.DuctNetwork.createDraftLineInteractive(net, linetype='BSpline')
+            net.Proxy.createDraftLineInteractive(linetype='BSpline')
           
             
 class CommandEditType:

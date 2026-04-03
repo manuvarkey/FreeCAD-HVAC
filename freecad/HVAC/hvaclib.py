@@ -280,7 +280,7 @@ def allHVACNetworks(doc: FreeCAD.Document | None = None) -> list | None:
     if hasattr(doc, "Objects"):
         hvac_networks = [
             n for n in doc.Objects 
-            if DuctNetwork.isDuctNetwork(n)
+            if isDuctNetwork(n)
         ]
     return hvac_networks
 
@@ -288,7 +288,7 @@ def selectedHVACNetworks():
     from .Network import DuctNetwork
     objs = Gui.Selection.getSelection()
     if objs:
-        filtered = [o for o in objs if DuctNetwork.isDuctNetwork(o)]
+        filtered = [o for o in objs if isDuctNetwork(o)]
         return filtered
     return None
 
@@ -298,7 +298,7 @@ def selectedGeometryObjects():
     if objs:
         filtered = [
             o for o in objs
-            if DuctSegment.isDuctSegment(o) or DuctJunction.isDuctJunction(o)
+            if isDuctSegment(o) or isDuctJunction(o)
         ]
         return filtered
     return None
@@ -317,19 +317,23 @@ def getOwnerNetwork(obj):
     
 def isDuctNetwork(obj):
     from .Network import DuctNetwork
-    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctNetwork)
+    return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctNetwork)
     
 def isDuctSegment(obj):
     from .Segment import DuctSegment
-    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctSegment)
+    return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctSegment)
     
 def isDuctJunction(obj):
     from .Junction import DuctJunction
-    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunction)
+    return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunction)
+    
+def isDuctJunctionVirtual(obj):
+    from .Junction import DuctJunctionVirtual
+    return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunctionVirtual)
     
 def isDuctManagedFolder(obj):
     from .Network import DuctManagedFolder
-    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctManagedFolder)
+    return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctManagedFolder)
 
 def isSketch(obj):
     # Robust check for Sketcher objects
@@ -448,6 +452,13 @@ def vec_quant(p):
         int(round(p[1] / t)),
         int(round(p[2] / t)),
     )
+    
+def vec(v):
+    if v is None:
+        return None
+    if hasattr(v, "x") and hasattr(v, "y") and hasattr(v, "z"):
+        return FreeCAD.Vector(v)
+    return FreeCAD.Vector(float(v[0]), float(v[1]), float(v[2]))
 
 def vec_to_xyz(v):
     """Return (x,y,z) tuple from a FreeCAD.Vector-like object."""

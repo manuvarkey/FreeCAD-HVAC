@@ -49,10 +49,10 @@ class DuctJunction:
         degree=0,
     ):
         obj.Proxy = self
+        self.Object = obj
         self._allow_delete = False
         self.setProperties(obj)
         self.updateMetadata(
-            obj,
             owner=owner,
             node_id=node_id,
             node_key=node_key,
@@ -63,14 +63,15 @@ class DuctJunction:
 
     def onDocumentRestored(self, obj):
         obj.Proxy = self
+        self.Object = obj
         self._allow_delete = False
         self.setProperties(obj)
 
-    def __getstate__(self):
+    def dumps(self):
         return None
 
-    def __setstate__(self, state):
-        self._allow_delete = False
+    def loads(self, state):
+        pass
 
     def execute(self, obj):
         center_point = getattr(obj, "CenterPoint", None)
@@ -129,10 +130,10 @@ class DuctJunction:
                 obj.ConnectionLengthsJson = lengths_json
 
         except Exception as e:
-            # FreeCAD.Console.PrintError(traceback.format_exc())
-            FreeCAD.Console.PrintError(
+            FreeCAD.Console.PrintWarning(
                 "HVAC - DuctJunction - Execute Error generating junction '{}': {}\n".format(obj.Label, e)
             )
+            FreeCAD.Console.PrintMessage(traceback.format_exc())
 
     def setProperties(self, obj):
         self._addProperty(obj, "App::PropertyString", "OwnerNetworkName", "HVAC", "Owning duct network")
@@ -177,7 +178,8 @@ class DuctJunction:
             except Exception:
                 pass
 
-    def applyTypeSchema(self, obj):
+    def applyTypeSchema(self):
+        obj = self.Object
         reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
         lib_id = getattr(obj, "LibraryId", "")
         type_id = getattr(obj, "TypeId", "")
@@ -220,7 +222,6 @@ class DuctJunction:
 
     def updateMetadata(
         self,
-        obj,
         owner=None,
         node_id=0,
         node_key="",
@@ -234,6 +235,7 @@ class DuctJunction:
         analysis_json="{}",
         connection_lengths_json=None,
     ):
+        obj = self.Object
         changed = False
 
         if owner and getattr(obj, "OwnerNetworkName", "") != owner.Name:
@@ -311,10 +313,6 @@ class DuctJunction:
         )
         DuctJunctionViewProvider(junction.ViewObject)
         return junction
-
-    @staticmethod
-    def isDuctJunction(obj):
-        return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunction)
     
     @staticmethod
     def labelFor(family, node_id):
@@ -336,13 +334,11 @@ class DuctJunctionViewProvider:
     def attach(self, vobj):
         self.Object = vobj.Object
 
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        state.pop("Object", None)
-        return state
+    def dumps(self):
+        return None
 
-    def __setstate__(self, state):
-        self.__dict__.update(state)
+    def loads(self, state):
+        pass
 
     def getIcon(self):
         return hvaclib.get_icon_path("DuctsIcon.svg")
@@ -373,20 +369,22 @@ class DuctJunctionVirtual:
 
     def __init__(self, obj, owner=None, member_node_keys=None, member_points=None):
         obj.Proxy = self
+        self.Object = obj
         self.setProperties(obj)
-        self.updateMetadata(obj, 
+        self.updateMetadata(
             owner=owner, 
             member_node_keys=member_node_keys or [],
             member_points=member_points or [] )
 
     def onDocumentRestored(self, obj):
         obj.Proxy = self
+        self.Object = obj
         self.setProperties(obj)
 
-    def __getstate__(self):
+    def dumps(self):
         return None
 
-    def __setstate__(self, state):
+    def loads(self, state):
         pass
 
     def execute(self, obj):
@@ -412,7 +410,8 @@ class DuctJunctionVirtual:
             obj.MemberPoints = []
             
 
-    def updateMetadata(self, obj, owner=None, member_node_keys=[], member_points=[]):
+    def updateMetadata(self, owner=None, member_node_keys=[], member_points=[]):
+        obj = self.Object
         changed = False
         
         def compare_vector_lists(list1, list2, tol=1e-6):
@@ -454,17 +453,11 @@ class DuctJunctionVirtual:
         DuctJunctionVirtualViewProvider(vj.ViewObject)
         return vj
 
-    @staticmethod
-    def isDuctJunctionVirtual(obj):
-        return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunctionVirtual)
-
-    @staticmethod
-    def getMemberNodeKeys(obj):
-        return getattr(obj, "MemberNodeKeys", [])
+    def getMemberNodeKeys(self):
+        return getattr(self.Object, "MemberNodeKeys", [])
         
-    @staticmethod
-    def getMemberPoints(obj):
-        points = getattr(obj, "MemberPoints", "")
+    def getMemberPoints(self):
+        points = getattr(self.Object, "MemberPoints", "")
         return [tuple(x) for x in points]
 
     @staticmethod
@@ -480,13 +473,11 @@ class DuctJunctionVirtualViewProvider:
     def attach(self, vobj):
         self.Object = vobj.Object
 
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        state.pop("Object", None)
-        return state
+    def dumps(self):
+        return None
 
-    def __setstate__(self, state):
-        self.__dict__.update(state)
+    def loads(self, state):
+        pass
 
     def getIcon(self):
         return hvaclib.get_icon_path("Junction.svg")

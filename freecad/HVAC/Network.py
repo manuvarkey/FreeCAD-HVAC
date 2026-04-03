@@ -77,13 +77,11 @@ class DuctManagedFolderViewProvider:
     def attach(self, vobj):
         self.Object = vobj.Object
 
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        state.pop("Object", None)
-        return state
+    def dumps(self):
+        return None
 
-    def __setstate__(self, state):
-        self.__dict__.update(state)
+    def loads(self, state):
+        pass
 
     def getIcon(self):
         return hvaclib.get_icon_path("Folder.svg")  # optional
@@ -133,15 +131,13 @@ class DuctNetwork:
         self._parser = None
         self.setProperties(obj)
         
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        state.pop("Object", None)
-        state.pop("_hidden_source_names", None)
-        state.pop("_parser", None)
-        return state
+    def dumps(self):
+        return None
 
-    def __setstate__(self, state):
-        self.__dict__.update(state)
+    def loads(self, state):
+        # Block sync to prevent premature execution during document restore
+        # due to observer scheduling sync
+        self._sync_suspended = True
 
     def onDocumentRestored(self, obj):
         obj.Proxy = self
@@ -155,13 +151,15 @@ class DuctNetwork:
         self._hidden_source_names = set()
         self._parser = None
         self.setProperties(obj)
-        self.requestSync(obj, initial_sync=True)
+        self.requestSync(initial_sync=True)
+        # Resotore sync suspension after document restore
+        self._sync_suspended = False
         
     def execute(self, obj):
         """Manual recompute of the network triggers deferred synchronization."""
         if self._sync_in_progress:
             return
-        self.requestSync(obj)
+        self.requestSync()
 
     def setProperties(self, obj):
         """Gives the object properties to HVAC ducts."""
@@ -308,8 +306,8 @@ class DuctNetwork:
         if not getattr(obj, "DefaultHeight", 0):
             obj.DefaultHeight = 100.0
     
-    @staticmethod
-    def getDefaultLibraryId(net):
+    def getDefaultLibraryId(self):
+        net = self.Object
         lib_id = getattr(net, "DefaultLibraryId", "")
         if lib_id:
             return lib_id
@@ -319,43 +317,41 @@ class DuctNetwork:
             return lib.id
         return ""
 
-    @staticmethod
-    def getDefaultLibrary(net):
-        lib_id = DuctNetwork.getDefaultLibraryId(net)
+    def getDefaultLibrary(self):
+        lib_id = self.getDefaultLibraryId()
         if not lib_id:
             return None
         reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
         return reg.get_library(lib_id)
 
-    @staticmethod
-    def getDefaultSegmentProfile(net):
+    def getDefaultSegmentProfile(self):
+        net = self.Object
         profile = getattr(net, "DefaultSegmentProfile", "")
         if profile:
             return profile
 
-        lib_id = DuctNetwork.getDefaultLibraryId(net)
+        lib_id = self.getDefaultLibraryId()
         return hvaclib.HVACLibraryService.default_segment_profile_for_library(lib_id)
         
-    @staticmethod
-    def getDefaultAttachment(net):
+    def getDefaultAttachment(self):
+        net = self.Object
         return str(getattr(net, "DefaultAttachment", "Center"))
 
-    @staticmethod
-    def getDefaultOffset(net):
+    def getDefaultOffset(self):
+        net = self.Object
         return FreeCAD.Vector(getattr(net, "DefaultOffset", FreeCAD.Vector(0, 0, 0)))
 
     ## Library defaults management
     
-    @staticmethod
-    def defaultSegmentSelection(net, kind='straight'):
+    def defaultSegmentSelection(self, kind='straight'):
         """
         Return network default segment library/profile/type.
         Used only when creating a new segment or resetting one to defaults.
         """
-        library_id = DuctNetwork.getDefaultLibraryId(net)
-        profile = DuctNetwork.getDefaultSegmentProfile(net)
-        attachement = DuctNetwork.getDefaultAttachment(net)
-        offset = DuctNetwork.getDefaultOffset(net)
+        library_id = self.getDefaultLibraryId()
+        profile = self.getDefaultSegmentProfile()
+        attachement = self.getDefaultAttachment()
+        offset = self.getDefaultOffset()
 
         valid_profiles = hvaclib.HVACLibraryService.segment_profiles_for_library(library_id)
         if profile not in valid_profiles:
@@ -387,6 +383,7 @@ class DuctNetwork:
     ):
         """
         Apply network-level default type settings.
+        (Used as callback for command)
         """
         if network_obj is None:
             return
@@ -447,14 +444,14 @@ class DuctNetwork:
             if net is None:
                 continue
 
-            default_lib = DuctNetwork.getDefaultLibrary(net)
+            default_lib = net.Proxy.getDefaultLibrary()
             if default_lib is None:
                 continue
 
             proxy = getattr(obj, "Proxy", None)
 
-            if DuctSegment.isDuctSegment(obj):
-                default_profile = DuctNetwork.getDefaultSegmentProfile(net)
+            if hvaclib.isDuctSegment(obj):
+                default_profile = net.Proxy.getDefaultSegmentProfile()
                 if not default_profile:
                     default_profile = hvaclib.HVACLibraryService.default_segment_profile_for_library(default_lib.id)
 
@@ -496,17 +493,17 @@ class DuctNetwork:
                     obj.AnalysisJson = analysis_json
                     changed = True
                 
-                default_attachment = DuctNetwork.getDefaultAttachment(net)
+                default_attachment = net.Proxy.getDefaultAttachment()
                 if getattr(obj, "Attachment", "Center") != default_attachment:
                     obj.Attachment = default_attachment
                     changed = True
                 
-                default_offset = DuctNetwork.getDefaultOffset(net)
+                default_offset = net.Proxy.getDefaultOffset()
                 if FreeCAD.Vector(getattr(obj, "Offset", FreeCAD.Vector(0, 0, 0))) != default_offset:
                     obj.Offset = default_offset
                     changed = True
 
-            elif DuctJunction.isDuctJunction(obj):
+            elif hvaclib.isDuctJunction(obj):
                 family = getattr(obj, "Family", "")
                 default_type_id = hvaclib.HVACLibraryService.default_junction_type_id(family)
 
@@ -520,7 +517,7 @@ class DuctNetwork:
 
             if proxy and hasattr(proxy, "applyTypeSchema"):
                 try:
-                    changed = proxy.applyTypeSchema(obj) or changed
+                    changed = proxy.applyTypeSchema() or changed
                 except Exception:
                     pass
 
@@ -541,70 +538,64 @@ class DuctNetwork:
         DuctNetworkViewProvider(net.ViewObject)
         return net
 
-    @staticmethod
-    def createSketchInteractive(obj):
+    def createSketchInteractive(self):
         """
         Open the standard FreeCAD sketch creation panel and,
         after the sketch is created, move it under obj.Base.
         """
-        if not obj or not DuctNetwork.isDuctNetwork(obj):
-            return
+        obj = self.Object
         if FreeCAD.ActiveDocument is None or Gui.ActiveDocument is None:
             return
 
         # Make this network active in the 3D view context
-        DuctNetwork.setActive(obj)
+        self.setActive()
         
         # Install observer before running the command
         def callback(obj, sketch):
             if sketch:
-                DuctNetwork.addBaseObject(obj, sketch)
-                DuctNetwork.showAllJunctionGeometry(obj)
+                obj.Proxy.addBaseObject(sketch)
+                obj.Proxy.showAllJunctionGeometry()
                 
         obs = Observer.NewSketchObserver(obj, callback)
         FreeCAD.addDocumentObserver(obs)
         
         # Launch the built-in sketch creation command
-        DuctNetwork.hideAllJunctionGeometry(obj)
+        self.hideAllJunctionGeometry()
         Gui.runCommand("Sketcher_NewSketch")
 
-    @staticmethod
-    def createDraftLineInteractive(obj, linetype='Line'):
+    def createDraftLineInteractive(self, linetype='Line'):
         """
         Open the standard Draft Line command and, after the user exits the tool,
         move all newly created Draft line objects under obj.Base.
         """
-        if not obj or not DuctNetwork.isDuctNetwork(obj):
-            return
+        obj = self.Object
         if FreeCAD.ActiveDocument is None or Gui.ActiveDocument is None:
             return
 
         # Make this network active in the 3D view context
-        DuctNetwork.setActive(obj)
+        self.setActive()
         
         # Install observer before running the command
         def callback(net, objs):
             for obj in objs:
                 if hvaclib.isWire(obj):
-                    DuctNetwork.addBaseObject(net, obj)
-            DuctNetwork.showAllJunctionGeometry(net)
+                    net.Proxy.addBaseObject(obj)
+            net.Proxy.showAllJunctionGeometry()
                 
         obs = Observer.NewDraftLineObserver(obj, callback)
         FreeCAD.addDocumentObserver(obs)
         
         # Launch the built-in Draft Line/ BSpline creation command
-        DuctNetwork.hideAllJunctionGeometry(obj)
+        self.hideAllJunctionGeometry()
         Gui.activateWorkbench("DraftWorkbench")
         if linetype=='Line':
             Gui.runCommand("Draft_Line")
         elif linetype=='BSpline':
             Gui.runCommand("Draft_BSpline")
 
-    @staticmethod
-    def addBaseObject(net, obj):
+    def addBaseObject(self, obj):
+        net = self.Object
         if not net or not obj:
-            return False
-        if not DuctNetwork.isDuctNetwork(net):
             return False
         if not hasattr(net, "Base") or net.Base is None:
             return False
@@ -619,23 +610,21 @@ class DuctNetwork:
         
         net.Base.addObject(obj)
         if getattr(net, "Proxy", None):
-            net.Proxy.requestSync(net)
+            net.Proxy.requestSync()
         net.Document.recompute()
         return True
         
-    @staticmethod
-    def addVirtualJunctionObject(obj, member_node_keys, member_points):
+    def addVirtualJunctionObject(self, member_node_keys, member_points):
+        obj = self.Object
         doc = obj.Document
         name = doc.getUniqueObjectName("VirtualJunction")
         vj = DuctJunctionVirtual.create(doc, name, owner=obj, member_node_keys=member_node_keys, member_points=member_points)
         obj.Topology.addObject(vj)
         return vj
 
-    @staticmethod
-    def removeBaseObject(net, obj):
+    def removeBaseObject(self, obj):
+        net = self.Object
         if not net or not obj:
-            return False
-        if not DuctNetwork.isDuctNetwork(net):
             return False
         if not hasattr(net, "Base") or net.Base is None:
             return False
@@ -646,32 +635,28 @@ class DuctNetwork:
     
         net.Base.removeObject(obj)
         if getattr(net, "Proxy", None):
-            net.Proxy.requestSync(net)
+            net.Proxy.requestSync()
         net.Document.recompute()
         return True
 
-    @staticmethod
-    def removeGeometryObject(net, obj):
+    def removeGeometryObject(self, obj):
         """Remove a derived geometry object from the Geometry folder and document."""
-        if not net or not obj or not DuctNetwork.isDuctNetwork(net):
-            return False
-        if getattr(obj, "Document", None) != net.Document:
-            return False
-        if (DuctSegment.isDuctSegment(obj) or DuctJunction.isDuctJunction(obj)) and getattr(obj, "Proxy", None):
+        net = self.Object
+        if (hvaclib.isDuctSegment(obj) or hvaclib.isDuctJunction(obj)) and getattr(obj, "Proxy", None):
             obj.Proxy._allow_delete = True
         if hasattr(net, "Geometry") and net.Geometry and obj in net.Geometry.OutList:
             net.Geometry.removeObject(obj)
         net.Document.removeObject(obj.Name)
         return True
 
-    @staticmethod
-    def collectSegmentObjects(net):
+    def collectSegmentObjects(self):
+        net = self.Object
         segments = {}
         geometry = getattr(net, "Geometry", None)
         if geometry is None:
             return segments
         for child in list(geometry.OutList):
-            if not DuctSegment.isDuctSegment(child):
+            if not hvaclib.isDuctSegment(child):
                 continue
             key = getattr(child, "SegmentKey", "")
             if not key and getattr(child, "SourceObjectName", ""):
@@ -680,40 +665,36 @@ class DuctNetwork:
                 segments[key] = child
         return segments
         
-    @staticmethod
-    def collectJunctionObjects(net):
+    def collectJunctionObjects(self):
+        net = self.Object
         junctions = {}
         geometry = getattr(net, "Geometry", None)
         if geometry is None:
             return junctions
         for child in list(geometry.OutList):
-            if not DuctJunction.isDuctJunction(child):
+            if not hvaclib.isDuctJunction(child):
                 continue
             key = getattr(child, "NodeKey", "")
             if key:
                 junctions[key] = child
         return junctions
         
-    @staticmethod
-    def collectVirtualJunctionObjects(obj):
+    def collectVirtualJunctionObjects(self):
         topology_objs = []
-        topology = getattr(obj, "Topology", None)
-        if topology:
-            for child in list(getattr(topology, "Group", []) or []):
-                if DuctJunctionVirtual.isDuctJunctionVirtual(child):
-                    topology_objs.append(child)
+        for child in list(getattr(self.Object.Topology, "Group", []) or []):
+            if hvaclib.isDuctJunctionVirtual(child):
+                topology_objs.append(child)
         return topology_objs
         
-    @staticmethod
-    def getNodeGroups(obj, parser):
+    def getNodeGroups(self, parser):
         """Compile node groups from virtual junction objects and the parser's node ID map."""
         node_groups = []
         
         node_id_by_key = {parser.geometric_node_key(nid): nid for nid in parser.geometric_nodes()}
-        virtual_objs = DuctNetwork.collectVirtualJunctionObjects(obj)
+        virtual_objs = self.collectVirtualJunctionObjects()
         
         for vj in virtual_objs:
-            keys = DuctJunctionVirtual.getMemberNodeKeys(vj)
+            keys = vj.Proxy.getMemberNodeKeys()
             ids = []
     
             for key in keys:
@@ -727,22 +708,10 @@ class DuctNetwork:
     
         return node_groups
     
-    @staticmethod
-    def setActive(obj):
+    def setActive(self):
         """Set this DuctNetwork as the active container in the 3D view."""
-        Gui.ActiveDocument.ActiveView.setActiveObject(DuctNetwork.CONTEXT_KEY, obj)
+        Gui.ActiveDocument.ActiveView.setActiveObject(DuctNetwork.CONTEXT_KEY, self.Object)
 
-    @staticmethod
-    def getActive(doc=None):
-        """Get the active DuctNetwork container from the 3D view."""
-        if not FreeCAD.GuiUp:
-            return None
-        if doc is None:
-            doc = FreeCAD.ActiveDocument
-        if doc is None or Gui.ActiveDocument is None:
-            return None
-        return Gui.ActiveDocument.ActiveView.getActiveObject(DuctNetwork.CONTEXT_KEY)
-        
     @staticmethod
     def _setGeometryVisibilityDeferred(obj, visible):
         if not FreeCAD.GuiUp:
@@ -761,11 +730,8 @@ class DuctNetwork:
 
         QtCore.QTimer.singleShot(0, apply)
 
-    def showAllGeometry(self, net):
-        geometry = getattr(net, "Geometry", None)
-        if geometry is None:
-            return
-
+    def showAllGeometry(self):
+        geometry = self.Object.Geometry
         if getattr(geometry, "ViewObject", None):
             try:
                 geometry.ViewObject.Visibility = True
@@ -773,69 +739,57 @@ class DuctNetwork:
                 pass
 
         for obj in list(geometry.OutList):
-            if DuctSegment.isDuctSegment(obj) or DuctJunction.isDuctJunction(obj):
-                DuctNetwork._setGeometryVisibilityDeferred(obj, True)
+            if hvaclib.isDuctSegment(obj) or hvaclib.isDuctJunction(obj):
+                self._setGeometryVisibilityDeferred(obj, True)
                 
     def _segmentFromBaseObject(self, seg, base_obj):
         return (
             seg is not None
             and base_obj is not None
-            and DuctSegment.isDuctSegment(seg)
+            and hvaclib.isDuctSegment(seg)
             and getattr(seg, "SourceObjectName", "") == base_obj.Name
         )
-    
-    def hideGeometryForBaseObject(self, net, base_obj):
-        geometry = getattr(net, "Geometry", None)
-        if geometry is None or base_obj is None:
-            return
-        for seg in list(geometry.OutList):
-            if self._segmentFromBaseObject(seg, base_obj):
-                DuctNetwork._setGeometryVisibilityDeferred(seg, False)
                 
-    @staticmethod
-    def hideAllJunctionGeometry(net):
-        geometry = getattr(net, "Geometry", None)
-        if geometry is None:
-            return
-
-        for obj in list(geometry.OutList):
-            if DuctNetwork._isJunctionObject(obj):
-                DuctNetwork._setGeometryVisibilityDeferred(obj, False)
-
-    @staticmethod
-    def showAllJunctionGeometry(net):
-        geometry = getattr(net, "Geometry", None)
-        if geometry is None:
-            return
-
-        for obj in list(geometry.OutList):
-            if DuctNetwork._isJunctionObject(obj):
-                DuctNetwork._setGeometryVisibilityDeferred(obj, True)
+    def showAllJunctionGeometry(self):
+        for obj in list(self.Object.Geometry.OutList):
+            if hvaclib.isDuctJunction(obj):
+                self._setGeometryVisibilityDeferred(obj, True)
+                
+    def hideAllJunctionGeometry(self):
+        for obj in list(self.Object.Geometry.OutList):
+            if hvaclib.isDuctJunction(obj):
+                self._setGeometryVisibilityDeferred(obj, False)
     
-    def showGeometryForBaseObject(self, net, base_obj):
+    def showGeometryForBaseObject(self, base_obj):
+        net = self.Object
         geometry = getattr(net, "Geometry", None)
         if geometry is None or base_obj is None:
             return
         for seg in list(geometry.OutList):
             if self._segmentFromBaseObject(seg, base_obj):
-                DuctNetwork._setGeometryVisibilityDeferred(seg, True)
+                self._setGeometryVisibilityDeferred(seg, True)
+                
+    def hideGeometryForBaseObject(self, base_obj):
+        net = self.Object
+        geometry = getattr(net, "Geometry", None)
+        if geometry is None or base_obj is None:
+            return
+        for seg in list(geometry.OutList):
+            if self._segmentFromBaseObject(seg, base_obj):
+                self._setGeometryVisibilityDeferred(seg, False)
     
-    def setBaseObjectEditing(self, net, base_obj, editing):
+    def setBaseObjectEditing(self, base_obj, editing):
+        net = self.Object
         if net is None or base_obj is None:
             return
         if editing:
             self._hidden_source_names.add(base_obj.Name)
-            self.hideGeometryForBaseObject(net, base_obj)
-            self.hideAllJunctionGeometry(net)
+            self.hideGeometryForBaseObject(base_obj)
+            self.hideAllJunctionGeometry()
         else:
             self._hidden_source_names.discard(base_obj.Name)
-            self.showGeometryForBaseObject(net, base_obj)
-            self.showAllJunctionGeometry(net)
-
-    @staticmethod
-    def isDuctNetwork(obj):
-        """Test whether obj is a DuctNetwork FeaturePython object."""
-        return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctNetwork)
+            self.showGeometryForBaseObject(base_obj)
+            self.showAllJunctionGeometry()
         
     @staticmethod
     def isBaseObject(obj):
@@ -852,22 +806,8 @@ class DuctNetwork:
         
     @staticmethod
     def isGeometryObject(obj):
-        return (
-            bool(obj)
-            and hasattr(obj, "Proxy")
-            and (
-                isinstance(obj.Proxy, DuctSegment)
-                or isinstance(obj.Proxy, DuctJunction)
-            )
-        )
-        
-    @staticmethod
-    def _isJunctionObject(obj):
-        try:
-            return DuctJunction.isDuctJunction(obj)
-        except Exception:
-            return False
-        
+        return hvaclib.isDuctJunction(obj) or hvaclib.isDuctSegment(obj)
+                
     @staticmethod
     def getOwnerNetwork(obj):
         """Return the owning duct network document object for an internal object."""
@@ -896,14 +836,14 @@ class DuctNetwork:
     
     # Functions for syncing object data with the network parser
     
-    @staticmethod
-    def syncVirtualJunctions(obj, parser, initial_sync=False):
+    def syncVirtualJunctions(self, parser, initial_sync=False):
         """Update the MemberNodes property of virtual junction objects
             from the actual node keys from parser."""
-        for vj in DuctNetwork.collectVirtualJunctionObjects(obj):
+        obj = self.Object
+        for vj in self.collectVirtualJunctionObjects():
             # Use quantized point keys to look up new node keys from parser
-            stored_points = DuctJunctionVirtual.getMemberPoints(vj)
-            stored_keys = DuctJunctionVirtual.getMemberNodeKeys(vj)
+            stored_points = vj.Proxy.getMemberPoints()
+            stored_keys = vj.Proxy.getMemberNodeKeys()
             # Get quantised nodemap from parser
             geo_nodekey_map = {parser.geometric_node_key(id): point for (id, point) in parser.geometric_node_point_map().items()}
             # Find nodekeys from nodemap
@@ -925,13 +865,12 @@ class DuctNetwork:
             
             # Update the MemberNodeKeys property with the new node keys
             vj.Proxy.updateMetadata(
-                vj, 
                 owner=obj, 
                 member_node_keys=member_keys, 
                 member_points=member_points
             )
 
-    def syncSegments(self, net, parser, initial_sync=False):
+    def syncSegments(self, parser, initial_sync=False):
         """
         Synchronize derived DuctSegment objects with the base geometry.
     
@@ -939,18 +878,19 @@ class DuctNetwork:
         Network defaults are only used when creating a new segment or repairing
         missing/invalid values.
         """
+        net = self.Object
         doc = net.Document
         geometry = getattr(net, "Geometry", None)
         if doc is None or geometry is None:
             return False
     
-        default_lib = self.getDefaultLibrary(net)
+        default_lib = self.getDefaultLibrary()
         if default_lib is None:
             return False
     
         changed = False
-        existing_segments = self.collectSegmentObjects(net)
-        trim_map = self.collectSegmentTrimMap(net)
+        existing_segments = self.collectSegmentObjects()
+        trim_map = self.collectSegmentTrimMap()
         live_objs = set()
     
         for edge_ref in parser.edges():
@@ -991,7 +931,7 @@ class DuctNetwork:
                 
                 # Get and set default segment properties from default library
                 kind = hvaclib.BaseCurveKind(edge_ref.obj_name, edge_ref.local_index)
-                defaults = self.defaultSegmentSelection(net, kind=kind)
+                defaults = self.defaultSegmentSelection(kind=kind)
                 if hasattr(segment_obj, "LibraryId"):
                     segment_obj.LibraryId = defaults["library_id"]
                 if hasattr(segment_obj, "Profile"):
@@ -1007,9 +947,9 @@ class DuctNetwork:
     
                 # If source base object is marked to be hidden, hide the created segment geometry
                 if source_obj.Name in self._hidden_source_names:
-                    DuctNetwork._setGeometryVisibilityDeferred(segment_obj, False)
+                    self._setGeometryVisibilityDeferred(segment_obj, False)
                 else:
-                    DuctNetwork._setGeometryVisibilityDeferred(segment_obj, True)
+                    self._setGeometryVisibilityDeferred(segment_obj, True)
     
             # Add the segment object to the geometry folder if not already present
             if segment_obj not in geometry.OutList:
@@ -1035,7 +975,7 @@ class DuctNetwork:
             trim_start, trim_end = self.resolveSegmentEndTrims(trim_entry)
             
             # Get library ID, profile and type_id for segment, defaulting to active library if not set
-            library_id = getattr(segment_obj, "LibraryId", "") or self.getDefaultLibraryId(net)
+            library_id = getattr(segment_obj, "LibraryId", "") or self.getDefaultLibraryId()
             profile = getattr(segment_obj, "Profile", "")
             valid_profiles = hvaclib.HVACLibraryService.segment_profiles_for_library(library_id)
             if profile not in valid_profiles:
@@ -1050,7 +990,6 @@ class DuctNetwork:
             
             # Update metadata based on updated data
             meta_changed = segment_obj.Proxy.updateMetadata(
-                segment_obj,
                 owner=net,
                 key=key,
                 source_obj=source_obj,
@@ -1076,7 +1015,7 @@ class DuctNetwork:
             changed = changed or meta_changed
     
             # Update property schema based on type ID and library ID
-            schema_changed = segment_obj.Proxy.applyTypeSchema(segment_obj)
+            schema_changed = segment_obj.Proxy.applyTypeSchema()
             changed = changed or schema_changed
     
             # If parameters were cached, restore them
@@ -1098,31 +1037,32 @@ class DuctNetwork:
                 # Cache segment parameters for later restoration during undo
                 if seg_key:
                     self._runtime_param_cache[seg_key] = self._segmentUserParams(segment_obj)
-                self.removeGeometryObject(net, segment_obj)
+                self.removeGeometryObject(segment_obj)
                 changed = True
         
         return changed
         
-    def syncJunctions(self, net, parser, initial_sync=False):
+    def syncJunctions(self, parser, initial_sync=False):
         """
         Synchronize derived DuctJunction objects with parser nodes.
     
         Existing junction LibraryId / TypeId are preserved.
         New junctions are initialized from network defaults.
         """
+        net = self.Object
         doc = net.Document
         geometry = getattr(net, "Geometry", None)
         if doc is None or geometry is None:
             return False
     
-        default_lib = self.getDefaultLibrary(net)
+        default_lib = self.getDefaultLibrary()
         if default_lib is None:
             return False
     
         changed = False
         live_objs = set()
-        existing_junctions = self.collectJunctionObjects(net)
-        segment_map = self.collectSegmentObjects(net)
+        existing_junctions = self.collectJunctionObjects()
+        segment_map = self.collectSegmentObjects()
         
         for node_id in parser.nodes():
             # Get node analysis
@@ -1246,7 +1186,6 @@ class DuctNetwork:
             
             # Update metadata based on updated data
             meta_changed = junction_obj.Proxy.updateMetadata(
-                junction_obj,
                 owner=net,
                 node_id=node_id,
                 node_key=node_key,
@@ -1262,7 +1201,7 @@ class DuctNetwork:
             changed = changed or meta_changed
             
             # Update property schema based on type ID and library ID
-            schema_changed = junction_obj.Proxy.applyTypeSchema(junction_obj)
+            schema_changed = junction_obj.Proxy.applyTypeSchema()
             changed = changed or schema_changed
     
             # Update label for segment object based on source object and edge index
@@ -1274,17 +1213,17 @@ class DuctNetwork:
         # Remove old junctions
         for junction_obj in list(existing_junctions.values()):
             if junction_obj not in live_objs:
-                self.removeGeometryObject(net, junction_obj)
+                self.removeGeometryObject(junction_obj)
                 changed = True
         
         return changed
                             
-    def requestSync(self, obj, initial_sync=None, force_recompute=False):
+    def requestSync(self, initial_sync=None, force_recompute=False):
         if initial_sync is not None:
             self._initial_sync = bool(initial_sync)            
         
         if self._sync_suspended:
-                return
+            return
         
         if self._sync_scheduled:
             return
@@ -1294,26 +1233,27 @@ class DuctNetwork:
             FreeCAD.Console.PrintMessage("HVAC - Sync requested (Initial sync).\n")
         else:
             FreeCAD.Console.PrintMessage("HVAC - Sync requested.\n")
-        QtCore.QTimer.singleShot(0, lambda o=obj: self._runDeferredSync(o, force_recompute))
+        QtCore.QTimer.singleShot(0, lambda force_recompute=force_recompute: self._runDeferredSync(force_recompute))
         
     def suspendSync(self):
         self._sync_suspended = True
     
-    def resumeSync(self, obj, request_sync=True):
+    def resumeSync(self, request_sync=True):
         self._sync_suspended = False
-        if request_sync == True:
-            self.requestSync(obj)
+        if request_sync:
+            self.requestSync()
             
     def getParser(self, rebuild=False, set_node_groups=True):
         if self._parser is None or rebuild:
             parser = DuctNetworkParser(list(self.Object.Base.OutList))
             if set_node_groups:
-                node_groups = DuctNetwork.getNodeGroups(self.Object, parser)
+                node_groups = self.getNodeGroups(parser)
                 parser.set_node_groups(node_groups)
             self._parser = parser
         return self._parser
     
-    def _runDeferredSync(self, obj, force_recompute=False):
+    def _runDeferredSync(self, force_recompute=False):
+        obj = self.Object
         self._sync_scheduled = False
     
         if obj is None or obj.Document is None:
@@ -1331,42 +1271,42 @@ class DuctNetwork:
                 # Get parser for syncing virtual junctions
                 parser = self.getParser(rebuild=True, set_node_groups=False)
                 # Update VirtualJunction keys
-                self.syncVirtualJunctions(obj, parser, initial_sync=True)
+                self.syncVirtualJunctions(parser, initial_sync=True)
                 # Rebuild parser after syncing virtual junctions
                 parser = self.getParser(rebuild=True)
                 
                 # Stage 1: Sync segments first to update edge data after document reload
-                self.syncSegments(obj, parser, initial_sync=True)
+                self.syncSegments(parser, initial_sync=True)
                 obj.Document.recompute()
                 
                 # Stage 2: Sync junctions, so that their execute() writes ConnectionLengthsJson
-                self.syncJunctions(obj, parser, initial_sync=True)
+                self.syncJunctions(parser, initial_sync=True)
                 obj.Document.recompute()
                 
                 # Stage 3: Sync segments which consume the junction trim data
-                self.syncSegments(obj, parser, initial_sync=False)
+                self.syncSegments(parser, initial_sync=False)
                 obj.Document.recompute()
                 
             else:  
                 # Get parser
                 parser = self.getParser(rebuild=True, set_node_groups=False)
                 # Update VirtualJunction keys
-                self.syncVirtualJunctions(obj, parser, initial_sync=False)
+                self.syncVirtualJunctions(parser, initial_sync=False)
                 # Rebuild parser after syncing virtual junctions
                 parser = self.getParser(rebuild=True)
                 
                 # Stage 1: Sync segments first to update edge data
-                changed_segments = self.syncSegments(obj, parser, initial_sync=False)
+                changed_segments = self.syncSegments(parser, initial_sync=False)
                 if changed_segments or force_recompute:
                     obj.Document.recompute()
                     
                 # Stage 2: Sync junctions, for creating ports; so that their execute() writes ConnectionLengthsJson
-                changed_junctions = self.syncJunctions(obj, parser, initial_sync=False)
+                changed_junctions = self.syncJunctions(parser, initial_sync=False)
                 if changed_junctions or force_recompute:
                     obj.Document.recompute()
     
                 # Stage 3: Sync segments which consume the junction trim data
-                changed_segments = self.syncSegments(obj, parser, initial_sync=False)
+                changed_segments = self.syncSegments(parser, initial_sync=False)
                 if changed_segments or force_recompute:
                     obj.Document.recompute()
                     
@@ -1447,6 +1387,7 @@ class DuctNetwork:
     def applyTypeSelection(objects, library_id="", type_id=""):
         """
         Apply library/type selection to selected segment/junction objects.
+        (Used as callback for command)
         """
         doc = FreeCAD.ActiveDocument
         if doc is None:
@@ -1494,7 +1435,7 @@ class DuctNetwork:
             proxy = getattr(obj, "Proxy", None)
             if proxy and hasattr(proxy, "applyTypeSchema"):
                 try:
-                    changed = proxy.applyTypeSchema(obj) or changed
+                    changed = proxy.applyTypeSchema() or changed
                 except Exception:
                     pass
             
@@ -1509,10 +1450,14 @@ class DuctNetwork:
             for net in nets_to_sync:
                 proxy = getattr(net, "Proxy", None)
                 if proxy:
-                    proxy.requestSync(net, force_recompute=True)
+                    proxy.requestSync(force_recompute=True)
      
     @staticmethod
     def applyPlacementSelection(objects, attachment=None, offset=None, profile_x_axis=None):
+        """
+        Set placement for selected objects
+        (Used as callback for command)
+        """
         doc = FreeCAD.ActiveDocument
         if doc is None:
             return
@@ -1545,12 +1490,11 @@ class DuctNetwork:
             for net in nets_to_sync:
                 proxy = getattr(net, "Proxy", None)
                 if proxy:
-                    proxy.requestSync(net, force_recompute=True)       
+                    proxy.requestSync(force_recompute=True)       
     
     ## Trim map generation from junctions
     
-    @staticmethod
-    def collectSegmentTrimMap(net):
+    def collectSegmentTrimMap(self):
         """
         Collect trim contributions from all junctions.
     
@@ -1563,6 +1507,7 @@ class DuctNetwork:
                 ...
             }
         """
+        net = self.Object
         trim_map = {}
     
         geometry = getattr(net, "Geometry", None)
@@ -1637,25 +1582,26 @@ class DuctNetworkViewProvider:
     def attach(self, vobj):
         self.Object = vobj.Object
 
-    def __getstate__(self):
-        # Create a copy of the state and remove the non-serializable object
-        state = self.__dict__.copy()
-        if 'Object' in state:
-            del state['Object']
-        return state
+    def dumps(self):
+        return None
 
-    def __setstate__(self, state):
-        # Restore the state
-        self.__dict__.update(state)
-        # self.Object will be restored later in attach()
+    def loads(self, state):
+        pass
 
     def getIcon(self):
         return hvaclib.get_icon_path("DuctsIcon.svg")
 
     def setEdit(self, vobj, mode):
+        
+        def callback_add_base_object(net, obj):
+            net.Proxy.addBaseObject(obj)
+        
+        def callback_remove_base_object(net, obj):
+            net.Proxy.removeBaseObject(obj)
+            
         panel = TaskPanel.TaskPanelEditDuctNetwork(vobj.Object,
-            callback_add_base_object = DuctNetwork.addBaseObject,
-            callback_remove_base_object = DuctNetwork.removeBaseObject
+            callback_add_base_object = callback_add_base_object,
+            callback_remove_base_object = callback_remove_base_object
         )
         Gui.Control.showDialog(panel)
         return True
@@ -1710,13 +1656,14 @@ def create_new_duct_network(name="DuctNetwork", set_active=True):
         activate_duct_network(net, set_edit=False)
 
 def activate_duct_network(net, set_edit=False):
-    DuctNetwork.setActive(net)
-    # Set network to edit mode
-    if set_edit:
-        Gui.ActiveDocument.setEdit(net.Name)
-    else:
-      pass
-    hvaclib.refreshState()
+    if hvaclib.isDuctNetwork(net):
+        net.Proxy.setActive()
+        # Set network to edit mode
+        if set_edit:
+            Gui.ActiveDocument.setEdit(net.Name)
+        else:
+            pass
+        hvaclib.refreshState()
 
 def modify_duct_network(net):
     """Modify the selected HVAC duct network object"""
@@ -1736,7 +1683,7 @@ def delete_duct_networks(nets, remove_internal_only=False):
             
         if hasattr(net, "Geometry") and net.Geometry:
             for obj in list(net.Geometry.OutList):
-                DuctNetwork.removeGeometryObject(net, obj)
+                net.Proxy.removeGeometryObject(obj)
             doc.removeObject(net.Geometry.Name)
             
         if hasattr(net, "Base") and net.Base:
