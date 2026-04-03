@@ -29,7 +29,7 @@ import FreeCADGui as Gui
 from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
 
-from . import hvaclib
+from .utils import hvaclib
 
 Gui.addLanguagePath(hvaclib.get_language_base_path())
 Gui.updateLocale()
@@ -48,7 +48,7 @@ class HVAC(Gui.Workbench):
         It is executed once in a FreeCAD session followed by the Activated function.
         """
         # import here all the needed files that create your FreeCAD commands
-        from . import Command
+        from .ui import Command
         
         self.watchers = []
         self.observers = []
@@ -229,7 +229,7 @@ class HVAC(Gui.Workbench):
         
     def setObservers(self):
         # Observer for watching duct network changes
-        from .Observer import DuctNetworkChangeObserver
+        from .ui.Observer import DuctNetworkChangeObserver
         hvac_change_observer = DuctNetworkChangeObserver()
         
         self.observers = [hvac_change_observer]

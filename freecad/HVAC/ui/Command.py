@@ -29,10 +29,69 @@ from PySide import QtWidgets, QtCore
 from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
 
-from . import hvaclib
-from . import DuctNetwork
+from ..utils import hvaclib
+from ..core import Network
+from . import Observer
 
 
+#=================================================
+# Helper functions
+#=================================================
+
+def createSketchInteractive(net):
+    """
+    Open the standard FreeCAD sketch creation panel and,
+    after the sketch is created, move it under obj.Base.
+    """
+    if FreeCAD.ActiveDocument is None or Gui.ActiveDocument is None:
+        return
+
+    # Make this network active in the 3D view context
+    net.Proxy.setActive()
+    
+    # Install observer before running the command
+    def callback(obj, sketch):
+        if sketch:
+            obj.Proxy.addBaseObject(sketch)
+            obj.Proxy.showAllJunctionGeometry()
+            
+    obs = Observer.NewSketchObserver(net, callback)
+    FreeCAD.addDocumentObserver(obs)
+    
+    # Launch the built-in sketch creation command
+    net.Proxy.hideAllJunctionGeometry()
+    Gui.runCommand("Sketcher_NewSketch")
+    
+def createDraftLineInteractive(net, linetype='Line'):
+    """
+    Open the standard Draft Line command and, after the user exits the tool,
+    move all newly created Draft line objects under obj.Base.
+    """
+    if FreeCAD.ActiveDocument is None or Gui.ActiveDocument is None:
+        return
+
+    # Make this network active in the 3D view context
+    net.Proxy.setActive()
+    
+    # Install observer before running the command
+    def callback(net, objs):
+        for obj in objs:
+            if hvaclib.isWire(obj):
+                net.Proxy.addBaseObject(obj)
+        net.Proxy.showAllJunctionGeometry()
+            
+    obs = Observer.NewDraftLineObserver(net, callback)
+    FreeCAD.addDocumentObserver(obs)
+    
+    # Launch the built-in Draft Line/ BSpline creation command
+    net.Proxy.hideAllJunctionGeometry()
+    Gui.activateWorkbench("DraftWorkbench")
+    if linetype=='Line':
+        Gui.runCommand("Draft_Line")
+    elif linetype=='BSpline':
+        Gui.runCommand("Draft_BSpline")
+        
+        
 #=================================================
 # Command classes
 #=================================================
@@ -56,7 +115,7 @@ class CommandCreateDuctNetwork:
             return False
 
     def Activated(self):
-        DuctNetwork.create_new_duct_network()
+        Network.create_new_duct_network()
 
 
 class CommandActivateDuctNetwork:
@@ -91,13 +150,13 @@ class CommandActivateDuctNetwork:
 
         if len(hvac_networks) == 1:
             # If there's only one, activate it directly without showing a dialog
-            DuctNetwork.activate_duct_network(hvac_networks[0], set_edit=False)
+            Network.activate_duct_network(hvac_networks[0], set_edit=False)
         elif selected_hvac_networks:
             # Select first selected
-            DuctNetwork.activate_duct_network(selected_hvac_networks[0], set_edit=False)
+            Network.activate_duct_network(selected_hvac_networks[0], set_edit=False)
         elif len(hvac_networks) > 1:
             # If there are multiple, show a task panel to let the user choose
-            self.task_panel = TaskPanelActivate(hvac_networks, activate_callback = DuctNetwork.activate_duct_network)
+            self.task_panel = TaskPanelActivate(hvac_networks, activate_callback = Network.activate_duct_network)
             Gui.Control.showDialog(self.task_panel)
 
 
@@ -124,10 +183,10 @@ class CommandModifyDuctNetwork:
     def Activated(self):
         selected_hvac_networks = hvaclib.selectedHVACNetworks()
         if selected_hvac_networks:
-            DuctNetwork.modify_duct_network(selected_hvac_networks[0])
+            Network.modify_duct_network(selected_hvac_networks[0])
         else:
             active_hvac_network = hvaclib.activeHVACNetwork()
-            DuctNetwork.modify_duct_network(active_hvac_network)
+            Network.modify_duct_network(active_hvac_network)
             
             
 class CommandCreateVirtualJunction:
@@ -143,7 +202,7 @@ class CommandCreateVirtualJunction:
             
     def _GetSelectedPoints(self, parser):
         
-        from .DuctNetwork import DuctNetwork, DuctJunction
+        from ..core.Network import DuctNetwork, DuctJunction
         
         # Get selection extended including points
         sels = Gui.Selection.getSelectionEx()
@@ -172,7 +231,7 @@ class CommandCreateVirtualJunction:
                     points.add(hvaclib.vec_to_xyz(point))
 
             # Case 2: Terminal Junction selected
-            if DuctJunction.isDuctJunction(sel.Object):
+            if hvaclib.isDuctJunction(sel.Object):
                 ana_nid = sel.Object.NodeId
                 geo_points = parser.node_group_members_xyz(ana_nid)
                 if geo_points:
@@ -181,7 +240,7 @@ class CommandCreateVirtualJunction:
         return list(points)
 
     def Activated(self):
-        from .DuctNetwork import DuctNetwork, DuctJunctionVirtual
+        from ..core.Network import DuctNetwork, DuctJunctionVirtual
         
         # Get active network
         net = hvaclib.activeHVACNetwork()
@@ -211,8 +270,8 @@ class CommandCreateVirtualJunction:
 
         # Reject overlap with existing virtual junction definitions
         used = set()
-        for vj in DuctNetwork.collectVirtualJunctionObjects(net):
-            used.update(DuctJunctionVirtual.getMemberNodeKeys(vj))
+        for vj in net.Proxy.collectVirtualJunctionObjects():
+            used.update(vj.Proxy.getMemberNodeKeys())
             
         overlap = used.intersection(member_keys)
         if overlap:
@@ -227,8 +286,8 @@ class CommandCreateVirtualJunction:
         doc = net.Document
         doc.openTransaction("Create Virtual Junction")
         try:
-            DuctNetwork.addVirtualJunctionObject(net, member_keys, member_points)
-            net.Proxy.requestSync(net)
+            net.Proxy.addVirtualJunctionObject(member_keys, member_points)
+            net.Proxy.requestSync()
             doc.commitTransaction()
         except Exception:
             doc.abortTransaction()
@@ -266,7 +325,7 @@ class CommandEditBaseObject:
         ]
         selected_base_objs = hvaclib.selectedBaseObjects()
         if selected_geo_objs:
-            base = DuctNetwork.DuctNetwork.getOwnerBaseObject(selected_geo_objs[0])
+            base = Network.DuctNetwork.getOwnerBaseObject(selected_geo_objs[0])
         elif selected_base_objs:
             base = selected_base_objs[0]
             
@@ -278,7 +337,6 @@ class CommandEditBaseObject:
                 Gui.Selection.addSelection(base)
                 
                 # Install observer before running the command
-                from . import Observer
                 def callback(net, objs):
                     pass
                 net = hvaclib.activeHVACNetwork()
@@ -312,7 +370,7 @@ class CommandDeleteDuctNetwork:
     def Activated(self):
         selected_hvac_networks = hvaclib.selectedHVACNetworks()
         if selected_hvac_networks:
-            DuctNetwork.delete_duct_networks(selected_hvac_networks)
+            Network.delete_duct_networks(selected_hvac_networks)
             
     
 class CommandCreateSketch:
@@ -334,9 +392,9 @@ class CommandCreateSketch:
     def Activated(self):
         net = hvaclib.activeHVACNetwork()
         if net:
-            DuctNetwork.DuctNetwork.createSketchInteractive(net)
+            createSketchInteractive(net)
             
-            
+
 class CommandCreateLine:
     """Interactively adds Draft line objects to the currently active network."""
 
@@ -359,7 +417,7 @@ class CommandCreateLine:
     def Activated(self):
         net = hvaclib.activeHVACNetwork()
         if net:
-            DuctNetwork.DuctNetwork.createDraftLineInteractive(net)
+            createDraftLineInteractive(net)
             
             
 class CommandCreateSpline:
@@ -384,7 +442,7 @@ class CommandCreateSpline:
     def Activated(self):
         net = hvaclib.activeHVACNetwork()
         if net:
-            DuctNetwork.DuctNetwork.createDraftLineInteractive(net, linetype='BSpline')
+            createDraftLineInteractive(net, linetype='BSpline')
           
             
 class CommandEditType:
@@ -411,7 +469,7 @@ class CommandEditType:
         return bool(selected_geom)
 
     def Activated(self):
-        from .TaskPanel import TaskPanelTypeEditor
+        from ..ui.TaskPanel import TaskPanelTypeEditor
 
         selected_geom = hvaclib.selectedGeometryObjects()
         if not selected_geom:
@@ -428,7 +486,7 @@ class CommandEditType:
 
         self.task_panel = TaskPanelTypeEditor(
             selected_geom,
-            apply_callback=DuctNetwork.DuctNetwork.applyTypeSelection,
+            apply_callback=Network.DuctNetwork.applyTypeSelection,
         )
         Gui.Control.showDialog(self.task_panel)
 
@@ -457,7 +515,7 @@ class CommandEditPlacement:
         return any(hvaclib.isDuctSegment(o) for o in selected_geom)
 
     def Activated(self):
-        from .TaskPanel import TaskPanelSegmentPlacementEditor
+        from ..ui.TaskPanel import TaskPanelSegmentPlacementEditor
         selected_geom = hvaclib.selectedGeometryObjects() or []
         selected_segments = [o for o in selected_geom if hvaclib.isDuctSegment(o)]
         if not selected_segments:
@@ -465,7 +523,7 @@ class CommandEditPlacement:
 
         self.task_panel = TaskPanelSegmentPlacementEditor(
             selected_segments,
-            apply_callback=DuctNetwork.DuctNetwork.applyPlacementSelection,
+            apply_callback=Network.DuctNetwork.applyPlacementSelection,
         )
         Gui.Control.showDialog(self.task_panel)
         
@@ -490,7 +548,7 @@ class CommandEditNetworkTypeDefaults:
         return hvaclib.activeHVACNetwork() is not None
 
     def Activated(self):
-        from .TaskPanel import TaskPanelNetworkTypeDefaults
+        from ..ui.TaskPanel import TaskPanelNetworkTypeDefaults
 
         net = hvaclib.activeHVACNetwork()
         if net is None:
@@ -498,7 +556,7 @@ class CommandEditNetworkTypeDefaults:
 
         self.task_panel = TaskPanelNetworkTypeDefaults(
             net,
-            apply_callback=DuctNetwork.DuctNetwork.applyNetworkTypeDefaults,
+            apply_callback=Network.DuctNetwork.applyNetworkTypeDefaults,
         )
         Gui.Control.showDialog(self.task_panel)
 
@@ -528,7 +586,7 @@ class CommandResetTypesToNetworkDefaults:
         if not selected_geom:
             return
 
-        DuctNetwork.DuctNetwork.resetObjectsToNetworkDefaults(selected_geom)
+        Network.DuctNetwork.resetObjectsToNetworkDefaults(selected_geom)
         
         FreeCAD.Console.PrintMessage(
             "HVAC - Reset {} object(s) to network defaults.\n".format(len(selected_geom))

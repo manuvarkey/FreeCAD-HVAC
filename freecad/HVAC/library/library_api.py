@@ -25,7 +25,7 @@ import math
 import FreeCAD
 import Part
 
-from . import hvaclib
+from ..utils import hvaclib
 
 class HVACLibraryAPI:
     """

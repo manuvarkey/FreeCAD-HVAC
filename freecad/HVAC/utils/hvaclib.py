@@ -33,11 +33,11 @@ from PySide import QtGui, QtCore
 translate = FreeCAD.Qt.translate
 preferences = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/HVAC")
 
-from .Library import HVACLibraryRegistry
+from ..library.Library import HVACLibraryRegistry
 
 # Enable loading external libraries from the ext_libs directory
 path = os.path.dirname(__file__)
-vendor_path = os.path.join(path, "ext_libs")
+vendor_path = os.path.join(path, "..", "ext_libs")
 # Add to sys.path if not already there
 if vendor_path not in sys.path:
     sys.path.append(vendor_path)
@@ -272,7 +272,7 @@ def activeHVACNetwork():
         return active_network
 
 def allHVACNetworks(doc: FreeCAD.Document | None = None) -> list | None:
-    from .DuctNetwork import DuctNetwork
+    from ..core.Network import DuctNetwork
     doc = FreeCAD.ActiveDocument if doc is None else doc
     if doc is None:
         return None
@@ -280,31 +280,31 @@ def allHVACNetworks(doc: FreeCAD.Document | None = None) -> list | None:
     if hasattr(doc, "Objects"):
         hvac_networks = [
             n for n in doc.Objects 
-            if DuctNetwork.isDuctNetwork(n)
+            if isDuctNetwork(n)
         ]
     return hvac_networks
 
 def selectedHVACNetworks():
-    from .DuctNetwork import DuctNetwork
+    from ..core.Network import DuctNetwork
     objs = Gui.Selection.getSelection()
     if objs:
-        filtered = [o for o in objs if DuctNetwork.isDuctNetwork(o)]
+        filtered = [o for o in objs if isDuctNetwork(o)]
         return filtered
     return None
 
 def selectedGeometryObjects():
-    from .DuctNetwork import DuctSegment, DuctJunction
+    from ..core.Network import DuctSegment, DuctJunction
     objs = Gui.Selection.getSelection()
     if objs:
         filtered = [
             o for o in objs
-            if DuctSegment.isDuctSegment(o) or DuctJunction.isDuctJunction(o)
+            if isDuctSegment(o) or isDuctJunction(o)
         ]
         return filtered
     return None
     
 def selectedBaseObjects():
-    from .DuctNetwork import DuctNetwork
+    from ..core.Network import DuctNetwork
     objs = Gui.Selection.getSelection()
     if objs:
         filtered = [o for o in objs if DuctNetwork.isBaseObject(o)]
@@ -312,24 +312,28 @@ def selectedBaseObjects():
     return None
     
 def getOwnerNetwork(obj):
-    from .DuctNetwork import DuctNetwork
+    from ..core.Network import DuctNetwork
     return DuctNetwork.getOwnerNetwork(obj)
     
 def isDuctNetwork(obj):
-    from .DuctNetwork import DuctNetwork
-    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctNetwork)
+    from ..core.Network import DuctNetwork
+    return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctNetwork)
     
 def isDuctSegment(obj):
-    from .DuctNetwork import DuctSegment
-    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctSegment)
+    from ..core.Segment import DuctSegment
+    return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctSegment)
     
 def isDuctJunction(obj):
-    from .DuctNetwork import DuctJunction
-    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunction)
+    from ..core.Junction import DuctJunction
+    return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunction)
+    
+def isDuctJunctionVirtual(obj):
+    from ..core.Junction import DuctJunctionVirtual
+    return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunctionVirtual)
     
 def isDuctManagedFolder(obj):
-    from .DuctNetwork import DuctManagedFolder
-    return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctManagedFolder)
+    from ..core.Network import DuctManagedFolder
+    return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctManagedFolder)
 
 def isSketch(obj):
     # Robust check for Sketcher objects
@@ -448,6 +452,13 @@ def vec_quant(p):
         int(round(p[1] / t)),
         int(round(p[2] / t)),
     )
+    
+def vec(v):
+    if v is None:
+        return None
+    if hasattr(v, "x") and hasattr(v, "y") and hasattr(v, "z"):
+        return FreeCAD.Vector(v)
+    return FreeCAD.Vector(float(v[0]), float(v[1]), float(v[2]))
 
 def vec_to_xyz(v):
     """Return (x,y,z) tuple from a FreeCAD.Vector-like object."""
@@ -614,6 +625,7 @@ def compute_port_position(base_point, direction, section_params, attachment, use
 def get_module_path():
     """Function returns HVAC module path."""
     s_path = os.path.dirname(os.path.abspath(__file__))
+    s_path = os.path.join(s_path, "..")
     return s_path
 
 def get_file_path(file_name):
