@@ -272,7 +272,7 @@ def activeHVACNetwork():
         return active_network
 
 def allHVACNetworks(doc: FreeCAD.Document | None = None) -> list | None:
-    from .DuctNetwork import DuctNetwork
+    from .Network import DuctNetwork
     doc = FreeCAD.ActiveDocument if doc is None else doc
     if doc is None:
         return None
@@ -285,7 +285,7 @@ def allHVACNetworks(doc: FreeCAD.Document | None = None) -> list | None:
     return hvac_networks
 
 def selectedHVACNetworks():
-    from .DuctNetwork import DuctNetwork
+    from .Network import DuctNetwork
     objs = Gui.Selection.getSelection()
     if objs:
         filtered = [o for o in objs if DuctNetwork.isDuctNetwork(o)]
@@ -293,7 +293,7 @@ def selectedHVACNetworks():
     return None
 
 def selectedGeometryObjects():
-    from .DuctNetwork import DuctSegment, DuctJunction
+    from .Network import DuctSegment, DuctJunction
     objs = Gui.Selection.getSelection()
     if objs:
         filtered = [
@@ -304,7 +304,7 @@ def selectedGeometryObjects():
     return None
     
 def selectedBaseObjects():
-    from .DuctNetwork import DuctNetwork
+    from .Network import DuctNetwork
     objs = Gui.Selection.getSelection()
     if objs:
         filtered = [o for o in objs if DuctNetwork.isBaseObject(o)]
@@ -312,23 +312,23 @@ def selectedBaseObjects():
     return None
     
 def getOwnerNetwork(obj):
-    from .DuctNetwork import DuctNetwork
+    from .Network import DuctNetwork
     return DuctNetwork.getOwnerNetwork(obj)
     
 def isDuctNetwork(obj):
-    from .DuctNetwork import DuctNetwork
+    from .Network import DuctNetwork
     return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctNetwork)
     
 def isDuctSegment(obj):
-    from .DuctNetwork import DuctSegment
+    from .Segment import DuctSegment
     return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctSegment)
     
 def isDuctJunction(obj):
-    from .DuctNetwork import DuctJunction
+    from .Junction import DuctJunction
     return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunction)
     
 def isDuctManagedFolder(obj):
-    from .DuctNetwork import DuctManagedFolder
+    from .Network import DuctManagedFolder
     return hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctManagedFolder)
 
 def isSketch(obj):

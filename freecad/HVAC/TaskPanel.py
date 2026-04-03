@@ -110,7 +110,7 @@ class TaskPanelEditDuctNetwork:
 
     def get_valid_selection(self, include_derived=True):
         """Return a list of valid objects for selection."""
-        from .DuctNetwork import DuctNetwork
+        from .Network import DuctNetwork
         selected_objects = Gui.Selection.getSelection()
         derived_objects = [obj for obj in selected_objects if hvaclib.isDuctSegment(obj)]
         

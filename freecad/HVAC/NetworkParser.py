@@ -648,7 +648,7 @@ class DuctNetworkParser:
                 profile_x_axis = getattr(seg_obj, "ProfileXAxis", FreeCAD.Vector(0, 0, 0))
                 
                 # Override port directions from curve tangent
-                from .DuctNetwork import DuctSegment
+                from .Network import DuctSegment
                 edge = DuctSegment.resolveSourceEdge(seg_obj)
                 if edge:
                     edge_info = hvaclib.parse_edge_info(edge)
