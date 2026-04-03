@@ -24,13 +24,14 @@
 """This module implements HVAC duct description classes."""
 import json
 import traceback
+
 import FreeCAD, Part
 import FreeCADGui as Gui
 from PySide import QtWidgets, QtCore
 from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
 
-from . import hvaclib
+from ..utils import hvaclib
 
 
 class DuctJunction:

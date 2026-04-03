@@ -29,8 +29,8 @@ from PySide import QtWidgets, QtCore
 from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
 
-from . import hvaclib
-from . import Network
+from ..utils import hvaclib
+from ..core import Network
 
 
 #=================================================
@@ -143,7 +143,7 @@ class CommandCreateVirtualJunction:
             
     def _GetSelectedPoints(self, parser):
         
-        from .Network import DuctNetwork, DuctJunction
+        from ..core.Network import DuctNetwork, DuctJunction
         
         # Get selection extended including points
         sels = Gui.Selection.getSelectionEx()
@@ -181,7 +181,7 @@ class CommandCreateVirtualJunction:
         return list(points)
 
     def Activated(self):
-        from .Network import DuctNetwork, DuctJunctionVirtual
+        from ..core.Network import DuctNetwork, DuctJunctionVirtual
         
         # Get active network
         net = hvaclib.activeHVACNetwork()
@@ -278,7 +278,7 @@ class CommandEditBaseObject:
                 Gui.Selection.addSelection(base)
                 
                 # Install observer before running the command
-                from . import Observer
+                from ..ui import Observer
                 def callback(net, objs):
                     pass
                 net = hvaclib.activeHVACNetwork()
@@ -411,7 +411,7 @@ class CommandEditType:
         return bool(selected_geom)
 
     def Activated(self):
-        from .TaskPanel import TaskPanelTypeEditor
+        from ..ui.TaskPanel import TaskPanelTypeEditor
 
         selected_geom = hvaclib.selectedGeometryObjects()
         if not selected_geom:
@@ -457,7 +457,7 @@ class CommandEditPlacement:
         return any(hvaclib.isDuctSegment(o) for o in selected_geom)
 
     def Activated(self):
-        from .TaskPanel import TaskPanelSegmentPlacementEditor
+        from ..ui.TaskPanel import TaskPanelSegmentPlacementEditor
         selected_geom = hvaclib.selectedGeometryObjects() or []
         selected_segments = [o for o in selected_geom if hvaclib.isDuctSegment(o)]
         if not selected_segments:
@@ -490,7 +490,7 @@ class CommandEditNetworkTypeDefaults:
         return hvaclib.activeHVACNetwork() is not None
 
     def Activated(self):
-        from .TaskPanel import TaskPanelNetworkTypeDefaults
+        from ..ui.TaskPanel import TaskPanelNetworkTypeDefaults
 
         net = hvaclib.activeHVACNetwork()
         if net is None:

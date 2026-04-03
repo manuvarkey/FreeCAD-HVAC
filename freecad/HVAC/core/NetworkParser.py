@@ -26,8 +26,8 @@ import math
 
 import FreeCAD, Part
 
-from . import hvaclib
-from .hvaclib import (
+from ..utils import hvaclib
+from ..utils.hvaclib import (
     isWire,
     isSketch,
     vec_to_xyz,

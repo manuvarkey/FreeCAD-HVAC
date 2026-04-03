@@ -30,12 +30,12 @@ from PySide import QtWidgets, QtCore
 from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
 
-from . import hvaclib
-from . import Observer
-from . import TaskPanel
-from .NetworkParser import DuctNetworkParser
-from .Segment import DuctSegment
-from .Junction import DuctJunction, DuctJunctionVirtual
+from ..utils import hvaclib
+from ..ui import Observer
+from ..ui import TaskPanel
+from ..core.NetworkParser import DuctNetworkParser
+from ..core.Segment import DuctSegment
+from ..core.Junction import DuctJunction, DuctJunctionVirtual
 
 
 class DuctManagedFolder:

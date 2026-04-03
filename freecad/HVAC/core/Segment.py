@@ -29,7 +29,7 @@ from PySide import QtWidgets, QtCore
 from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
 
-from . import hvaclib
+from ..utils import hvaclib
 
 
 class DuctSegment:

@@ -29,7 +29,7 @@ from PySide import QtWidgets, QtCore
 from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
 
-from . import hvaclib
+from ..utils import hvaclib
 
 
 class TaskPanelActivate:
@@ -110,7 +110,7 @@ class TaskPanelEditDuctNetwork:
 
     def get_valid_selection(self, include_derived=True):
         """Return a list of valid objects for selection."""
-        from .Network import DuctNetwork
+        from ..core.Network import DuctNetwork
         selected_objects = Gui.Selection.getSelection()
         derived_objects = [obj for obj in selected_objects if hvaclib.isDuctSegment(obj)]
         
