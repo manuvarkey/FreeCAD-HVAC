@@ -42,7 +42,6 @@ class EdgeRef:
     local_index: int
     tag: str
 
-
 @dataclass
 class JunctionPort:
     """
@@ -63,6 +62,15 @@ class JunctionPort:
     attachment: str
     user_offset: tuple
     profile_x_axis: tuple | None = None
+    
+@dataclass
+class JunctionAnalysis:
+    point: tuple[float]
+    degree: int
+    family: str
+    connected_ports: list[dict]
+    collinear_pairs: list[list]
+    orthogonal_pairs: list[list]
 
 
 class DuctNetworkParser:
@@ -694,6 +702,54 @@ class DuctNetworkParser:
     
         return ports
 
+    # ======================================================================
+    # Junction analysis
+    # ======================================================================
+
+    def build_junction_analysis(self, node_id, segment_map=None):
+        # Get node analysis
+        # TEMP
+        analysis = self.node_analysis(node_id)
+        degree = int(analysis.get("degree", 0))
+        if degree <= 0:
+            return
+        point = self.node_xyz(node_id)
+
+        # Run classification for identifying junction family
+        family = hvaclib.HVACLibraryService.classify_junction_family(analysis)
+        
+        # Get connected ports
+        connected_ports = self.build_junction_ports(
+            node_id,
+            analysis["edge_refs"],
+            segment_map=segment_map,
+        )
+        
+        # Build analysis object for the junction
+        junction_analysis = JunctionAnalysis(
+            point=point,
+            degree=degree,
+            family=family,
+            connected_ports=connected_ports,
+            collinear_pairs=[
+                [
+                    a.tag,
+                    b.tag,
+                    float(ang),
+                ]
+                for a, b, ang in analysis.get("collinear_pairs", [])
+            ],
+            orthogonal_pairs=[
+                [
+                    a.tag,
+                    b.tag,
+                    float(ang),
+                ]
+                for a, b, ang in analysis.get("orthogonal_pairs", [])
+            ],
+        )
+        return junction_analysis
+        
     # ======================================================================
     # Public graph queries
     # ======================================================================

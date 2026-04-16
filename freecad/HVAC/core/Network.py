@@ -24,6 +24,7 @@
 """This module implements HVAC duct description classes."""
 import json
 import traceback
+from dataclasses import asdict
 import FreeCAD
 import FreeCADGui as Gui
 from PySide import QtWidgets, QtCore
@@ -998,76 +999,32 @@ class DuctNetwork:
         geometry = getattr(net, "Geometry", None)
         if doc is None or geometry is None:
             return False
+            
+        changed = False
+        live_objs = set()
     
+        # Get default library for segment profiles
         default_lib = self.getDefaultLibrary()
         if default_lib is None:
             return False
-    
-        changed = False
-        live_objs = set()
+        
+        # Collect existing junctions and segment map
         existing_junctions = self.collectJunctionObjects()
         segment_map = self.collectSegmentObjects()
         
+        # Inspect each node from the parser and update junction objects
         for node_id in parser.nodes():
-            # Get node analysis
-            analysis = parser.node_analysis(node_id)
-            degree = int(analysis.get("degree", 0))
-            if degree <= 0:
+            node_key = parser.node_key(node_id)
+                        
+            # Get junction analysis
+            junction_analysis = parser.build_junction_analysis(node_id, segment_map)
+            if not junction_analysis:
                 continue
-    
-            # Run classification for identifying junction family
-            family = hvaclib.HVACLibraryService.classify_junction_family(analysis)
-            point = analysis["point"]
-            node_key = analysis["node_key"]
-    
-            connected_edge_keys = [
-                edge_ref.tag
-                for edge_ref in analysis["edge_refs"]
-            ]
-    
-            port_objs = parser.build_junction_ports(
-                node_id,
-                analysis["edge_refs"],
-                segment_map=segment_map,
-            )
-            connected_ports = [
-                {
-                    "edge_key": p.edge_key,
-                    "segment_end": p.segment_end,
-                    "position": p.position,
-                    "direction": p.direction,
-                    "profile": p.profile,
-                    "section_params": p.section_params,
-                    "attachment": p.attachment,
-                    "user_offset": p.user_offset,
-                    "profile_x_axis": p.profile_x_axis
-                }
-                for p in port_objs
-            ]
-            # Build analysis JSON for the junction
-            analysis_json = json.dumps(
-                {
-                    "degree": degree,
-                    "family": family,
-                    "connected_ports": connected_ports,
-                    "collinear_pairs": [
-                        [
-                            a.tag,
-                            b.tag,
-                            float(ang),
-                        ]
-                        for a, b, ang in analysis.get("collinear_pairs", [])
-                    ],
-                    "orthogonal_pairs": [
-                        [
-                            a.tag,
-                            b.tag,
-                            float(ang),
-                        ]
-                        for a, b, ang in analysis.get("orthogonal_pairs", [])
-                    ],
-                }
-            )
+            analysis_json = json.dumps(asdict(junction_analysis))
+            degree = junction_analysis.degree
+            family = junction_analysis.family
+            point = junction_analysis.point            
+            connected_edge_keys = [p.edge_key for p in junction_analysis.connected_ports]
     
             # If initial sync, the tags are regenerated hence find element based on position
             # Also update the existing junction's key in the dictionary with the modified key
