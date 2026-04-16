@@ -492,8 +492,8 @@ class DuctNetwork:
                     changed = True
 
             elif hvaclib.isDuctJunction(obj):
-                family = getattr(obj, "Family", "")
-                default_type_id = hvaclib.HVACLibraryService.default_junction_type_id(family)
+                topology = getattr(obj, "Topology", "")
+                default_type_id = hvaclib.HVACLibraryService.default_topology_type_id(topology)
 
                 if hasattr(obj, "LibraryId") and obj.LibraryId != default_lib.id:
                     obj.LibraryId = default_lib.id
@@ -1003,6 +1003,7 @@ class DuctNetwork:
                 continue
             analysis_json = json.dumps(asdict(junction_analysis))
             degree = junction_analysis.degree
+            topology = junction_analysis.topology
             family = junction_analysis.family
             point = junction_analysis.point            
             connected_edge_keys = [p.edge_key for p in junction_analysis.connected_ports]
@@ -1033,13 +1034,13 @@ class DuctNetwork:
                     owner=net,
                     node_id=node_id,
                     node_key=node_key,
-                    node_kind=family,
                     center_point=point,
                     degree=degree,
+                    topology=topology
                 )
                 # Get and set default segment properties from default library
                 default_lib_id = default_lib.id
-                default_type_id = hvaclib.HVACLibraryService.default_junction_type_id(family)
+                default_type_id = hvaclib.HVACLibraryService.default_topology_type_id(topology)
                 if hasattr(junction_obj, "LibraryId"):
                     junction_obj.LibraryId = default_lib_id
                 if hasattr(junction_obj, "TypeId"):
@@ -1064,19 +1065,19 @@ class DuctNetwork:
             library_id = getattr(junction_obj, "LibraryId", "") or default_lib.id
             type_id = getattr(junction_obj, "TypeId", "")
             if not type_id:
-                type_id = hvaclib.HVACLibraryService.default_junction_type_id(family)
+                type_id = hvaclib.HVACLibraryService.default_topology_type_id(topology)
             
             # Update metadata based on updated data
             meta_changed = junction_obj.Proxy.updateMetadata(
                 owner=net,
                 node_id=node_id,
                 node_key=node_key,
-                node_kind=family,
                 center_point=point,
                 degree=degree,
+                topology=topology,
                 family=family,
-                type_id=type_id,
                 library_id=library_id,
+                type_id=type_id,
                 connected_edge_keys=connected_edge_keys,
                 analysis_json=analysis_json,
             )

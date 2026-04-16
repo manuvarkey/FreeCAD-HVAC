@@ -67,6 +67,7 @@ class JunctionPort:
 class JunctionAnalysis:
     point: tuple[float]
     degree: int
+    topology: str
     family: str
     connected_ports: list[dict]
     collinear_pairs: list[list]
@@ -716,7 +717,8 @@ class DuctNetworkParser:
         point = self.node_xyz(node_id)
 
         # Run classification for identifying junction family
-        family = hvaclib.HVACLibraryService.classify_junction_family(analysis)
+        topology = self.node_topology(node_id)
+        family = self.classify_junction_family(analysis)
         
         # Get connected ports
         connected_ports = self.build_junction_ports(
@@ -729,6 +731,7 @@ class DuctNetworkParser:
         junction_analysis = JunctionAnalysis(
             point=point,
             degree=degree,
+            topology=topology,
             family=family,
             connected_ports=connected_ports,
             collinear_pairs=[
@@ -957,23 +960,23 @@ class DuctNetworkParser:
 
         return incident_refs
 
-    def node_kind(self, analysis_node_id):
+    def node_topology(self, analysis_node_id):
         """
-        Simple degree-based classification.
+        Return topology (degree) based classification of node.
         """
         degree = self.node_degree(analysis_node_id)
 
         if degree <= 0:
             return "isolated"
         if degree == 1:
-            return "terminal"
+            return "end"
         if degree == 2:
-            return "transition"
+            return "through"
         if degree == 3:
-            return "tee"
+            return "branch"
         if degree == 4:
             return "cross"
-        return "manifold"
+        return "multiport"
 
     def node_vectors(self, analysis_node_id):
         """
@@ -1071,3 +1074,9 @@ class DuctNetworkParser:
             "collinear_pairs": collinear_pairs,
             "orthogonal_pairs": orthogonal_pairs,
         }
+        
+    def classify_junction_family(self, node_analysis):
+        """
+        Classify the family of a junction node.
+        """
+        return "generic"
