@@ -64,6 +64,25 @@ class JunctionPort:
     profile_x_axis: tuple | None = None
     
 @dataclass
+class EdgePair:
+    """Represents a connection relationship (collinear or orthogonal)."""
+    a: EdgeRef
+    b: EdgeRef
+    angle: float
+    
+@dataclass
+class NodeAnalysis:
+    node_id: int
+    node_key: str
+    point: tuple[float, float, float]  # Representing XYZ coordinates
+    member_node_ids: list[int]
+    member_points: list[tuple[float, float, float]]
+    degree: int
+    edge_refs: list[int]
+    collinear_pairs: list[EdgePair]
+    orthogonal_pairs: list[EdgePair]
+    
+@dataclass
 class JunctionAnalysis:
     point: tuple[float]
     degree: int
@@ -708,48 +727,31 @@ class DuctNetworkParser:
     # ======================================================================
 
     def build_junction_analysis(self, node_id, segment_map=None):
-        # Get node analysis
-        # TEMP
-        analysis = self.node_analysis(node_id)
-        degree = int(analysis.get("degree", 0))
+        degree = self.node_degree(node_id)
         if degree <= 0:
             return
-        point = self.node_xyz(node_id)
-
-        # Run classification for identifying junction family
+        
+        # Get node analysis and junction classifications
+        analysis = self.node_analysis(node_id)
         topology = self.node_topology(node_id)
         family = self.classify_junction_family(analysis)
         
         # Get connected ports
         connected_ports = self.build_junction_ports(
             node_id,
-            analysis["edge_refs"],
-            segment_map=segment_map,
+            analysis.edge_refs,
+            segment_map=segment_map
         )
         
         # Build analysis object for the junction
         junction_analysis = JunctionAnalysis(
-            point=point,
+            point=analysis.point,
             degree=degree,
             topology=topology,
             family=family,
             connected_ports=connected_ports,
-            collinear_pairs=[
-                [
-                    a.tag,
-                    b.tag,
-                    float(ang),
-                ]
-                for a, b, ang in analysis.get("collinear_pairs", [])
-            ],
-            orthogonal_pairs=[
-                [
-                    a.tag,
-                    b.tag,
-                    float(ang),
-                ]
-                for a, b, ang in analysis.get("orthogonal_pairs", [])
-            ],
+            collinear_pairs=analysis.collinear_pairs,
+            orthogonal_pairs=analysis.orthogonal_pairs
         )
         return junction_analysis
         
@@ -1027,53 +1029,69 @@ class DuctNetworkParser:
         dot = max(-1.0, min(1.0, float(vec_a.dot(vec_b))))
         return math.degrees(math.acos(dot))
 
-    def node_collinear_pairs(self, analysis_node_id, ang_tol_deg=2.0):
+    def _collinear_pairs(self, vectors, ang_tol_deg=2.0):
         """
         Return incident edge pairs whose directions are approximately opposite.
         """
-        vectors = self.node_vectors(analysis_node_id)
         pairs = []
 
         for i in range(len(vectors)):
             for j in range(i + 1, len(vectors)):
                 ang = self._safe_angle_deg(vectors[i][1], vectors[j][1])
                 if abs(ang - 180.0) <= ang_tol_deg:
-                    pairs.append((vectors[i][0], vectors[j][0], ang))
+                    pairs.append(EdgePair(
+                        a = vectors[i][0],
+                        b = vectors[j][0],
+                        angle = ang,
+                    ))
 
         return pairs
-
-    def node_analysis(self, analysis_node_id, ang_tol_deg=2.0, ortho_tol_deg=10.0):
+        
+    def _orthogonal_pairs(self, vectors, ortho_tol_deg=10.0):
         """
-        Return analysis summary for one analysis node.
+        Return incident edge pairs whose directions are approximately orthogonal.
         """
-        degree = self.node_degree(analysis_node_id)
-        incident_edges = self.node_edges(analysis_node_id)
-        vectors = self.node_vectors(analysis_node_id)
-        collinear_pairs = self.node_collinear_pairs(
-            analysis_node_id,
-            ang_tol_deg=ang_tol_deg
-        )
-
         orthogonal_pairs = []
         for i in range(len(vectors)):
             for j in range(i + 1, len(vectors)):
                 ang = self._safe_angle_deg(vectors[i][1], vectors[j][1])
                 if abs(ang - 90.0) <= ortho_tol_deg:
-                    orthogonal_pairs.append((vectors[i][0], vectors[j][0], ang))
+                    orthogonal_pairs.append(EdgePair(
+                        a = vectors[i][0],
+                        b = vectors[j][0],
+                        angle = ang,
+                    ))
 
+    def node_analysis(self, analysis_node_id, ang_tol_deg=2.0, ortho_tol_deg=10.0):
+        """
+        Return analysis summary for one analysis node.
+        """
+        # Basic node data
+        node_id = int(analysis_node_id)
+        node_key = self.node_key(analysis_node_id)
+        degree = self.node_degree(analysis_node_id)
+        point = self.node_xyz(analysis_node_id)
+        # Group members
         member_ids = self.node_group_members(analysis_node_id)
+        member_points = [self.node_point[n] for n in member_ids]
+        # Edge data
+        incident_edges = self.node_edges(analysis_node_id)
+        vectors = self.node_vectors(analysis_node_id)
+        # Features
+        collinear_pairs = self._collinear_pairs(vectors, ang_tol_deg=ang_tol_deg)
+        orthogonal_pairs = self._orthogonal_pairs(vectors, ortho_tol_deg=ortho_tol_deg)
 
-        return {
-            "node_id": int(analysis_node_id),
-            "node_key": self.node_key(analysis_node_id),
-            "point": self.node_xyz(analysis_node_id),
-            "member_node_ids": member_ids,
-            "member_points": [self.node_point[n] for n in member_ids],
-            "degree": degree,
-            "edge_refs": incident_edges,
-            "collinear_pairs": collinear_pairs,
-            "orthogonal_pairs": orthogonal_pairs,
-        }
+        return NodeAnalysis(
+                node_id = node_id,
+                node_key = node_key,
+                point = point,
+                member_node_ids = member_ids,
+                member_points = member_points,
+                degree = degree,
+                edge_refs = incident_edges,
+                collinear_pairs = collinear_pairs,
+                orthogonal_pairs = orthogonal_pairs
+            )
         
     def classify_junction_family(self, node_analysis):
         """
