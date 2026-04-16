@@ -480,18 +480,6 @@ class DuctNetwork:
                 if hasattr(obj, "TypeId") and obj.TypeId != default_type_id:
                     obj.TypeId = default_type_id
                     changed = True
-
-                analysis_json = json.dumps(
-                    {
-                        "profile": default_profile,
-                        "default_type_id": default_type_id,
-                        "start_node": int(getattr(obj, "StartNode", 0)),
-                        "end_node": int(getattr(obj, "EndNode", 0)),
-                    }
-                )
-                if hasattr(obj, "AnalysisJson") and obj.AnalysisJson != analysis_json:
-                    obj.AnalysisJson = analysis_json
-                    changed = True
                 
                 default_attachment = net.Proxy.getDefaultAttachment()
                 if getattr(obj, "Attachment", "Center") != default_attachment:
@@ -948,14 +936,7 @@ class DuctNetwork:
                 family="straight_segment",
                 type_id=type_id,
                 library_id=library_id,
-                profile=profile,
-                analysis_json=json.dumps(
-                    {
-                        "profile": profile,
-                        "start_node": int(start_node),
-                        "end_node": int(end_node),
-                    }
-                ),
+                profile=profile
             )
             changed = changed or meta_changed
     

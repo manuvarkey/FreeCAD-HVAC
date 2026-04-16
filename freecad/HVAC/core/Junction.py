@@ -486,4 +486,3 @@ class DuctJunctionVirtualViewProvider:
     def onDelete(self, vobj, subelements):
         # User must be able to delete these directly from the tree.
         return True
-        
