@@ -140,7 +140,7 @@ class DuctNetworkParser:
         self.analysis_node_by_geom_node = {}   # geometric node id -> analysis node id
         self.analysis_node_members = {}        # analysis node id -> [geometric node ids]
         self.analysis_node_point = {}          # analysis node id -> representative xyz
-        self.edge_analysis_nodes = {}          # edge_ref -> (analysis_u, analysis_v)
+        self.analysis_edge_u_v = {}          # edge_ref -> (analysis_u, analysis_v)
 
         self.analysis_graph = None             # networkx graph on analysis nodes
 
@@ -533,7 +533,7 @@ class DuctNetworkParser:
         self.analysis_node_by_geom_node.clear()
         self.analysis_node_members.clear()
         self.analysis_node_point.clear()
-        self.edge_analysis_nodes.clear()
+        self.analysis_edge_u_v.clear()
 
         next_analysis_node_id = 1
         grouped_geom_nodes = set()
@@ -588,7 +588,7 @@ class DuctNetworkParser:
             analysis_u = self.analysis_node_by_geom_node.get(geom_u, geom_u)
             analysis_v = self.analysis_node_by_geom_node.get(geom_v, geom_v)
 
-            self.edge_analysis_nodes[edge_ref] = (analysis_u, analysis_v)
+            self.analysis_edge_u_v[edge_ref] = (analysis_u, analysis_v)
 
             # Ignore internal edges within the same grouped node
             if analysis_u == analysis_v:
@@ -833,7 +833,7 @@ class DuctNetworkParser:
         """
         Return analysis endpoint node ids of an edge.
         """
-        return self.edge_analysis_nodes[edge_ref]
+        return self.analysis_edge_u_v[edge_ref]
 
     def edge_line(self, edge_ref):
         """
@@ -954,7 +954,7 @@ class DuctNetworkParser:
         """
         incident_refs = []
 
-        for edge_ref, (analysis_u, analysis_v) in self.edge_analysis_nodes.items():
+        for edge_ref, (analysis_u, analysis_v) in self.analysis_edge_u_v.items():
             if analysis_u == analysis_v:
                 continue
             if analysis_u == analysis_node_id or analysis_v == analysis_node_id:
@@ -1051,16 +1051,17 @@ class DuctNetworkParser:
         """
         Return incident edge pairs whose directions are approximately orthogonal.
         """
-        orthogonal_pairs = []
+        pairs = []
         for i in range(len(vectors)):
             for j in range(i + 1, len(vectors)):
                 ang = self._safe_angle_deg(vectors[i][1], vectors[j][1])
                 if abs(ang - 90.0) <= ortho_tol_deg:
-                    orthogonal_pairs.append(EdgePair(
+                    pairs.append(EdgePair(
                         a = vectors[i][0],
                         b = vectors[j][0],
                         angle = ang,
                     ))
+        return pairs
 
     def node_analysis(self, analysis_node_id, ang_tol_deg=2.0, ortho_tol_deg=10.0):
         """
