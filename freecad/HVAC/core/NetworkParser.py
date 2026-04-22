@@ -66,31 +66,48 @@ class JunctionPort:
 @dataclass
 class EdgePair:
     """Represents a connection relationship (collinear or orthogonal)."""
-    a: EdgeRef
-    b: EdgeRef
+    a: int
+    b: int
     angle: float
+    eccentricity: float
     
 @dataclass
 class NodeAnalysis:
+    # Reference
     node_id: int
     node_key: str
-    point: tuple[float, float, float]  # Representing XYZ coordinates
-    member_node_ids: list[int]
+    member_ids: list[int]
     member_points: list[tuple[float, float, float]]
+    edge_refs: list[EdgeRef]
+    connected_ports: list[JunctionPort]
+    # Basic geometric data
+    point: tuple[float, float, float]  # Representative XYZ coordinates
     degree: int
-    edge_refs: list[int]
+    port_origins: list[tuple[float, float, float]]
+    edge_vectors: list[tuple[float, float, float]]
+    edge_angles: dict[str, float] # (e1, e2): angle)
+    edge_eccentricities: dict[str, float] # (e1, e2): eccentricity
+    # Derived geometric data
     collinear_pairs: list[EdgePair]
     orthogonal_pairs: list[EdgePair]
+    is_coplanar: bool
     
 @dataclass
 class JunctionAnalysis:
-    point: tuple[float]
-    degree: int
     topology: str
     family: str
-    connected_ports: list[dict]
-    collinear_pairs: list[list]
-    orthogonal_pairs: list[list]
+    connected_ports: list[JunctionPort]
+    # Basic geometric data
+    point: tuple[float]
+    degree: int
+    port_origins: list[tuple[float, float, float]]
+    edge_vectors: list[tuple[float, float, float]]
+    edge_angles: dict[str, float] # (e1, e2): angle)
+    edge_eccentricities: dict[str, float] # (e1, e2): eccentricity
+    # Derived geometric data
+    collinear_pairs: list[EdgePair]
+    orthogonal_pairs: list[EdgePair]
+    is_coplanar: bool
 
 
 class DuctNetworkParser:
@@ -730,28 +747,36 @@ class DuctNetworkParser:
         degree = self.node_degree(node_id)
         if degree <= 0:
             return
-        
-        # Get node analysis and junction classifications
-        analysis = self.node_analysis(node_id)
-        topology = self.node_topology(node_id)
-        family = self.classify_junction_family(analysis)
-        
+            
         # Get connected ports
+        edge_refs = self.node_edges(node_id)
         connected_ports = self.build_junction_ports(
             node_id,
-            analysis.edge_refs,
+            edge_refs,
             segment_map=segment_map
         )
         
+        # Get node analysis and junction classifications
+        analysis = self.node_analysis(node_id, connected_ports)
+        topology = self.classify_node_topology(analysis)
+        family = self.classify_junction_family(analysis)
+        
         # Build analysis object for the junction
         junction_analysis = JunctionAnalysis(
-            point=analysis.point,
-            degree=degree,
             topology=topology,
             family=family,
             connected_ports=connected_ports,
+            # Basic geometric data
+            point=analysis.point,
+            degree=degree,
+            port_origins=analysis.port_origins,
+            edge_vectors=analysis.edge_vectors,
+            edge_angles=analysis.edge_angles,
+            edge_eccentricities=analysis.edge_eccentricities,
+            # Derived geometric data
             collinear_pairs=analysis.collinear_pairs,
-            orthogonal_pairs=analysis.orthogonal_pairs
+            orthogonal_pairs=analysis.orthogonal_pairs,
+            is_coplanar=analysis.is_coplanar
         )
         return junction_analysis
         
@@ -962,27 +987,10 @@ class DuctNetworkParser:
 
         return incident_refs
 
-    def node_topology(self, analysis_node_id):
-        """
-        Return topology (degree) based classification of node.
-        """
-        degree = self.node_degree(analysis_node_id)
-
-        if degree <= 0:
-            return "isolated"
-        if degree == 1:
-            return "end"
-        if degree == 2:
-            return "through"
-        if degree == 3:
-            return "branch"
-        if degree == 4:
-            return "cross"
-        return "multiport"
-
     def node_vectors(self, analysis_node_id):
         """
         Return normalized edge direction vectors for an analysis node.
+        Direction points away from the node.
 
         Important:
         For grouped analysis nodes, vectors are computed from the actual local
@@ -1014,7 +1022,7 @@ class DuctNetworkParser:
                 # Fallback, should rarely happen
                 other = ep_vec if (sp_vec.sub(local_point)).Length <= self.tol else sp_vec
 
-            direction = other.sub(local_point)
+            direction = other - local_point
 
             if direction.Length > self.tol:
                 direction.normalize()
@@ -1022,14 +1030,64 @@ class DuctNetworkParser:
 
         return vectors
 
-    def _safe_angle_deg(self, vec_a, vec_b):
+    @staticmethod
+    def _angle_bw_vectors(vec_a, vec_b):
         """
-        Return angle between two normalized vectors in degrees.
+        Return angle between two vectors in degrees.
         """
+        vec_a = FreeCAD.Vector(vec_a).normalize()
+        vec_b = FreeCAD.Vector(vec_b).normalize()
+        
         dot = max(-1.0, min(1.0, float(vec_a.dot(vec_b))))
         return math.degrees(math.acos(dot))
+    
+    @staticmethod    
+    def _distance_between_lines(origin_i, dir_i, origin_j, dir_j):
+        """
+        Compute the perpendicular distance between two lines in 3D.
+        Each line is defined by a FreeCAD.Vector origin and direction.
+        Handles parallel/coincident lines as a special case.
+        """    
+        u_i = FreeCAD.Vector(dir_i).normalize()
+        u_j = FreeCAD.Vector(dir_j).normalize()
+        w0  = FreeCAD.Vector(origin_i) - FreeCAD.Vector(origin_j)
+    
+        cross = u_i.cross(u_j)
+        denom = cross.Length
+    
+        if denom < 1e-10:
+            # Lines are parallel — distance is |w0 × u_i|
+            return w0.cross(u_i).Length
+    
+        # Skew lines — |(w0 · (d_i × d_j))| / |d_i × d_j|
+        return abs(w0.dot(cross)) / denom
+    
+    def _edge_angles(self, edge_vectors):
+        """
+        Return a dictionary of edge angles.
+        """
+        edge_angles = {}
+        for i in range(len(edge_vectors)):
+            for j in range(i + 1, len(edge_vectors)):
+                ang = self._angle_bw_vectors(edge_vectors[i], edge_vectors[j])
+                edge_angles[str((i, j))] = ang
+        return edge_angles
 
-    def _collinear_pairs(self, vectors, ang_tol_deg=2.0):
+    def _edge_eccentricities(self, port_origins, edge_vectors):
+        """
+        Return a dictionary of edge eccentricities.
+        """
+        edge_eccentricities = {}
+        for i in range(len(edge_vectors)):
+            for j in range(i + 1, len(edge_vectors)):
+                pos_i = port_origins[i]
+                pos_j = port_origins[j]
+                vec_i = edge_vectors[i]
+                vec_j = edge_vectors[j]
+                edge_eccentricities[str((i, j))] = self._distance_between_lines(pos_i, vec_i, pos_j, vec_j)
+        return edge_eccentricities
+
+    def _collinear_pairs(self, origins, vectors, ang_tol_deg=2.0):
         """
         Return incident edge pairs whose directions are approximately opposite.
         """
@@ -1037,62 +1095,99 @@ class DuctNetworkParser:
 
         for i in range(len(vectors)):
             for j in range(i + 1, len(vectors)):
-                ang = self._safe_angle_deg(vectors[i][1], vectors[j][1])
+                ang = self._angle_bw_vectors(vectors[i], vectors[j])
+                ecc = self._distance_between_lines(origins[i], vectors[i], origins[j], vectors[j])
                 if abs(ang - 180.0) <= ang_tol_deg:
                     pairs.append(EdgePair(
-                        a = vectors[i][0],
-                        b = vectors[j][0],
+                        a = i,
+                        b = j,
                         angle = ang,
+                        eccentricity = ecc
                     ))
 
         return pairs
         
-    def _orthogonal_pairs(self, vectors, ortho_tol_deg=10.0):
+    def _orthogonal_pairs(self, origins, vectors, ang_tol_deg=2.0):
         """
         Return incident edge pairs whose directions are approximately orthogonal.
         """
         pairs = []
         for i in range(len(vectors)):
             for j in range(i + 1, len(vectors)):
-                ang = self._safe_angle_deg(vectors[i][1], vectors[j][1])
-                if abs(ang - 90.0) <= ortho_tol_deg:
+                ang = self._angle_bw_vectors(vectors[i], vectors[j])
+                ecc = self._distance_between_lines(origins[i], vectors[i], origins[j], vectors[j])
+                if abs(ang - 90.0) <= ang_tol_deg:
                     pairs.append(EdgePair(
-                        a = vectors[i][0],
-                        b = vectors[j][0],
+                        a = i,
+                        b = j,
                         angle = ang,
+                        eccentricity = ecc
                     ))
         return pairs
 
-    def node_analysis(self, analysis_node_id, ang_tol_deg=2.0, ortho_tol_deg=10.0):
+    def node_analysis(self, analysis_node_id, connected_ports, ang_tol_deg=2.0):
         """
         Return analysis summary for one analysis node.
         """
         # Basic node data
         node_id = int(analysis_node_id)
         node_key = self.node_key(analysis_node_id)
-        degree = self.node_degree(analysis_node_id)
         point = self.node_xyz(analysis_node_id)
+        degree = self.node_degree(analysis_node_id)
         # Group members
         member_ids = self.node_group_members(analysis_node_id)
         member_points = [self.node_point[n] for n in member_ids]
         # Edge data
-        incident_edges = self.node_edges(analysis_node_id)
-        vectors = self.node_vectors(analysis_node_id)
+        edge_refs = self.node_edges(analysis_node_id)
+        # vectors = self.node_vectors(analysis_node_id)
+        
+        # Basic geometric data
+        port_origins = [connected_ports[i].position for i in range(len(connected_ports))]
+        edge_vectors = [connected_ports[i].direction for i in range(len(connected_ports))]
+        edge_angles = self._edge_angles(edge_vectors)
+        edge_eccentricities = self._edge_eccentricities(port_origins, edge_vectors)
+        is_coplanar = all(ecc < self.tol for ecc in edge_eccentricities.values())
         # Features
-        collinear_pairs = self._collinear_pairs(vectors, ang_tol_deg=ang_tol_deg)
-        orthogonal_pairs = self._orthogonal_pairs(vectors, ortho_tol_deg=ortho_tol_deg)
-
+        collinear_pairs = self._collinear_pairs(port_origins, edge_vectors, ang_tol_deg=ang_tol_deg)
+        orthogonal_pairs = self._orthogonal_pairs(port_origins, edge_vectors, ang_tol_deg=ang_tol_deg)
+        
         return NodeAnalysis(
-                node_id = node_id,
-                node_key = node_key,
-                point = point,
-                member_node_ids = member_ids,
-                member_points = member_points,
-                degree = degree,
-                edge_refs = incident_edges,
-                collinear_pairs = collinear_pairs,
-                orthogonal_pairs = orthogonal_pairs
-            )
+            node_id = node_id,
+            node_key = node_key,
+            member_ids = member_ids,
+            member_points = member_points,
+            edge_refs = edge_refs,
+            connected_ports = connected_ports,
+            # Basic geometric data
+            point = point,
+            degree = degree,
+            port_origins = port_origins,
+            edge_vectors = edge_vectors,
+            edge_angles = edge_angles,
+            edge_eccentricities = edge_eccentricities,
+            # Derived geometric data
+            collinear_pairs = collinear_pairs,
+            orthogonal_pairs = orthogonal_pairs,
+            is_coplanar = is_coplanar
+        )
+        
+    def classify_node_topology(self, node_analysis):
+        """
+        Return topology (degree) based classification of node.
+        """
+        degree = node_analysis.degree
+
+        if degree <= 0:
+            return "isolated"
+        if degree == 1:
+            return "end"
+        if degree == 2:
+            return "through"
+        if degree == 3:
+            return "branch"
+        if degree == 4:
+            return "cross"
+        return "multiport"
         
     def classify_junction_family(self, node_analysis):
         """
