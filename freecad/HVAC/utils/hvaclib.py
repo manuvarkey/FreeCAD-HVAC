@@ -139,8 +139,8 @@ class HVACLibraryService:
     def default_topology_type_id(topology: str) -> str:
         mapping = {
             "end": "end_terminal_marker",
-            "through": "through_elbow_generic",
-            "branch": "branch_wye_generic",
+            "through": "through_generic",
+            "branch": "branch_generic",
             "cross": "cross_generic",
             "multiport": "multiport_generic",
         }

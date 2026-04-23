@@ -3,7 +3,7 @@
   "label": "Tee - Generic",
   "category": "junction",
   "topology": "branch",
-  "family": ["tee"],
+  "family": ["branch.tee", "branch.lateral_tee", "branch.tee.3d", "branch.lateral_tee.3d"],
   "profiles": ["Circular", "Rectangular", "Oval"],
   "constraints": {
     "degree": 3

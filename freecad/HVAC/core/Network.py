@@ -1004,7 +1004,7 @@ class DuctNetwork:
             analysis_json = json.dumps(asdict(junction_analysis))
             degree = junction_analysis.degree
             topology = junction_analysis.topology
-            family = junction_analysis.family
+            family = junction_analysis.family_key
             point = junction_analysis.point            
             connected_edge_keys = [p.edge_key for p in junction_analysis.connected_ports]
     

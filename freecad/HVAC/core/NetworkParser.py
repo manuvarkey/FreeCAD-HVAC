@@ -96,9 +96,11 @@ class NodeAnalysis:
 class JunctionAnalysis:
     topology: str
     family: str
+    family_tags: list[str]
+    family_key: str
     connected_ports: list[JunctionPort]
     # Basic geometric data
-    point: tuple[float]
+    point: tuple[float, float, float]  # Representative XYZ coordinates
     degree: int
     port_origins: list[tuple[float, float, float]]
     edge_vectors: list[tuple[float, float, float]]
@@ -129,6 +131,10 @@ class DuctNetworkParser:
     """
 
     def __init__(self, objs=None, node_groups=None):
+        
+        self.tol = 1e-6
+        self.angle_tol_degree = 2.0
+        
         # ------------------------------------------------------------------
         # Raw extracted line storage
         # ------------------------------------------------------------------
@@ -139,7 +145,6 @@ class DuctNetworkParser:
         # Geometric graph storage
         # These represent actual snapped geometric endpoints.
         # ------------------------------------------------------------------
-        self.tol = 1e-6
         self.node_id_by_key = {}   # snapped point key -> geometric node id
         self.node_point = {}       # geometric node id -> xyz tuple
         self.edge_u_v = {}         # edge_ref -> (geom_u, geom_v)
@@ -759,12 +764,15 @@ class DuctNetworkParser:
         # Get node analysis and junction classifications
         analysis = self.node_analysis(node_id, connected_ports)
         topology = self.classify_node_topology(analysis)
-        family = self.classify_junction_family(analysis)
+        family, family_tags = self.classify_junction_family(analysis)
+        family_key = self.make_junction_family_key(topology, family, *family_tags)
         
         # Build analysis object for the junction
         junction_analysis = JunctionAnalysis(
             topology=topology,
             family=family,
+            family_tags=family_tags,
+            family_key=family_key,
             connected_ports=connected_ports,
             # Basic geometric data
             point=analysis.point,
@@ -1029,6 +1037,20 @@ class DuctNetworkParser:
                 vectors.append((edge_ref, direction))
 
         return vectors
+        
+    @staticmethod
+    def make_junction_family_key(topology, family, *qualifiers):
+            parts = [topology, family]
+            parts.extend([q for q in qualifiers if q])
+            return ".".join(parts)
+        
+    @staticmethod
+    def split_junction_family_key(key):
+        parts = (key or "").split(".")
+        topology = parts[0] if len(parts) > 0 else ""
+        family = parts[1] if len(parts) > 1 else ""
+        qualifiers = parts[2:] if len(parts) > 2 else []
+        return topology, family, qualifiers
 
     @staticmethod
     def _angle_bw_vectors(vec_a, vec_b):
@@ -1087,7 +1109,7 @@ class DuctNetworkParser:
                 edge_eccentricities[str((i, j))] = self._distance_between_lines(pos_i, vec_i, pos_j, vec_j)
         return edge_eccentricities
 
-    def _collinear_pairs(self, origins, vectors, ang_tol_deg=2.0):
+    def _collinear_pairs(self, origins, vectors):
         """
         Return incident edge pairs whose directions are approximately opposite.
         """
@@ -1097,7 +1119,7 @@ class DuctNetworkParser:
             for j in range(i + 1, len(vectors)):
                 ang = self._angle_bw_vectors(vectors[i], vectors[j])
                 ecc = self._distance_between_lines(origins[i], vectors[i], origins[j], vectors[j])
-                if abs(ang - 180.0) <= ang_tol_deg:
+                if abs(ang - 180.0) <= self.angle_tol_degree:
                     pairs.append(EdgePair(
                         a = i,
                         b = j,
@@ -1107,7 +1129,7 @@ class DuctNetworkParser:
 
         return pairs
         
-    def _orthogonal_pairs(self, origins, vectors, ang_tol_deg=2.0):
+    def _orthogonal_pairs(self, origins, vectors):
         """
         Return incident edge pairs whose directions are approximately orthogonal.
         """
@@ -1116,7 +1138,7 @@ class DuctNetworkParser:
             for j in range(i + 1, len(vectors)):
                 ang = self._angle_bw_vectors(vectors[i], vectors[j])
                 ecc = self._distance_between_lines(origins[i], vectors[i], origins[j], vectors[j])
-                if abs(ang - 90.0) <= ang_tol_deg:
+                if abs(ang - 90.0) <= self.angle_tol_degree:
                     pairs.append(EdgePair(
                         a = i,
                         b = j,
@@ -1125,7 +1147,7 @@ class DuctNetworkParser:
                     ))
         return pairs
 
-    def node_analysis(self, analysis_node_id, connected_ports, ang_tol_deg=2.0):
+    def node_analysis(self, analysis_node_id, connected_ports):
         """
         Return analysis summary for one analysis node.
         """
@@ -1148,8 +1170,8 @@ class DuctNetworkParser:
         edge_eccentricities = self._edge_eccentricities(port_origins, edge_vectors)
         is_coplanar = all(ecc < self.tol for ecc in edge_eccentricities.values())
         # Features
-        collinear_pairs = self._collinear_pairs(port_origins, edge_vectors, ang_tol_deg=ang_tol_deg)
-        orthogonal_pairs = self._orthogonal_pairs(port_origins, edge_vectors, ang_tol_deg=ang_tol_deg)
+        collinear_pairs = self._collinear_pairs(port_origins, edge_vectors)
+        orthogonal_pairs = self._orthogonal_pairs(port_origins, edge_vectors)
         
         return NodeAnalysis(
             node_id = node_id,
@@ -1191,6 +1213,227 @@ class DuctNetworkParser:
         
     def classify_junction_family(self, node_analysis):
         """
-        Classify the family of a junction node.
+        Classify the geometric family of a junction node.
+    
+        This is a geometry-family classifier layered on top of the
+        degree-based topology classifier.
+    
+        Families are intentionally generic and profile-independent.
+    
+        Returns one of:
+            degree 1:
+                terminal
+    
+            degree 2:
+                straight
+                offset
+                bend_90
+                bend_90.3d
+                bend
+                bend.3d
+                
+            degree 3:
+                tee
+                tee.3d
+                lateral_tee
+                lateral_tee.3d
+                wye
+                wye.3d
+                generic
+    
+            degree 4:
+                cross
+                cross.3d
+                double_wye
+                double_wye.3d
+                generic
+    
+            degree >= 5:
+                multiport
+                multiport.3d
         """
-        return "generic"
+        degree = node_analysis.degree
+        
+        port_origins = node_analysis.port_origins
+        edge_vectors = node_analysis.edge_vectors
+        edge_angles = node_analysis.edge_angles
+        edge_eccentricities= node_analysis.edge_eccentricities
+        
+        collinear_pairs = node_analysis.collinear_pairs
+        orthogonal_pairs = node_analysis.orthogonal_pairs
+        is_coplanar = node_analysis.is_coplanar
+        
+        def _disjoint_pair_set(pairs):
+            """
+            Return True if the given two pairs are disjoint and cover 4 unique ports.
+            """
+            if len(pairs) != 2:
+                return False
+            used = set()
+            for p in pairs:
+                used.add(p.a)
+                used.add(p.b)
+            return len(used) == 4
+    
+        def _zero_ecc_pair_count(pairs):
+            return sum(1 for p in pairs if p.eccentricity <= self.tol)
+    
+        def _find_remaining_index(pair, count):
+            used = {pair.a, pair.b}
+            for idx in range(count):
+                if idx not in used:
+                    return idx
+            return None
+    
+        def _pair_angle(i, j):
+            a, b = sorted((i, j))
+            return abs(edge_angles[str((a, b))])
+        
+        def _pair_eccentricity(i, j):
+            a, b = sorted((i, j))
+            return edge_eccentricities[str((a, b))]
+    
+        # ------------------------------------------------------------
+        # degree 0 / invalid
+        # ------------------------------------------------------------
+        if degree <= 0:
+            return "isolated", []
+    
+        # ------------------------------------------------------------
+        # degree 1
+        # ------------------------------------------------------------
+        if degree == 1:
+            return "terminal", []
+    
+        # ------------------------------------------------------------
+        # degree 2
+        # ------------------------------------------------------------
+        if degree == 2:
+            # Collinear => through condition
+            if len(collinear_pairs) == 1:
+                if _pair_eccentricity(0, 1) < self.tol:
+                    return "straight", []
+                else:
+                    return "offset", []
+                    
+            # Not collinear => change in direction
+            else:
+                angle = _pair_angle(0, 1)
+                if is_coplanar:
+                    if abs(angle - 90.0) <= self.angle_tol_degree:
+                        return "bend_90", []
+                    else:
+                        return "bend", []
+                else:
+                    if abs(angle - 90.0) <= self.angle_tol_degree:
+                        return "bend_90", ["3d"]
+                    else:
+                        return "bend", ["3d"]
+    
+        # ------------------------------------------------------------
+        # degree 3
+        # ------------------------------------------------------------
+        if degree == 3:
+            # Case 1: one collinear pair -> trunk + branch
+            if len(collinear_pairs) == 1:
+                trunk = collinear_pairs[0]
+                branch_idx = _find_remaining_index(trunk, 3)
+                # Ensure branch is found
+                assert branch_idx is not None
+                    
+                # branch angle with trunk directions
+                ang1 = _pair_angle(branch_idx, trunk.a)
+                ang2 = _pair_angle(branch_idx, trunk.b)
+                branch_ang = min(ang1, ang2)
+    
+                if is_coplanar:
+                    # 90 deg branch
+                    if abs(branch_ang - 90.0) <= self.angle_tol_degree:
+                        return "tee", []
+                    # non-90 deg branch
+                    else:
+                        return "lateral_tee", []
+                else:
+                    # 90 deg branch
+                    if abs(branch_ang - 90.0) <= self.angle_tol_degree:
+                        return "tee", ["3d"]
+                    # non-90 deg branch
+                    else:
+                        return "lateral_tee", ["3d"]
+    
+            # Case 2: no collinear pair -> split / wye type
+            elif len(collinear_pairs) == 0:
+                if is_coplanar:
+                    return "wye", []
+                else:
+                    return "wye", ["3d"]
+            else:
+                return "generic", []
+    
+        # ------------------------------------------------------------
+        # degree 4
+        # ------------------------------------------------------------
+        if degree == 4:
+            
+            # Cross
+            if len(collinear_pairs) >= 2:
+                # Try to find two disjoint collinear pairs
+                disjoint = None
+                for i in range(len(collinear_pairs)):
+                    for j in range(i + 1, len(collinear_pairs)):
+                        cand = [collinear_pairs[i], collinear_pairs[j]]
+                        if _disjoint_pair_set(cand):
+                            disjoint = cand
+                            break
+                    if disjoint:
+                        break
+                
+                # If disjoint collinear_pairs exists
+                if disjoint:
+                    # Check whether cross is near orthogonal between the two runs
+                    p0, p1 = disjoint
+                    a = p0.a
+                    b = p0.b
+                    c = p1.a
+                    d = p1.b
+    
+                    inter_angles = [
+                        _pair_angle(a, c),
+                        _pair_angle(a, d),
+                        _pair_angle(b, c),
+                        _pair_angle(b, d),
+                    ]
+                    near_90 = sum(1 for ang in inter_angles if abs(ang - 90.0) <= self.angle_tol_degree)
+                    
+                    if near_90 >= 2 and is_coplanar:
+                        return "cross", []
+                    elif near_90 >= 2 and not is_coplanar:
+                        return "cross", ["3d"]
+            
+            # Double wye
+            elif len(collinear_pairs) == 1:
+                trunk = collinear_pairs[0]
+                e1 = trunk.a
+                e2 = trunk.b
+                rem_idx = [i for i in [0,1,2,3] if i not in [e1, e2]]
+                angles_1 = [_pair_angle(e1, rem_idx[0]), _pair_angle(e1, rem_idx[1])]
+                angles_2 = [_pair_angle(e2, rem_idx[0]), _pair_angle(e2, rem_idx[1])]
+                # Select smallest of set of angles
+                angles = angles_1 if sum(angles_1) < sum(angles_2) else angles_2
+                # If angles are same
+                if abs(angles[0] - angles[1]) < self.angle_tol_degree:
+                    if is_coplanar:
+                        return "double_wye", []
+                    else:
+                        return "double_wye", ["3d"]
+    
+            # No clean two-run cross found
+            return "generic", []
+    
+        # ------------------------------------------------------------
+        # degree >= 5
+        # ------------------------------------------------------------
+        if degree >= 5:
+            if is_coplanar:
+                return "multiport", []
+            return "multiport", ["3d"]
