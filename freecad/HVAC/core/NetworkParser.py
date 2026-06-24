@@ -47,21 +47,43 @@ class JunctionPort:
     """
     Generic junction port descriptor.
 
-    edge_key      : stable segment key, e.g. "Sketch001:0"
-    segment_end   : "start" or "end" relative to the connected segment
-    direction     : unit vector pointing away from the junction along the segment
-    profile       : segment profile string, e.g. "Circular", "Rectangular"
-    section_params: generic profile-dependent section data
+    edge_key : stable segment key, e.g. "Sketch001:0"
+
+    segment_end:
+        "start" or "end" relative to the connected segment.
+
+    direction:
+        Unit vector pointing away from the junction along the segment.
+        This is geometric port direction, not necessarily flow direction.
+
+    flow_role:
+        "inlet"  -> flow enters this junction through this port.
+        "outlet" -> flow leaves this junction through this port.
+        "unknown" -> direction could not be resolved.
+
+    flow_direction:
+        Unit vector in actual flow direction at this port.
+
+    flow_into_junction:
+        True  -> flow enters junction.
+        False -> flow leaves junction.
+        None  -> unknown.
     """
+
     edge_key: str
     segment_end: str
     position: tuple
     direction: tuple
+
     profile: str
     section_params: dict
     attachment: str
     user_offset: tuple
     profile_x_axis: tuple | None = None
+
+    flow_role: str = "unknown"
+    flow_direction: tuple | None = None
+    flow_into_junction: bool | None = None
     
 @dataclass
 class EdgePair:
@@ -713,6 +735,31 @@ class DuctNetworkParser:
                 attachment = "Center"
                 user_offset = FreeCAD.Vector(0, 0, 0)
                 profile_x_axis = FreeCAD.Vector(0, 0, 0)
+
+            # ----------------------------------------------------------
+            # Flow interpretation
+            # ----------------------------------------------------------
+            # Base geometry direction is interpreted as flow direction:
+            # segment start -> segment end.
+            #
+            # At segment start:
+            #     flow leaves the junction into the segment -> outlet.
+            #
+            # At segment end:
+            #     flow enters the junction from the segment -> inlet.
+            # ----------------------------------------------------------
+            flow_direction = FreeCAD.Vector(direction_along_segment)
+            
+            if flow_direction.Length <= 1e-9:
+                flow_role = "unknown"
+                flow_into_junction = None
+                flow_direction_xyz = None
+            else:
+                flow_direction.normalize()
+            
+                flow_into_junction = segment_end == "end"
+                flow_role = "inlet" if flow_into_junction else "outlet"
+                flow_direction_xyz = vec_to_xyz(flow_direction)
         
             # ----------------------------------------------------------
             # Compute actual profile-aware port position
@@ -740,6 +787,9 @@ class DuctNetworkParser:
                     vec_to_xyz(profile_x_axis)
                     if profile_x_axis.Length > 1e-12 else None
                 ),
+                flow_role=flow_role,
+                flow_direction=flow_direction_xyz,
+                flow_into_junction=flow_into_junction,
             ))
     
         return ports
