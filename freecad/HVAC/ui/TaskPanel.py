@@ -846,11 +846,9 @@ class TaskPanelAirflowResults:
         if result.warnings:
             warn_box = QtWidgets.QGroupBox(translate("HVAC_CalculateAirflow", "Warnings"))
             warn_layout = QtWidgets.QVBoxLayout(warn_box)
-            warn_list = QtWidgets.QListWidget()
-            warn_list.setMaximumHeight(100)
-            for msg in result.warnings:
-                warn_list.addItem(msg)
-            warn_layout.addWidget(warn_list)
+            warn_label = QtWidgets.QLabel("\n".join(result.warnings))
+            warn_label.setWordWrap(True)
+            warn_layout.addWidget(warn_label)
             layout.addWidget(warn_box)
 
         if not result.components:
@@ -880,7 +878,8 @@ class TaskPanelAirflowResults:
         summary = QtWidgets.QLabel(
             translate(
                 "HVAC_CalculateAirflow",
-                "Balancing terminal: {ref}    Critical terminal: {crit}    "
+                "Balancing terminal: {ref}\n"
+                "Critical terminal: {crit}\n"
                 "Required fan/AHU total pressure: {pa:.1f} Pa"
             ).format(
                 ref=comp.reference_terminal_key,
