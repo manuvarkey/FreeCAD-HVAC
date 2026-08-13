@@ -38,9 +38,12 @@ do any pressure-unit arithmetic themselves -- that's the solver's job.
 Elbow/transition/tee/wye losses are computed from real SMACNA/ASHRAE duct
 fitting tables via HVACLibraryAPI.elbow_loss/transition_loss/branch_loss
 (see library/smacna_loss.py for the table data and its sourcing/accuracy
-caveats). Cross and multiport fittings still use generic placeholder
-coefficients -- SMACNA data for 4+ port fittings wasn't in scope for this
-pass.
+caveats). Cross and multiport fittings use HVACLibraryAPI.manifold_loss,
+which decomposes the junction into a sequence of the same tee/wye table
+lookups (no dedicated SMACNA table exists for 4+ port fittings) -- see its
+docstring for the single-trunk assumption and what falls back to the
+original flat placeholder (a "true cross" with more than one inlet AND more
+than one outlet, which has no single trunk to decompose against).
 """
 
 
@@ -71,8 +74,10 @@ def loss_wye_generic(context):
 
 
 def loss_cross_generic(context):
-    return 0.75
+    result = context["hvac_api"].manifold_loss(context)
+    return result if result is not None else 0.75
 
 
 def loss_multiport_generic(context):
-    return 1.0
+    result = context["hvac_api"].manifold_loss(context)
+    return result if result is not None else 1.0

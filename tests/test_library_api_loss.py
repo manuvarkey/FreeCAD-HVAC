@@ -10,7 +10,7 @@ from freecad.HVAC.library.library_api import HVACLibraryAPI as api
 
 
 def _port(edge_key, direction, flow_into_junction, profile="Circular", diameter=None,
-          width=None, height=None, velocity_ms=0.0, reynolds=0.0):
+          width=None, height=None, velocity_ms=0.0, reynolds=0.0, flow_rate_lps=0.0):
     section_params = {}
     if diameter is not None:
         section_params["Diameter"] = diameter
@@ -26,6 +26,7 @@ def _port(edge_key, direction, flow_into_junction, profile="Circular", diameter=
         "section_params": section_params,
         "velocity_ms": velocity_ms,
         "reynolds": reynolds,
+        "flow_rate_lps": flow_rate_lps,
     }
 
 
@@ -211,3 +212,104 @@ def test_branch_loss_ambiguous_flow_pattern_returns_none():
     p3 = _port("C", (0, 0, 1), True, diameter=300.0, velocity_ms=5.0)
     context = {"connected_ports": [p1, p2, p3], "properties": {}}
     assert api.branch_loss(context) is None
+
+
+# ----------------------------------------------------------------------------
+# manifold_loss
+# ----------------------------------------------------------------------------
+
+def _flow_lps(velocity_ms, diameter_mm):
+    area = airflow.circular_area(airflow.mm_to_m(diameter_mm))
+    return airflow.m3s_to_lps(velocity_ms * area)
+
+
+def test_manifold_loss_diverging_matches_branch_loss_at_two_secondaries():
+    primary = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0,
+                     flow_rate_lps=_flow_lps(5.0, 300.0))
+    straight = _port("STRAIGHT", (1, 0, 0), False, diameter=300.0, velocity_ms=4.0)
+    branch = _port("BRANCH", (0, 1, 0), False, diameter=150.0, velocity_ms=3.0)
+    context = {"connected_ports": [primary, straight, branch], "properties": {}}
+
+    assert api.manifold_loss(context) == pytest.approx(api.branch_loss(context))
+
+
+def test_manifold_loss_converging_matches_branch_loss_at_two_secondaries():
+    primary = _port("OUT", (1, 0, 0), False, diameter=300.0, velocity_ms=5.0)
+    straight = _port("STRAIGHT", (-1, 0, 0), True, diameter=300.0, velocity_ms=4.0)
+    branch = _port("BRANCH", (0, 1, 0), True, diameter=150.0, velocity_ms=3.0)
+    context = {"connected_ports": [primary, straight, branch], "properties": {}}
+
+    assert api.manifold_loss(context) == pytest.approx(api.branch_loss(context))
+
+
+def test_manifold_loss_diverging_cross_covers_all_secondaries():
+    # 1 inlet -> 3 outlets (a header/cross with one straightest continuation
+    # and two side takeoffs), flows conserved: 200 = 80 + 70 + 50.
+    q_in = 200.0
+    primary = _port("IN", (-1, 0, 0), True, diameter=400.0,
+                     velocity_ms=airflow.velocity_from_flow(airflow.lps_to_m3s(q_in), airflow.circular_area(0.4)),
+                     flow_rate_lps=q_in)
+
+    def outlet(edge_key, direction, diameter, q):
+        v = airflow.velocity_from_flow(airflow.lps_to_m3s(q), airflow.circular_area(airflow.mm_to_m(diameter)))
+        return _port(edge_key, direction, False, diameter=diameter, velocity_ms=v, flow_rate_lps=q)
+
+    straight = outlet("STRAIGHT", (1, 0, 0), 300.0, 80.0)
+    branch_a = outlet("BRANCH_A", (0, 1, 0), 200.0, 70.0)
+    branch_b = outlet("BRANCH_B", (0, 0, 1), 200.0, 50.0)
+
+    context = {"connected_ports": [primary, straight, branch_a, branch_b], "properties": {}}
+    result = api.manifold_loss(context)
+
+    assert result is not None
+    assert set(result.keys()) == {"STRAIGHT", "BRANCH_A", "BRANCH_B"}
+    assert all(isinstance(v, float) for v in result.values())
+
+
+def test_manifold_loss_converging_cross_covers_all_secondaries():
+    # 3 inlets merging -> 1 outlet, flows conserved: 80 + 70 + 50 = 200.
+    q_out = 200.0
+    primary = _port("OUT", (1, 0, 0), False, diameter=400.0,
+                     velocity_ms=airflow.velocity_from_flow(airflow.lps_to_m3s(q_out), airflow.circular_area(0.4)),
+                     flow_rate_lps=q_out)
+
+    def inlet(edge_key, direction, diameter, q):
+        v = airflow.velocity_from_flow(airflow.lps_to_m3s(q), airflow.circular_area(airflow.mm_to_m(diameter)))
+        return _port(edge_key, direction, True, diameter=diameter, velocity_ms=v, flow_rate_lps=q)
+
+    straight = inlet("STRAIGHT", (-1, 0, 0), 300.0, 80.0)
+    branch_a = inlet("BRANCH_A", (0, 1, 0), 200.0, 70.0)
+    branch_b = inlet("BRANCH_B", (0, 0, 1), 200.0, 50.0)
+
+    context = {"connected_ports": [primary, straight, branch_a, branch_b], "properties": {}}
+    result = api.manifold_loss(context)
+
+    assert result is not None
+    assert set(result.keys()) == {"STRAIGHT", "BRANCH_A", "BRANCH_B"}
+    assert all(isinstance(v, float) for v in result.values())
+
+
+def test_manifold_loss_mixed_flow_pattern_returns_none():
+    # 2 inlets, 2 outlets -- a true cross with no single trunk to decompose.
+    p1 = _port("IN1", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
+    p2 = _port("IN2", (0, -1, 0), True, diameter=300.0, velocity_ms=5.0)
+    p3 = _port("OUT1", (1, 0, 0), False, diameter=300.0, velocity_ms=5.0)
+    p4 = _port("OUT2", (0, 1, 0), False, diameter=300.0, velocity_ms=5.0)
+    context = {"connected_ports": [p1, p2, p3, p4], "properties": {}}
+    assert api.manifold_loss(context) is None
+
+
+def test_manifold_loss_wrong_port_count_returns_none():
+    p1 = _port("A", (1, 0, 0), False, diameter=300.0, velocity_ms=5.0)
+    p2 = _port("B", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
+    context = {"connected_ports": [p1, p2], "properties": {}}
+    assert api.manifold_loss(context) is None
+
+
+def test_manifold_loss_zero_primary_flow_returns_zero_for_all_secondaries():
+    primary = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=0.0, flow_rate_lps=0.0)
+    straight = _port("STRAIGHT", (1, 0, 0), False, diameter=300.0, velocity_ms=0.0)
+    branch_a = _port("BRANCH_A", (0, 1, 0), False, diameter=150.0, velocity_ms=0.0)
+    branch_b = _port("BRANCH_B", (0, 0, 1), False, diameter=150.0, velocity_ms=0.0)
+    context = {"connected_ports": [primary, straight, branch_a, branch_b], "properties": {}}
+    assert api.manifold_loss(context) == {"STRAIGHT": 0.0, "BRANCH_A": 0.0, "BRANCH_B": 0.0}

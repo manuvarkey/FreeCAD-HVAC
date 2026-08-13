@@ -522,6 +522,175 @@ class HVACLibraryAPI:
             return None
 
     @staticmethod
+    def manifold_loss(context):
+        """
+        Cross (4-port) or multiport (5+ port) fitting loss, for the common
+        single-trunk case: exactly one port on one flow side (all inlet, or
+        all outlet) and the rest ("secondaries") on the other side.
+
+        No dedicated SMACNA/ASHRAE table exists for 4+ port fittings, so this
+        decomposes the junction into a sequence of pairwise branch (tee/wye)
+        calculations, reusing the exact same diverging_branch_zetas /
+        converging_branch_zetas tables as branch_loss: secondaries are
+        peeled off one at a time, least-straight (most branch-like) first,
+        straightest last -- mirroring how a real header/manifold is
+        typically laid out (larger/sharper takeoffs nearer the main
+        connection, the straightest path continuing furthest). Each pairwise
+        step is referenced against the PRIMARY port's own duct size and
+        direction (and, for the branch-angle lookup, the straightest
+        secondary's direction) as a stand-in for the intermediate duct
+        geometry this addon doesn't actually model between successive
+        virtual merges/splits -- an approximation, not a literal per-leg
+        geometry readout. With exactly 2 secondaries this reduces to
+        exactly the same numbers as branch_loss's 3-port calculation.
+
+        Returns {edge_key: K, ...} covering every secondary port (each
+        already referenced to that leg's own velocity), or None for a mixed
+        multi-inlet/multi-outlet ("true cross") flow pattern -- which has no
+        single trunk to decompose against -- or on any missing/invalid
+        geometry.
+        """
+        try:
+            ports = HVACLibraryAPI.connected_ports(context)
+            if len(ports) < 3:
+                return None
+
+            inlets = [p for p in ports if p.get("flow_into_junction") is True]
+            outlets = [p for p in ports if p.get("flow_into_junction") is False]
+
+            if len(inlets) == 1:
+                diverging = True
+                primary, secondaries = inlets[0], outlets
+            elif len(outlets) == 1:
+                diverging = False
+                primary, secondaries = outlets[0], inlets
+            else:
+                return None  # mixed multi-in/multi-out: no single trunk to decompose
+
+            if len(secondaries) < 2:
+                return None
+
+            a_ref = HVACLibraryAPI.port_area(primary)
+            v_primary = float(primary.get("velocity_ms", 0.0) or 0.0)
+            if a_ref <= 0.0:
+                return None
+            if v_primary <= 1e-9:
+                return {p["edge_key"]: 0.0 for p in secondaries}
+            for p in secondaries:
+                if HVACLibraryAPI.port_area(p) <= 0.0:
+                    return None
+
+            primary_dir = HVACLibraryAPI.vec(primary["direction"])
+            # Least-straight (most branch-like) first, straightest (closest
+            # continuation of the primary direction) last -- same selection
+            # rule as branch_loss, generalized to N-1 secondaries.
+            ordered = sorted(
+                secondaries,
+                key=lambda p: primary_dir.dot(HVACLibraryAPI.vec(p["direction"])),
+                reverse=True,
+            )
+            # Reference direction for every branch-angle lookup: the
+            # straightest real secondary (matches branch_loss, which uses
+            # the "straight" port's own direction rather than the primary's).
+            straight_dir = HVACLibraryAPI.vec(ordered[-1]["direction"])
+
+            zeta_fn = smacna_loss.diverging_branch_zetas if diverging else smacna_loss.converging_branch_zetas
+            result = {}
+            m = len(ordered)
+
+            def _angle_deg(branch_port):
+                branch_dir = HVACLibraryAPI.vec(branch_port["direction"])
+                cos_angle = max(-1.0, min(1.0, branch_dir.dot(straight_dir)))
+                return 180.0 - math.degrees(math.acos(cos_angle))
+
+            if diverging:
+                remaining_flow_lps = float(primary.get("flow_rate_lps", 0.0) or 0.0)
+                for i in range(m - 1):
+                    branch = ordered[i]
+                    is_penultimate = (i == m - 2)
+                    branch_flow_lps = float(branch.get("flow_rate_lps", 0.0) or 0.0)
+                    after_flow_lps = remaining_flow_lps - branch_flow_lps
+
+                    v_common_step = airflow.velocity_from_flow(
+                        airflow.lps_to_m3s(remaining_flow_lps), a_ref
+                    )
+                    if v_common_step <= 1e-9:
+                        result[branch["edge_key"]] = 0.0
+                        remaining_flow_lps = after_flow_lps
+                        continue
+
+                    if is_penultimate:
+                        # What's left after this branch IS the last real
+                        # secondary -- use its own real velocity.
+                        v_after_step = float(ordered[-1].get("velocity_ms", 0.0) or 0.0)
+                    else:
+                        v_after_step = airflow.velocity_from_flow(
+                            airflow.lps_to_m3s(after_flow_lps), a_ref
+                        )
+
+                    ab_on_ac = HVACLibraryAPI.port_area(branch) / a_ref
+                    vb_on_vc = float(branch.get("velocity_ms", 0.0) or 0.0) / v_common_step
+                    vs_on_vc = v_after_step / v_common_step
+
+                    zeta_branch, zeta_after = zeta_fn(_angle_deg(branch), ab_on_ac, vb_on_vc, vs_on_vc)
+                    result[branch["edge_key"]] = zeta_branch
+                    if is_penultimate:
+                        result[ordered[-1]["edge_key"]] = zeta_after
+
+                    remaining_flow_lps = after_flow_lps
+            else:
+                # Mirror of the diverging loop: instead of a shrinking
+                # "remaining trunk", the reference here is a growing
+                # "accumulated so far" stream, seeded with the straightest
+                # secondary's own real flow (it is the fixed "main" duct
+                # that every other, less-straight secondary merges into,
+                # one at a time) and ending at the primary's real flow once
+                # the last (second-straightest) secondary has merged in.
+                main = ordered[-1]
+                v_main = float(main.get("velocity_ms", 0.0) or 0.0)
+                accumulated_flow_lps = float(main.get("flow_rate_lps", 0.0) or 0.0)
+                for i in range(m - 1):
+                    branch = ordered[i]
+                    is_last = (i == m - 2)
+                    branch_flow_lps = float(branch.get("flow_rate_lps", 0.0) or 0.0)
+                    accumulated_after_lps = accumulated_flow_lps + branch_flow_lps
+
+                    if is_last:
+                        # This merge produces the fully-combined stream -- use the primary's own real velocity.
+                        v_common_step = v_primary
+                    else:
+                        v_common_step = airflow.velocity_from_flow(
+                            airflow.lps_to_m3s(accumulated_after_lps), a_ref
+                        )
+                    if v_common_step <= 1e-9:
+                        result[branch["edge_key"]] = 0.0
+                        accumulated_flow_lps = accumulated_after_lps
+                        continue
+
+                    if i == 0:
+                        # Nothing has merged into main yet -- use its own real velocity.
+                        v_straight_side = v_main
+                    else:
+                        v_straight_side = airflow.velocity_from_flow(
+                            airflow.lps_to_m3s(accumulated_flow_lps), a_ref
+                        )
+
+                    ab_on_ac = HVACLibraryAPI.port_area(branch) / a_ref
+                    vb_on_vc = float(branch.get("velocity_ms", 0.0) or 0.0) / v_common_step
+                    vs_on_vc = v_straight_side / v_common_step
+
+                    zeta_branch, zeta_straight = zeta_fn(_angle_deg(branch), ab_on_ac, vb_on_vc, vs_on_vc)
+                    result[branch["edge_key"]] = zeta_branch
+                    if is_last:
+                        result[main["edge_key"]] = zeta_straight
+
+                    accumulated_flow_lps = accumulated_after_lps
+
+            return result
+        except Exception:
+            return None
+
+    @staticmethod
     def copy_port(port, position=None, direction=None, profile_x_axis=None):
         out = dict(port)
         if position is not None:
