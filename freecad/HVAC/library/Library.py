@@ -160,9 +160,17 @@ class HVACLibraryRegistry:
 
     def call_loss(self, library_id: str, type_def: HVACTypeDef, context: dict):
         """
-        Call the type's optional fitting-loss function, returning a
-        dimensionless loss coefficient (float) or None if the type has no
-        loss function wired up (caller should apply a fallback coefficient).
+        Call the type's optional fitting-loss function. Returns one of:
+          - dict {edge_key: K}: per-port dimensionless loss coefficients, each
+            already referenced to that port's own velocity. Required for
+            junctions where different legs have physically distinct
+            coefficients (e.g. a converging/merging tee, where each inlet leg
+            has its own loss).
+          - float: a single dimensionless loss coefficient applied uniformly
+            to every outlet port (simple contract, fine for junctions with
+            one meaningfully distinct downstream condition).
+          - None: the type has no loss function wired up (caller should apply
+            a fallback coefficient).
         """
         if not type_def.loss_module or not type_def.loss_function:
             return None

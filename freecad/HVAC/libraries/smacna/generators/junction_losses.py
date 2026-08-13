@@ -22,41 +22,52 @@
 ################################################################################
 
 """
-Placeholder fitting-loss coefficients for the smacna library.
+Fitting-loss coefficients for the smacna library.
 
 Each function receives the same context dict as the shape generators in
 junctions.py (see Junction.execute), augmented by the airflow solver with a
-"flow_rate_lps"/"velocity_ms" pair on every entry of "connected_ports", plus
-"air_density"/"air_kinematic_viscosity". It must return a single dimensionless
-loss coefficient K (float) or None to fall back to the solver's generic
-default. K is applied by the solver as K * velocity_pressure(outlet_port) --
-these functions must not do any pressure-unit arithmetic themselves.
+"flow_rate_lps"/"velocity_ms"/"reynolds" set of keys on every entry of
+"connected_ports", plus "air_density"/"air_kinematic_viscosity". It returns
+either a dict {edge_key: K} of per-port coefficients (each already referenced
+to that port's own velocity -- required for converging/merging junctions
+where each inlet leg has a physically distinct loss), a single float K
+applied uniformly to every outlet port, or None to fall back to the solver's
+generic default coefficient. Whatever is returned, these functions must not
+do any pressure-unit arithmetic themselves -- that's the solver's job.
 
-These values are generic order-of-magnitude placeholders, not SMACNA/ASHRAE
-table lookups. They exist so the airflow solver produces complete, roughly
-sane results end-to-end; replace with accurate per-geometry coefficient
-tables as the library is developed further.
+Elbow/transition/tee/wye losses are computed from real SMACNA/ASHRAE duct
+fitting tables via HVACLibraryAPI.elbow_loss/transition_loss/branch_loss
+(see library/smacna_loss.py for the table data and its sourcing/accuracy
+caveats). Cross and multiport fittings still use generic placeholder
+coefficients -- SMACNA data for 4+ port fittings wasn't in scope for this
+pass.
 """
 
 
 def loss_through_generic(context):
-    return 0.25
+    # No "through_generic" type is currently wired up in this library
+    # (unlike builtin_basic), but kept for parity/reuse if one is added.
+    api = context["hvac_api"]
+    result = api.elbow_loss(context)
+    if result is not None:
+        return result
+    return api.transition_loss(context)
 
 
 def loss_elbow_generic(context):
-    return 0.25
+    return context["hvac_api"].elbow_loss(context)
 
 
 def loss_transition_generic(context):
-    return 0.15
+    return context["hvac_api"].transition_loss(context)
 
 
 def loss_tee_generic(context):
-    return 0.75
+    return context["hvac_api"].branch_loss(context)
 
 
 def loss_wye_generic(context):
-    return 0.4
+    return context["hvac_api"].branch_loss(context)
 
 
 def loss_cross_generic(context):

@@ -313,18 +313,27 @@ class AirflowSolver:
             type_id = getattr(junction_obj, "TypeId", "")
             type_def = reg.resolve_type(library_id, type_id) if library_id and type_id else None
 
+            properties = {}
+            if type_def is not None:
+                for pdef in getattr(type_def, "properties", []) or []:
+                    if hasattr(junction_obj, pdef.name):
+                        properties[pdef.name] = getattr(junction_obj, pdef.name)
+                    else:
+                        properties[pdef.name] = getattr(pdef, "default", None)
+
             connected_ports_ctx = []
             for port in ja.connected_ports:
                 port_dict = asdict(port)
                 sres = seg_result.get(port.edge_key)
                 port_dict["flow_rate_lps"] = sres.flow_lps if sres else 0.0
                 port_dict["velocity_ms"] = sres.velocity_ms if sres else 0.0
+                port_dict["reynolds"] = sres.reynolds if sres else 0.0
                 connected_ports_ctx.append(port_dict)
 
             context = {
                 "obj": junction_obj,
                 "center_point": ja.point,
-                "properties": {},
+                "properties": properties,
                 "connected_ports": connected_ports_ctx,
                 "family": getattr(junction_obj, "Family", ""),
                 "type_id": type_id,
@@ -333,16 +342,37 @@ class AirflowSolver:
                 "air_kinematic_viscosity": air_viscosity,
             }
 
-            k = reg.call_loss(library_id, type_def, context) if type_def is not None else None
+            # A loss function may return:
+            #  - dict {edge_key: K}: per-port coefficients, each already referenced to
+            #    that port's own velocity. Needed for converging (merging) junctions,
+            #    where each inlet leg has a physically distinct coefficient -- there is
+            #    no single "the" outlet to attribute a uniform K to.
+            #  - float: a single coefficient applied uniformly to every outlet port
+            #    (legacy/simple contract, still used by the generic cross/multiport
+            #    placeholders).
+            #  - None: no data available; fall back to a uniform K_DEFAULT on outlet ports.
+            k_result = reg.call_loss(library_id, type_def, context) if type_def is not None else None
 
-            if k is None:
-                k = K_DEFAULT
+            if isinstance(k_result, dict):
+                junction_warning[node_id] = ""
+                for edge_key, k in k_result.items():
+                    if k is None:
+                        continue
+                    sres = seg_result.get(edge_key)
+                    if sres is None:
+                        continue
+                    sres.fitting_loss_pa = float(k) * airflow.velocity_pressure(air_density, sres.velocity_ms)
+                continue
+
+            if k_result is None:
+                k_uniform = K_DEFAULT
                 warning = "No fitting-loss data for type '{}'; using generic default K={}.".format(
                     type_id or "(none)", K_DEFAULT
                 )
                 junction_warning[node_id] = warning
                 global_warnings.append("{}: {}".format(junction_obj.Label, warning))
             else:
+                k_uniform = float(k_result)
                 junction_warning[node_id] = ""
 
             for port in ja.connected_ports:
@@ -351,7 +381,7 @@ class AirflowSolver:
                 sres = seg_result.get(port.edge_key)
                 if sres is None:
                     continue
-                sres.fitting_loss_pa = float(k) * airflow.velocity_pressure(air_density, sres.velocity_ms)
+                sres.fitting_loss_pa = k_uniform * airflow.velocity_pressure(air_density, sres.velocity_ms)
 
         for sres in seg_result.values():
             sres.total_loss_pa = sres.friction_loss_pa + sres.fitting_loss_pa

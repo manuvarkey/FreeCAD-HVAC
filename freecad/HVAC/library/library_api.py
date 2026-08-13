@@ -26,6 +26,8 @@ import FreeCAD
 import Part
 
 from ..utils import hvaclib
+from ..core import airflow
+from . import smacna_loss
 
 class HVACLibraryAPI:
     """
@@ -321,6 +323,203 @@ class HVACLibraryAPI:
     def port_height(port):
         params = HVACLibraryAPI.port_section_params(port)
         return float(params.get("Height", 0.0) or 0.0)
+
+    @staticmethod
+    def port_area(port):
+        """Cross-section area (m^2) of a port, from its profile/section_params (in mm)."""
+        profile = HVACLibraryAPI.port_profile(port)
+        if profile == "Circular":
+            d = HVACLibraryAPI.port_diameter(port)
+            return airflow.circular_area(airflow.mm_to_m(d)) if d > 0.0 else 0.0
+        if profile in ("Rectangular", "Oval"):
+            w = HVACLibraryAPI.port_width(port)
+            h = HVACLibraryAPI.port_height(port)
+            if w <= 0.0 or h <= 0.0:
+                return 0.0
+            if profile == "Rectangular":
+                return airflow.rectangular_area(airflow.mm_to_m(w), airflow.mm_to_m(h))
+            return airflow.oval_area(airflow.mm_to_m(w), airflow.mm_to_m(h))
+        return 0.0
+
+    # ------------------------------------------------------------------
+    # SMACNA/ASHRAE fitting-loss orchestration
+    #
+    # These methods glue a junction's "connected_ports" context (built by
+    # AirflowSolver.py) to the pure-math tables in smacna_loss.py: pulling
+    # out the geometry/flow numbers each table needs, picking round vs
+    # rectangular/oval formulas, and identifying which port is which leg of
+    # the fitting. They are defensive (return None on any missing/invalid
+    # data) so a malformed or partially-configured junction degrades to the
+    # solver's generic fallback coefficient rather than aborting the whole
+    # calculation -- see AirflowSolver.py Phase E / Library.py call_loss.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def elbow_loss(context):
+        """
+        90 deg elbow fitting loss. Expects exactly 2 connected_ports (one
+        inlet, one outlet) and a "CenterlineRadius" entry in properties.
+        Returns {outlet_edge_key: K} or None.
+        """
+        try:
+            ports = HVACLibraryAPI.connected_ports(context)
+            if len(ports) != 2:
+                return None
+            outlet = next((p for p in ports if p.get("flow_into_junction") is False), None)
+            if outlet is None:
+                return None
+
+            radius = float((context.get("properties") or {}).get("CenterlineRadius", 0.0) or 0.0)
+            profile = HVACLibraryAPI.port_profile(outlet)
+
+            if profile == "Circular":
+                diameter = HVACLibraryAPI.port_diameter(outlet)
+                if diameter <= 0.0 or radius <= 0.0:
+                    return None
+                zeta = smacna_loss.elbow_zeta_round(radius / diameter)
+            elif profile in ("Rectangular", "Oval"):
+                width = HVACLibraryAPI.port_width(outlet)
+                height = HVACLibraryAPI.port_height(outlet)
+                if width <= 0.0 or height <= 0.0 or radius <= 0.0:
+                    return None
+                reynolds = float(outlet.get("reynolds", 0.0) or 0.0)
+                if reynolds <= 0.0:
+                    return None
+                zeta = smacna_loss.elbow_zeta_rect(height / width, radius / width, reynolds)
+            else:
+                return None
+
+            return {outlet["edge_key"]: zeta}
+        except Exception:
+            return None
+
+    @staticmethod
+    def transition_loss(context):
+        """
+        Area-change (expansion/contraction) transition fitting loss. Expects
+        exactly 2 connected_ports and a "TransitionLength" entry in
+        properties. Returns {outlet_edge_key: K} or None.
+        """
+        try:
+            ports = HVACLibraryAPI.connected_ports(context)
+            if len(ports) != 2:
+                return None
+            outlet = next((p for p in ports if p.get("flow_into_junction") is False), None)
+            inlet = next((p for p in ports if p.get("flow_into_junction") is True), None)
+            if outlet is None or inlet is None:
+                return None
+
+            area_out = HVACLibraryAPI.port_area(outlet)
+            area_in = HVACLibraryAPI.port_area(inlet)
+            if area_out <= 0.0 or area_in <= 0.0:
+                return None
+
+            area_ratio = max(area_in, area_out) / min(area_in, area_out)
+            if area_ratio <= 1.05:
+                # Essentially the same size on both sides (e.g. a lateral
+                # offset) -- SMACNA's tables start at an area ratio of 2:1
+                # and don't cover this case; treat as negligible loss rather
+                # than clamping to the table's (much larger) minimum entry.
+                return {outlet["edge_key"]: 0.0}
+
+            length_mm = float((context.get("properties") or {}).get("TransitionLength", 0.0) or 0.0)
+            if length_mm > 0.0:
+                d_eq_in = 2.0 * math.sqrt(area_in / math.pi)
+                d_eq_out = 2.0 * math.sqrt(area_out / math.pi)
+                theta_deg = math.degrees(
+                    2.0 * math.atan(abs(d_eq_out - d_eq_in) / (2.0 * airflow.mm_to_m(length_mm)))
+                )
+            else:
+                theta_deg = 180.0  # no transition length -> treat as an abrupt change
+            theta_deg = max(0.0, min(theta_deg, 180.0))
+
+            profile = HVACLibraryAPI.port_profile(outlet)
+            if area_out > area_in:
+                # Expanding (diverging): downstream duct is larger.
+                if profile == "Circular":
+                    reynolds = float(inlet.get("reynolds", 0.0) or 0.0)
+                    if reynolds <= 0.0:
+                        return None
+                    zeta = smacna_loss.expansion_zeta_round(theta_deg, area_ratio, reynolds)
+                else:
+                    zeta = smacna_loss.expansion_zeta_rect(theta_deg, area_ratio)
+            else:
+                # Contracting (converging): downstream duct is smaller.
+                zeta = smacna_loss.contraction_zeta(theta_deg, area_ratio)
+
+            return {outlet["edge_key"]: zeta}
+        except Exception:
+            return None
+
+    @staticmethod
+    def branch_loss(context):
+        """
+        Converging (merging) or diverging (splitting) tee/wye fitting loss.
+        Expects exactly 3 connected_ports: one "common"/trunk port (the sole
+        inlet if diverging, the sole outlet if converging) and two "secondary"
+        ports (branch + straight-through), identified by which secondary
+        port's direction is closest to anti-parallel with the common port's
+        direction (the straight-through continuation of the duct run).
+
+        Returns {branch_edge_key: K_branch, straight_edge_key: K_straight},
+        each already referenced to that leg's own velocity, or None.
+        """
+        try:
+            ports = HVACLibraryAPI.connected_ports(context)
+            if len(ports) != 3:
+                return None
+
+            inlets = [p for p in ports if p.get("flow_into_junction") is True]
+            outlets = [p for p in ports if p.get("flow_into_junction") is False]
+
+            if len(inlets) == 1 and len(outlets) == 2:
+                diverging = True
+                primary, secondaries = inlets[0], outlets
+            elif len(inlets) == 2 and len(outlets) == 1:
+                diverging = False
+                primary, secondaries = outlets[0], inlets
+            else:
+                return None  # ambiguous/degenerate flow pattern
+
+            primary_dir = HVACLibraryAPI.vec(primary["direction"])
+            sec_a, sec_b = secondaries
+            dot_a = primary_dir.dot(HVACLibraryAPI.vec(sec_a["direction"]))
+            dot_b = primary_dir.dot(HVACLibraryAPI.vec(sec_b["direction"]))
+            # Both port directions point away from the junction, so the leg
+            # that continues straight through sits opposite the primary leg
+            # (most negative dot product); the other secondary is the branch.
+            straight, branch = (sec_a, sec_b) if dot_a < dot_b else (sec_b, sec_a)
+
+            v_common = float(primary.get("velocity_ms", 0.0) or 0.0)
+            if v_common <= 1e-9:
+                return {branch["edge_key"]: 0.0, straight["edge_key"]: 0.0}
+
+            a_common = HVACLibraryAPI.port_area(primary)
+            a_branch = HVACLibraryAPI.port_area(branch)
+            if a_common <= 0.0 or a_branch <= 0.0:
+                return None
+
+            branch_dir = HVACLibraryAPI.vec(branch["direction"])
+            straight_dir = HVACLibraryAPI.vec(straight["direction"])
+            cos_angle = max(-1.0, min(1.0, branch_dir.dot(straight_dir)))
+            angle_deg = 180.0 - math.degrees(math.acos(cos_angle))
+
+            ab_on_ac = a_branch / a_common
+            vb_on_vc = float(branch.get("velocity_ms", 0.0) or 0.0) / v_common
+            vs_on_vc = float(straight.get("velocity_ms", 0.0) or 0.0) / v_common
+
+            if diverging:
+                zeta_branch, zeta_straight = smacna_loss.diverging_branch_zetas(
+                    angle_deg, ab_on_ac, vb_on_vc, vs_on_vc
+                )
+            else:
+                zeta_branch, zeta_straight = smacna_loss.converging_branch_zetas(
+                    angle_deg, ab_on_ac, vb_on_vc, vs_on_vc
+                )
+
+            return {branch["edge_key"]: zeta_branch, straight["edge_key"]: zeta_straight}
+        except Exception:
+            return None
 
     @staticmethod
     def copy_port(port, position=None, direction=None, profile_x_axis=None):
