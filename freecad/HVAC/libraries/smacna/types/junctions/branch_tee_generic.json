@@ -34,5 +34,9 @@
   "generator": {
     "module": "junctions",
     "function": "build_tee"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_tee_generic"
   }
 }

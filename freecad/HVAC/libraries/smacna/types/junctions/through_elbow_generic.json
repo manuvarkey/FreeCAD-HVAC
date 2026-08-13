@@ -20,5 +20,9 @@
   "generator": {
     "module": "junctions",
     "function": "build_elbow"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_elbow_generic"
   }
 }

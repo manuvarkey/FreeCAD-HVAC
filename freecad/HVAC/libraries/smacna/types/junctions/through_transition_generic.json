@@ -20,5 +20,9 @@
   "generator": {
     "module": "junctions",
     "function": "build_transition"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_transition_generic"
   }
 }

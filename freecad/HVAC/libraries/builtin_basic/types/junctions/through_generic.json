@@ -27,5 +27,9 @@
   "generator": {
     "module": "junctions",
     "function": "build_through_generic"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_through_generic"
   }
 }

@@ -826,3 +826,113 @@ class TaskPanelSegmentPlacementEditor:
 
     def reject(self):
         return True
+
+
+class TaskPanelAirflowResults:
+    """Read-only report panel showing the results of an airflow/pressure-drop calculation."""
+
+    SEGMENT_HEADERS = ["Segment", "Flow (L/s)", "Velocity (m/s)", "Friction (Pa)",
+                       "Fitting (Pa)", "Total Loss (Pa)", "Static Pressure (Pa)"]
+    JUNCTION_HEADERS = ["Junction", "Total Flow (L/s)", "Static Pressure (Pa)", "Source", "Warning"]
+
+    def __init__(self, network_obj, result):
+        self.network_obj = network_obj
+        self.result = result
+
+        self.form = QtWidgets.QWidget()
+        self.form.setWindowTitle(translate("HVAC_CalculateAirflow", "Airflow Calculation Results"))
+        layout = QtWidgets.QVBoxLayout(self.form)
+
+        if result.warnings:
+            warn_box = QtWidgets.QGroupBox(translate("HVAC_CalculateAirflow", "Warnings"))
+            warn_layout = QtWidgets.QVBoxLayout(warn_box)
+            warn_list = QtWidgets.QListWidget()
+            warn_list.setMaximumHeight(100)
+            for msg in result.warnings:
+                warn_list.addItem(msg)
+            warn_layout.addWidget(warn_list)
+            layout.addWidget(warn_box)
+
+        if not result.components:
+            empty_label = QtWidgets.QLabel(
+                translate("HVAC_CalculateAirflow", "No sub-network could be solved. See warnings above.")
+            )
+            empty_label.setWordWrap(True)
+            layout.addWidget(empty_label)
+        elif len(result.components) == 1:
+            layout.addWidget(self._buildComponentWidget(result.components[0]))
+        else:
+            tabs = QtWidgets.QTabWidget()
+            for i, comp in enumerate(result.components):
+                tabs.addTab(self._buildComponentWidget(comp), "{} {}".format(
+                    translate("HVAC_CalculateAirflow", "Sub-network"), i + 1
+                ))
+            layout.addWidget(tabs)
+
+        close_button = QtWidgets.QPushButton(translate("HVAC_CalculateAirflow", "Close"))
+        close_button.clicked.connect(lambda: Gui.Control.closeDialog())
+        layout.addWidget(close_button)
+
+    def _buildComponentWidget(self, comp):
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(widget)
+
+        summary = QtWidgets.QLabel(
+            translate(
+                "HVAC_CalculateAirflow",
+                "Balancing terminal: {ref}    Critical terminal: {crit}    "
+                "Required fan/AHU total pressure: {pa:.1f} Pa"
+            ).format(
+                ref=comp.reference_terminal_key,
+                crit=comp.critical_terminal_key,
+                pa=comp.critical_pressure_pa,
+            )
+        )
+        summary.setWordWrap(True)
+        layout.addWidget(summary)
+
+        seg_table = QtWidgets.QTableWidget(len(comp.segments), len(self.SEGMENT_HEADERS))
+        seg_table.setHorizontalHeaderLabels(self.SEGMENT_HEADERS)
+        seg_table.verticalHeader().setVisible(False)
+        seg_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        for row, seg in enumerate(comp.segments):
+            values = [
+                seg.obj.Label,
+                "{:.2f}".format(seg.flow_lps),
+                "{:.2f}".format(seg.velocity_ms),
+                "{:.2f}".format(seg.friction_loss_pa),
+                "{:.2f}".format(seg.fitting_loss_pa),
+                "{:.2f}".format(seg.total_loss_pa),
+                "{:.1f}".format(seg.cumulative_pressure_pa),
+            ]
+            for col, value in enumerate(values):
+                seg_table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
+        seg_table.resizeColumnsToContents()
+        layout.addWidget(QtWidgets.QLabel(translate("HVAC_CalculateAirflow", "Segments")))
+        layout.addWidget(seg_table)
+
+        junc_table = QtWidgets.QTableWidget(len(comp.junctions), len(self.JUNCTION_HEADERS))
+        junc_table.setHorizontalHeaderLabels(self.JUNCTION_HEADERS)
+        junc_table.verticalHeader().setVisible(False)
+        junc_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        for row, junc in enumerate(comp.junctions):
+            values = [
+                junc.obj.Label,
+                "{:.2f}".format(junc.total_flow_lps),
+                "{:.1f}".format(junc.static_pressure_pa),
+                translate("HVAC_CalculateAirflow", "Yes") if junc.is_source else "",
+                junc.warning,
+            ]
+            for col, value in enumerate(values):
+                junc_table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
+        junc_table.resizeColumnsToContents()
+        layout.addWidget(QtWidgets.QLabel(translate("HVAC_CalculateAirflow", "Junctions")))
+        layout.addWidget(junc_table)
+
+        return widget
+
+    def accept(self):
+        return True
+
+    def reject(self):
+        return True

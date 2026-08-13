@@ -34,5 +34,9 @@
   "generator": {
     "module": "junctions",
     "function": "build_wye"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_wye_generic"
   }
 }

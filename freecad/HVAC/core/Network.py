@@ -307,7 +307,44 @@ class DuctNetwork:
         
         if not getattr(obj, "DefaultHeight", 0):
             obj.DefaultHeight = 100.0
-    
+
+        # -------------------------------------------------
+        # Air properties used for airflow/pressure-drop calculation
+        # -------------------------------------------------
+
+        if "AirDensity" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyFloat",
+                "AirDensity",
+                "HVAC Air Properties",
+                "Air density (kg/m3) used for pressure-drop calculation"
+            )
+
+        if "AirKinematicViscosity" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyFloat",
+                "AirKinematicViscosity",
+                "HVAC Air Properties",
+                "Air kinematic viscosity (m2/s) used for Reynolds number"
+            )
+
+        if "DefaultRoughness" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyLength",
+                "DefaultRoughness",
+                "HVAC Air Properties",
+                "Default duct wall absolute roughness used when a segment's own Roughness is 0"
+            )
+
+        if not getattr(obj, "AirDensity", 0):
+            obj.AirDensity = 1.204  # standard air, 20 degC, sea level
+
+        if not getattr(obj, "AirKinematicViscosity", 0):
+            obj.AirKinematicViscosity = 1.51e-5
+
+        if not getattr(obj, "DefaultRoughness", 0):
+            obj.DefaultRoughness = 0.09  # mm, galvanized steel
+
     def getDefaultLibraryId(self):
         net = self.Object
         lib_id = getattr(net, "DefaultLibraryId", "")
