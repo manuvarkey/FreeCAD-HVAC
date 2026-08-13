@@ -287,6 +287,37 @@ def test_flow_conservation_and_sizing():
     assert comp.reference_terminal_key == "N1"
 
 
+def test_per_port_dict_loss_contract_attributes_distinct_coefficients(monkeypatch):
+    from freecad.HVAC.core import AirflowSolver as solver_mod
+
+    class _DictRegistry:
+        def resolve_type(self, library_id, type_id):
+            return _FakeTypeDef() if type_id == "branch_tee_generic" else None
+
+        def call_loss(self, library_id, type_def, context):
+            # Distinct per-edge coefficients -- exercises the new dict contract,
+            # which Phase E must NOT collapse into a single uniform K like the
+            # legacy float/None contract does.
+            return {"B": 0.9, "C": 0.1}
+
+    monkeypatch.setattr(
+        solver_mod.hvaclib.HVACLibraryService,
+        "get_hvac_library_registry",
+        staticmethod(lambda: _DictRegistry()),
+    )
+
+    net, segment_map, junction_map = _base_tree()
+    result = AirflowSolver(net).solve()
+
+    assert result.warnings == []  # a dict return is real data, not a fallback
+    segB, segC = segment_map["B"], segment_map["C"]
+    vB, _re, _f = _expected_segment(150.0, 3000.0, 50.0)
+    vC, _re, _f = _expected_segment(150.0, 6000.0, 30.0)
+    assert segB.CalcFittingLoss == pytest.approx(0.9 * airflow.velocity_pressure(AIR_DENSITY, vB))
+    assert segC.CalcFittingLoss == pytest.approx(0.1 * airflow.velocity_pressure(AIR_DENSITY, vC))
+    assert junction_map["N2"].CalcLossWarning == ""
+
+
 def test_fallback_loss_coefficient_and_warning():
     net, segment_map, junction_map = _base_tree()
     junction_map["N2"].TypeId = "unknown_type_not_wired"
