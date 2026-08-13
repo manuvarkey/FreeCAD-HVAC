@@ -23,6 +23,8 @@
 
 """This module implements HVAC duct description classes."""
 
+import traceback
+
 import FreeCAD
 import FreeCADGui as Gui
 from PySide import QtWidgets, QtCore
@@ -1005,6 +1007,51 @@ class CommandEditNetworkTypeDefaults:
         Gui.Control.showDialog(self.task_panel)
 
 
+class CommandCalculateAirflow:
+    """Solve airflow and pressure drop for the active network."""
+
+    def __init__(self):
+        self.task_panel = None
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("Defaults.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_CalculateAirflow', 'Calculate Airflow'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_CalculateAirflow',
+                'Solve airflow and pressure drop for the active network'
+            ),
+            'CmdType': 'ForEdit',
+        }
+
+    def IsActive(self):
+        if Gui.ActiveDocument is None:
+            return False
+        return hvaclib.activeHVACNetwork() is not None
+
+    def Activated(self):
+        from ..core.AirflowSolver import AirflowSolver
+        from ..ui.TaskPanel import TaskPanelAirflowResults
+
+        net = hvaclib.activeHVACNetwork()
+        if net is None:
+            return
+
+        try:
+            result = AirflowSolver(net).solve()
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(
+                "HVAC - CalculateAirflow - Error solving network '{}': {}\n".format(net.Label, e)
+            )
+            FreeCAD.Console.PrintMessage(traceback.format_exc())
+            return
+
+        net.Document.recompute()
+
+        self.task_panel = TaskPanelAirflowResults(net, result)
+        Gui.Control.showDialog(self.task_panel)
+
+
 class CommandResetTypesToNetworkDefaults:
     """Reset selected HVAC geometry objects to their network defaults."""
 
@@ -1075,5 +1122,6 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_EditType', CommandEditType())
     FreeCAD.Gui.addCommand('HVAC_EditPlacement', CommandEditPlacement())
     FreeCAD.Gui.addCommand('HVAC_EditNetworkTypeDefaults', CommandEditNetworkTypeDefaults())
+    FreeCAD.Gui.addCommand('HVAC_CalculateAirflow', CommandCalculateAirflow())
     FreeCAD.Gui.addCommand('HVAC_ResetTypesToDefaults', CommandResetTypesToNetworkDefaults())
     FreeCAD.Gui.addCommand('HVAC_ReloadLibraries', CommandReloadHVACLibraries())  # Debug method

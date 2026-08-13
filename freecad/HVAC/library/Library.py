@@ -57,6 +57,8 @@ class HVACTypeDef:
     generator_function: str = ""
     lengths_module: str = ""
     lengths_function: str = ""
+    loss_module: str = ""
+    loss_function: str = ""
 
 
 @dataclass
@@ -152,6 +154,22 @@ class HVACLibraryRegistry:
         module = self.import_generator(library_id, type_def.generator_module)
         func = getattr(module, type_def.generator_function)
         # ctx = dict(context or {})
+        context["hvac_api"] = HVACLibraryAPI
+        context["hvac_api_version"] = HVACLibraryAPI.API_VERSION
+        return func(context)
+
+    def call_loss(self, library_id: str, type_def: HVACTypeDef, context: dict):
+        """
+        Call the type's optional fitting-loss function, returning a
+        dimensionless loss coefficient (float) or None if the type has no
+        loss function wired up (caller should apply a fallback coefficient).
+        """
+        if not type_def.loss_module or not type_def.loss_function:
+            return None
+        module = self.import_generator(library_id, type_def.loss_module)
+        func = getattr(module, type_def.loss_function, None)
+        if func is None:
+            return None
         context["hvac_api"] = HVACLibraryAPI
         context["hvac_api_version"] = HVACLibraryAPI.API_VERSION
         return func(context)
@@ -261,6 +279,7 @@ class HVACLibraryRegistry:
 
         gen = raw.get("generator", {}) or {}
         lengths = raw.get("connection_lengths", {}) or {}
+        loss = raw.get("loss", {}) or {}
 
         return HVACTypeDef(
             id=raw["id"],
@@ -275,4 +294,6 @@ class HVACLibraryRegistry:
             generator_function=gen.get("function", ""),
             lengths_module=lengths.get("module", ""),
             lengths_function=lengths.get("function", ""),
+            loss_module=loss.get("module", ""),
+            loss_function=loss.get("function", ""),
         )

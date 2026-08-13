@@ -203,6 +203,28 @@ class DuctSegment:
         self._addProperty(obj, "App::PropertyFloat", "FlowRate", "Parameters", "Design flow rate")
         self._addProperty(obj, "App::PropertyFloat", "Velocity", "Parameters", "Design air velocity")
 
+        self._addProperty(obj, "App::PropertyFloat", "CalcFlowRate", "Airflow", "Computed flow rate (L/s)")
+        self._addProperty(obj, "App::PropertyFloat", "CalcVelocity", "Airflow", "Computed air velocity (m/s)")
+        self._addProperty(obj, "App::PropertyFloat", "CalcReynoldsNumber", "Airflow", "Computed Reynolds number")
+        self._addProperty(obj, "App::PropertyFloat", "CalcFrictionLoss", "Airflow", "Computed straight-duct friction loss (Pa)")
+        self._addProperty(obj, "App::PropertyFloat", "CalcFittingLoss", "Airflow", "Fitting/dynamic loss attributed to this segment from its upstream junction (Pa)")
+        self._addProperty(obj, "App::PropertyFloat", "CalcTotalLoss", "Airflow", "CalcFrictionLoss + CalcFittingLoss (Pa)")
+        self._addProperty(obj, "App::PropertyFloat", "CalcCumulativePressure", "Airflow", "Static pressure (Pa) at this segment's downstream end, relative to the sub-network's balancing terminal")
+
+        for prop in (
+            "CalcFlowRate",
+            "CalcVelocity",
+            "CalcReynoldsNumber",
+            "CalcFrictionLoss",
+            "CalcFittingLoss",
+            "CalcTotalLoss",
+            "CalcCumulativePressure",
+        ):
+            try:
+                obj.setEditorMode(prop, 1)
+            except Exception:
+                pass
+
         for prop in (
             "TrimStart",
             "TrimEnd",

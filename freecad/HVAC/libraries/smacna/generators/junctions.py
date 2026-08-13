@@ -22,7 +22,6 @@
 ################################################################################
 
 import math
-from turtle import position
 import FreeCAD
 import Part
 

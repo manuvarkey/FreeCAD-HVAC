@@ -151,6 +151,18 @@ class DuctJunction:
         self._addProperty(obj, "App::PropertyString", "ConnectionLengthsJson", "HVAC", "Per-edge connection lengths")
         self._addProperty(obj, "App::PropertyString", "AnalysisJson", "HVAC", "Serialized topology analysis")
 
+        self._addProperty(obj, "App::PropertyFloat", "DesignFlowRate", "Airflow", "User-specified design flow rate for this terminal (L/s). Leave blank/0 on exactly one terminal per sub-network to solve it as the balancing terminal.")
+        self._addProperty(obj, "App::PropertyFloat", "CalcTotalFlowRate", "Airflow", "Computed total flow through this junction (L/s)")
+        self._addProperty(obj, "App::PropertyFloat", "CalcStaticPressure", "Airflow", "Computed relative static pressure (Pa), referenced to 0 Pa at this sub-network's balancing terminal")
+        self._addProperty(obj, "App::PropertyBool", "IsFlowSource", "Airflow", "True if flow physically leaves the system at this terminal (a supply/source opening)")
+        self._addProperty(obj, "App::PropertyString", "CalcLossWarning", "Airflow", "Non-fatal warning from the last calculation (e.g. fallback loss coefficient used)")
+
+        for prop in ("CalcTotalFlowRate", "CalcStaticPressure", "IsFlowSource", "CalcLossWarning"):
+            try:
+                obj.setEditorMode(prop, 1)
+            except Exception:
+                pass
+
         if not getattr(obj, "LibraryId", ""):
             lib = hvaclib.HVACLibraryService.get_active_hvac_library()
             if lib:
@@ -266,6 +278,11 @@ class DuctJunction:
             # If topology changes, set TypeId to default for the topology
             obj.TypeId = hvaclib.HVACLibraryService.default_topology_type_id(obj.Topology)
             changed = True
+
+        try:
+            obj.setEditorMode("DesignFlowRate", 0 if getattr(obj, "Topology", "") == "end" else 1)
+        except Exception:
+            pass
 
         if family and getattr(obj, "Family", "") != str(family):
             obj.Family = str(family)

@@ -20,5 +20,9 @@
   "generator": {
     "module": "junctions",
     "function": "build_manifold"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_multiport_generic"
   }
 }

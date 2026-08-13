@@ -57,6 +57,7 @@ class HVAC(Gui.Workbench):
                                 'HVAC_ActivateDuctNetwork',
                                 'HVAC_ModifyDuctNetwork',
                                 'HVAC_EditNetworkTypeDefaults',
+                                'HVAC_CalculateAirflow',
                                 "Separator",
                                 'HVAC_CreateSketch',
                                 'HVAC_CreateLine',
@@ -76,6 +77,7 @@ class HVAC(Gui.Workbench):
                                 'HVAC_ActivateDuctNetwork',
                                 'HVAC_ModifyDuctNetwork',
                                 'HVAC_EditNetworkTypeDefaults',
+                                'HVAC_CalculateAirflow',
                                 "Separator",
                                 'HVAC_CreateSketch',
                                 'HVAC_CreateLine',
@@ -95,6 +97,7 @@ class HVAC(Gui.Workbench):
                                 'HVAC_ActivateDuctNetwork',
                                 'HVAC_ModifyDuctNetwork',
                                 'HVAC_EditNetworkTypeDefaults',
+                                'HVAC_CalculateAirflow',
                                 "Separator",
                                 'HVAC_CreateSketch',
                                 'HVAC_CreateLine',
@@ -189,7 +192,8 @@ class HVAC(Gui.Workbench):
             def __init__(self):
                 super().__init__()
                 self.commands = ["HVAC_ModifyDuctNetwork",
-                                "HVAC_EditNetworkTypeDefaults"]
+                                "HVAC_EditNetworkTypeDefaults",
+                                "HVAC_CalculateAirflow"]
                 self.title = translate("HVAC", "Network")
                 
             def shouldShow(self):
