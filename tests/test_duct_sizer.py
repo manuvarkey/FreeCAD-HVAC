@@ -441,7 +441,7 @@ def test_static_regain_propagates_actual_upstream_velocity_not_target_velocity()
     seg_b_result = next(s for s in result.segments if s.key == "B")
 
     upstream_vp = airflow.velocity_pressure(AIR_DENSITY, seg_a_result.velocity_ms)
-    expected_d_m = airflow.circular_diameter_for_static_regain(
+    expected_d_m, _balanced = airflow.circular_diameter_for_static_regain(
         airflow.lps_to_m3s(50.0), upstream_vp, 0.75, 3.0,
         airflow.mm_to_m(DEFAULT_ROUGHNESS_MM), AIR_VISCOSITY, AIR_DENSITY, 4.0
     )
@@ -464,7 +464,7 @@ def test_static_regain_two_downstream_branches_use_same_upstream_reference():
     seg_a_result = next(s for s in result.segments if s.key == "A")
     seg_c_result = next(s for s in result.segments if s.key == "C")
     upstream_vp = airflow.velocity_pressure(AIR_DENSITY, seg_a_result.velocity_ms)
-    expected_d_m = airflow.circular_diameter_for_static_regain(
+    expected_d_m, _balanced = airflow.circular_diameter_for_static_regain(
         airflow.lps_to_m3s(30.0), upstream_vp, 0.75, 6.0,
         airflow.mm_to_m(DEFAULT_ROUGHNESS_MM), AIR_VISCOSITY, AIR_DENSITY, 4.0
     )
@@ -487,7 +487,7 @@ def test_static_regain_segment_velocity_override_on_first_segment_propagates():
     assert seg_a_result.velocity_ms == pytest.approx(6.0)
 
     upstream_vp = airflow.velocity_pressure(AIR_DENSITY, 6.0)
-    expected_d_m = airflow.circular_diameter_for_static_regain(
+    expected_d_m, _balanced = airflow.circular_diameter_for_static_regain(
         airflow.lps_to_m3s(50.0), upstream_vp, 0.75, 3.0,
         airflow.mm_to_m(DEFAULT_ROUGHNESS_MM), AIR_VISCOSITY, AIR_DENSITY, 4.0
     )
@@ -510,3 +510,36 @@ def test_static_regain_error_on_one_segment_does_not_crash_downstream():
     assert any("A" in w or "Height" in w for w in result.warnings)
     keys_sized = {s.key for s in result.segments}
     assert keys_sized == {"B", "C"}  # A failed and was skipped; B/C still solved
+
+
+def test_static_regain_balanced_flag_true_and_no_warning_when_regain_achieved():
+    net, segment_map, _ = base_tree(
+        net_extra_props=_sizing_props(method="StaticRegain", target_velocity=5.0,
+                                       min_velocity=4.0, regain_factor=0.75, rounding_mm=0.0),
+    )
+    result = DuctSizer(net).solve()
+
+    assert all(s.regain_balanced for s in result.segments)
+    assert not any("balanc" in w.lower() for w in result.warnings)
+
+
+def test_static_regain_balanced_flag_false_and_warning_when_floor_clamped():
+    # A short, low-flow branch off a fast upstream section: the classic
+    # static-regain failure mode (see the module docstring in airflow.py).
+    net, segment_map, _ = base_tree(
+        j4_flow=2.0, segC_len=500.0,
+        net_extra_props=_sizing_props(method="StaticRegain", target_velocity=8.0,
+                                       min_velocity=4.0, regain_factor=0.75, rounding_mm=0.0),
+    )
+    result = DuctSizer(net).solve()
+
+    seg_c_result = next(s for s in result.segments if s.key == "C")
+    assert seg_c_result.regain_balanced is False
+    assert seg_c_result.velocity_ms == pytest.approx(4.0)  # clamped to MinimumVelocity
+
+    assert any("C" in w and "balanc" in w.lower() for w in result.warnings)
+
+    # Segment A (the first section) is sized by plain constant velocity, not
+    # regain -- it's trivially "balanced" (not applicable) regardless.
+    seg_a_result = next(s for s in result.segments if s.key == "A")
+    assert seg_a_result.regain_balanced is True
