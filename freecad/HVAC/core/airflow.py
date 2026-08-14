@@ -430,3 +430,189 @@ def oval_dims_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
         return width, height
 
     raise ValueError("Unknown mode: {!r}".format(mode))
+
+
+# ----------------------------------------------------------------------------
+# Duct sizing: static regain (bisection)
+#
+# Sizes each duct section so the static-pressure regain from slowing down
+# through that section -- regain_factor * (upstream velocity pressure - this
+# section's velocity pressure) -- exactly offsets this section's own friction
+# loss. Unlike constant velocity/friction rate, this needs the UPSTREAM
+# section's already-solved velocity pressure as an input, so sections must be
+# sized in order from the source outward (see core.DuctSizer).
+#
+# Static regain has a well-known failure mode on small/low-velocity branches:
+# regain can't offset any reasonable friction loss without an impractically
+# large (slow) duct. Every function here takes a min_velocity_m_s floor and
+# never proposes anything slower than that -- the search brackets from the
+# floor diameter/dimension upward, so if even the floor's own regain already
+# exceeds its friction, the floor is returned outright.
+# ----------------------------------------------------------------------------
+
+def _regain_minus_friction(area_and_dh_fn, scale, flow_m3_s, upstream_velocity_pressure_pa,
+                            regain_factor, length_m, roughness_m, kinematic_viscosity_m2_s,
+                            air_density_kg_m3):
+    area_m2, dh_m = area_and_dh_fn(scale)
+    velocity_m_s = velocity_from_flow(flow_m3_s, area_m2)
+    vp = velocity_pressure(air_density_kg_m3, velocity_m_s)
+    reynolds = reynolds_number(velocity_m_s, dh_m, kinematic_viscosity_m2_s)
+    friction_factor = friction_factor_altshul_tsal(reynolds, roughness_m / dh_m)
+    friction = darcy_weisbach_pressure_loss(friction_factor, length_m, dh_m, air_density_kg_m3, velocity_m_s)
+    regain = regain_factor * (upstream_velocity_pressure_pa - vp)
+    return regain - friction
+
+
+def _solve_scale_for_static_regain(area_and_dh_fn, flow_m3_s, upstream_velocity_pressure_pa,
+                                    regain_factor, length_m, roughness_m, kinematic_viscosity_m2_s,
+                                    air_density_kg_m3, lo, hi=5.0, iterations=60):
+    """
+    Bisect a single scale parameter (e.g. diameter, or one duct dimension) so
+    that regain_minus_friction(scale) == 0. That difference increases
+    monotonically with scale (a bigger duct means both less friction and,
+    since it's slower, more regain), so the bracket is well-posed.
+
+    lo is the scale at the minimum allowed velocity (a floor) -- see the
+    module note above. Clamps to hi if the balance can't be reached even at
+    the largest bracketed size (e.g. a very long or rough run).
+    """
+    if lo >= hi:
+        return lo
+
+    def balance(scale):
+        return _regain_minus_friction(
+            area_and_dh_fn, scale, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
+            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3
+        )
+
+    if balance(lo) >= 0.0:
+        return lo
+    if balance(hi) < 0.0:
+        return hi
+
+    for _ in range(iterations):
+        mid = (lo + hi) / 2.0
+        if balance(mid) < 0.0:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
+
+
+def circular_diameter_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
+                                         length_m, roughness_m, kinematic_viscosity_m2_s,
+                                         air_density_kg_m3, min_velocity_m_s):
+    def area_and_dh(diameter_m):
+        return circular_area(diameter_m), hydraulic_diameter_circular(diameter_m)
+
+    floor_diameter_m = circular_diameter_for_velocity(flow_m3_s, min_velocity_m_s)
+    return _solve_scale_for_static_regain(
+        area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
+        length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, lo=floor_diameter_m
+    )
+
+
+def rect_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
+                                 length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
+                                 min_velocity_m_s, mode, aspect_ratio=None, fixed_dim_m=None):
+    floor_w, floor_h = rect_dims_for_velocity(
+        flow_m3_s, min_velocity_m_s, mode, aspect_ratio=aspect_ratio, fixed_dim_m=fixed_dim_m
+    )
+
+    if mode == "aspect_ratio":
+        if not aspect_ratio or aspect_ratio <= 0.0:
+            raise ValueError("aspect_ratio must be positive")
+
+        def area_and_dh(height_m):
+            width_m = aspect_ratio * height_m
+            return rectangular_area(width_m, height_m), hydraulic_diameter_rectangular(width_m, height_m)
+
+        height = _solve_scale_for_static_regain(
+            area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
+            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, lo=floor_h
+        )
+        return aspect_ratio * height, height
+
+    if mode == "fixed_height":
+        if not fixed_dim_m or fixed_dim_m <= 0.0:
+            raise ValueError("fixed_dim_m must be positive")
+        height = fixed_dim_m
+
+        def area_and_dh(width_m):
+            return rectangular_area(width_m, height), hydraulic_diameter_rectangular(width_m, height)
+
+        width = _solve_scale_for_static_regain(
+            area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
+            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, lo=floor_w
+        )
+        return width, height
+
+    if mode == "fixed_width":
+        if not fixed_dim_m or fixed_dim_m <= 0.0:
+            raise ValueError("fixed_dim_m must be positive")
+        width = fixed_dim_m
+
+        def area_and_dh(height_m):
+            return rectangular_area(width, height_m), hydraulic_diameter_rectangular(width, height_m)
+
+        height = _solve_scale_for_static_regain(
+            area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
+            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, lo=floor_h
+        )
+        return width, height
+
+    raise ValueError("Unknown mode: {!r}".format(mode))
+
+
+def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
+                                 length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
+                                 min_velocity_m_s, mode, aspect_ratio=None, fixed_dim_m=None):
+    floor_w, floor_h = oval_dims_for_velocity(
+        flow_m3_s, min_velocity_m_s, mode, aspect_ratio=aspect_ratio, fixed_dim_m=fixed_dim_m
+    )
+
+    if mode == "aspect_ratio":
+        if not aspect_ratio or aspect_ratio < 1.0:
+            raise ValueError("aspect_ratio must be >= 1.0 for an oval (width >= height)")
+
+        def area_and_dh(height_m):
+            width_m = aspect_ratio * height_m
+            return oval_area(width_m, height_m), hydraulic_diameter_oval(width_m, height_m)
+
+        height = _solve_scale_for_static_regain(
+            area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
+            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, lo=floor_h
+        )
+        return aspect_ratio * height, height
+
+    if mode == "fixed_height":
+        if not fixed_dim_m or fixed_dim_m <= 0.0:
+            raise ValueError("fixed_dim_m must be positive")
+        height = fixed_dim_m
+
+        def area_and_dh(width_m):
+            return oval_area(width_m, height), hydraulic_diameter_oval(width_m, height)
+
+        width = _solve_scale_for_static_regain(
+            area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
+            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
+            lo=max(floor_w, height),  # width must also stay >= height for a valid oval
+        )
+        return width, height
+
+    if mode == "fixed_width":
+        if not fixed_dim_m or fixed_dim_m <= 0.0:
+            raise ValueError("fixed_dim_m must be positive")
+        width = fixed_dim_m
+
+        def area_and_dh(height_m):
+            return oval_area(width, height_m), hydraulic_diameter_oval(width, height_m)
+
+        height = _solve_scale_for_static_regain(
+            area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
+            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
+            lo=floor_h, hi=width,  # height must also stay <= width for a valid oval
+        )
+        return width, height
+
+    raise ValueError("Unknown mode: {!r}".format(mode))

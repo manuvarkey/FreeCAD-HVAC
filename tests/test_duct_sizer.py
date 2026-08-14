@@ -49,7 +49,8 @@ def _two_node_tree(profile, diameter_mm=0.0, width_mm=0.0, height_mm=0.0,
 
 def _sizing_props(method="ConstantVelocity", target_velocity=5.0, target_friction_rate=1.0,
                    rect_mode="FixedAspectRatio", aspect_ratio=2.0, rounding_mm=10.0,
-                   default_width=0.0, default_height=0.0):
+                   default_width=0.0, default_height=0.0,
+                   regain_factor=0.75, min_velocity=3.0):
     return dict(
         SizingMethod=method,
         TargetVelocity=target_velocity,
@@ -59,6 +60,8 @@ def _sizing_props(method="ConstantVelocity", target_velocity=5.0, target_frictio
         SizeRoundingIncrement=rounding_mm,
         DefaultWidth=default_width,
         DefaultHeight=default_height,
+        StaticRegainFactor=regain_factor,
+        MinimumVelocity=min_velocity,
     )
 
 
@@ -398,3 +401,112 @@ def test_no_segment_mode_override_uses_network_default():
     # Height (999mm) must NOT be held fixed, since no per-segment override was set.
     assert sres.new_height_mm != pytest.approx(999.0)
     assert sres.new_width_mm / sres.new_height_mm == pytest.approx(2.0, rel=0.15)
+
+
+# ----------------------------------------------------------------------------
+# Static regain: sequential (parent-before-child) sizing
+# ----------------------------------------------------------------------------
+# Reuses the shared 3-segment tee tree: J1(root) --A(80 L/s)--> J2(tee)
+#   J2 --B(50 L/s, 3m)--> J3(leaf)      J2 --C(30 L/s, 6m)--> J4(leaf)
+
+def test_static_regain_first_segment_sized_directly_at_target_velocity():
+    # Segment A leaves the source directly (its parent is the root/balancing
+    # terminal) -- no upstream section exists yet, so it must be sized by
+    # plain constant-velocity sizing at the network's TargetVelocity, not run
+    # through the regain-balance equation.
+    net, segment_map, _ = base_tree(
+        net_extra_props=_sizing_props(method="StaticRegain", target_velocity=5.0,
+                                       min_velocity=4.0, regain_factor=0.75, rounding_mm=0.0),
+    )
+    result = DuctSizer(net).solve()
+
+    seg_a_result = next(s for s in result.segments if s.key == "A")
+    assert seg_a_result.velocity_ms == pytest.approx(5.0)
+    expected_d_m = airflow.circular_diameter_for_velocity(airflow.lps_to_m3s(80.0), 5.0)
+    assert seg_a_result.new_diameter_mm == pytest.approx(expected_d_m * 1000.0)
+
+
+def test_static_regain_propagates_actual_upstream_velocity_not_target_velocity():
+    # Segment B's parent (J2) is downstream of segment A, so B must be sized
+    # against segment A's own ACTUAL resolved velocity -- which is only the
+    # same as TargetVelocity here because segment A isn't rounded/floor-
+    # clamped; in general they can differ, and B must track the real value.
+    net, segment_map, _ = base_tree(
+        net_extra_props=_sizing_props(method="StaticRegain", target_velocity=5.0,
+                                       min_velocity=4.0, regain_factor=0.75, rounding_mm=0.0),
+    )
+    result = DuctSizer(net).solve()
+
+    seg_a_result = next(s for s in result.segments if s.key == "A")
+    seg_b_result = next(s for s in result.segments if s.key == "B")
+
+    upstream_vp = airflow.velocity_pressure(AIR_DENSITY, seg_a_result.velocity_ms)
+    expected_d_m = airflow.circular_diameter_for_static_regain(
+        airflow.lps_to_m3s(50.0), upstream_vp, 0.75, 3.0,
+        airflow.mm_to_m(DEFAULT_ROUGHNESS_MM), AIR_VISCOSITY, AIR_DENSITY, 4.0
+    )
+    assert seg_b_result.new_diameter_mm == pytest.approx(expected_d_m * 1000.0)
+    # Sanity: not floor-clamped, so this is actually exercising the regain balance.
+    floor_d_m = airflow.circular_diameter_for_velocity(airflow.lps_to_m3s(50.0), 4.0)
+    assert seg_b_result.new_diameter_mm > floor_d_m * 1000.0 + 1e-6
+
+
+def test_static_regain_two_downstream_branches_use_same_upstream_reference():
+    # B and C are both children of the same node (J2), so both must be
+    # sized against the SAME upstream velocity (segment A's), even though
+    # they carry different flows/lengths and end up different sizes.
+    net, segment_map, _ = base_tree(
+        net_extra_props=_sizing_props(method="StaticRegain", target_velocity=5.0,
+                                       min_velocity=4.0, regain_factor=0.75, rounding_mm=0.0),
+    )
+    result = DuctSizer(net).solve()
+
+    seg_a_result = next(s for s in result.segments if s.key == "A")
+    seg_c_result = next(s for s in result.segments if s.key == "C")
+    upstream_vp = airflow.velocity_pressure(AIR_DENSITY, seg_a_result.velocity_ms)
+    expected_d_m = airflow.circular_diameter_for_static_regain(
+        airflow.lps_to_m3s(30.0), upstream_vp, 0.75, 6.0,
+        airflow.mm_to_m(DEFAULT_ROUGHNESS_MM), AIR_VISCOSITY, AIR_DENSITY, 4.0
+    )
+    assert seg_c_result.new_diameter_mm == pytest.approx(expected_d_m * 1000.0)
+
+
+def test_static_regain_segment_velocity_override_on_first_segment_propagates():
+    # If segment A has its own Velocity override, it's sized at that value
+    # instead of the network's TargetVelocity, and B/C must pick up A's
+    # OVERRIDDEN resulting velocity as their own upstream reference.
+    net, segment_map, _ = base_tree(
+        net_extra_props=_sizing_props(method="StaticRegain", target_velocity=5.0,
+                                       min_velocity=4.0, regain_factor=0.75, rounding_mm=0.0),
+    )
+    segment_map["A"].Velocity = 6.0  # override, different from network TargetVelocity
+    result = DuctSizer(net).solve()
+
+    seg_a_result = next(s for s in result.segments if s.key == "A")
+    seg_b_result = next(s for s in result.segments if s.key == "B")
+    assert seg_a_result.velocity_ms == pytest.approx(6.0)
+
+    upstream_vp = airflow.velocity_pressure(AIR_DENSITY, 6.0)
+    expected_d_m = airflow.circular_diameter_for_static_regain(
+        airflow.lps_to_m3s(50.0), upstream_vp, 0.75, 3.0,
+        airflow.mm_to_m(DEFAULT_ROUGHNESS_MM), AIR_VISCOSITY, AIR_DENSITY, 4.0
+    )
+    assert seg_b_result.new_diameter_mm == pytest.approx(expected_d_m * 1000.0)
+
+
+def test_static_regain_error_on_one_segment_does_not_crash_downstream():
+    # Force an error on segment A (rectangular, FixedHeight mode, no
+    # existing/default Height to hold fixed) and confirm B/C still get sized
+    # (using the fallback TargetVelocity reference) instead of the whole
+    # component aborting.
+    net, segment_map, _ = base_tree(
+        segA_kwargs={"profile": "Rectangular"},
+        net_extra_props=_sizing_props(method="StaticRegain", target_velocity=5.0,
+                                       min_velocity=4.0, regain_factor=0.75, rounding_mm=0.0,
+                                       rect_mode="FixedHeight", default_height=0.0),
+    )
+    result = DuctSizer(net).solve()
+
+    assert any("A" in w or "Height" in w for w in result.warnings)
+    keys_sized = {s.key for s in result.segments}
+    assert keys_sized == {"B", "C"}  # A failed and was skipped; B/C still solved

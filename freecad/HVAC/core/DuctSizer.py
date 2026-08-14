@@ -25,8 +25,20 @@
 Whole-network duct sizing: given the same design-flow-rate boundary
 conditions and flow distribution as AirflowSolver (see FlowNetwork.py),
 compute duct dimensions instead of pressure drop -- solving for size from a
-target constant velocity or constant friction rate, per the active
-DuctNetwork's SizingMethod.
+target constant velocity, constant friction rate, or static regain, per the
+active DuctNetwork's SizingMethod.
+
+ConstantVelocity and ConstantFrictionRate size each segment independently
+(order doesn't matter). StaticRegain does not: each section's target depends
+on its already-solved parent section's velocity, so sections are sized in
+sequence from the balancing terminal (the source) outward, seeded by the
+network's TargetVelocity, reusing FlowComponent.order/parent_edge (the same
+rooted-tree walk AirflowSolver uses for pressure propagation).
+
+A segment's own Velocity/RectangularSizingMode/TargetAspectRatio overrides
+(see _size_segment) still apply during a StaticRegain solve -- a Velocity-
+overridden segment is sized by constant velocity as usual, and its resulting
+velocity simply becomes the seed for whatever is downstream of it.
 
 DuctSizer.solve() never mutates any segment object; it only computes and
 returns proposed sizes (a preview). DuctSizer.apply(result) is a separate,
@@ -100,7 +112,13 @@ class DuctSizer:
         aspect_ratio = float(getattr(net, "TargetAspectRatio", 2.0) or 2.0)
         target_velocity = float(getattr(net, "TargetVelocity", 5.0) or 5.0)
         target_friction_rate = float(getattr(net, "TargetFrictionRate", 1.0) or 1.0)
-        rounding_mm = float(getattr(net, "SizeRoundingIncrement", 10.0) or 10.0)
+        regain_factor = float(getattr(net, "StaticRegainFactor", 0.75) or 0.75)
+        min_velocity = float(getattr(net, "MinimumVelocity", 2.5) or 2.5)
+        # Note: no "or 10.0" fallback here -- unlike the other target
+        # properties, 0 is a legitimate, intentional value for this one
+        # (disable rounding, keep exact computed sizes), so an explicit 0
+        # must not be silently replaced by the default.
+        rounding_mm = float(getattr(net, "SizeRoundingIncrement", 10.0))
         viscosity = float(getattr(net, "AirKinematicViscosity", 1.51e-5) or 1.51e-5)
         density = float(getattr(net, "AirDensity", 1.204) or 1.204)
         default_roughness_mm = float(getattr(net, "DefaultRoughness", 0.09) or 0.09)
@@ -108,6 +126,14 @@ class DuctSizer:
         default_height_mm = float(getattr(net, "DefaultHeight", 0.0) or 0.0)
 
         for comp in components:
+            if method == "StaticRegain":
+                self._solveComponentStaticRegain(
+                    comp, segment_map, result, mode, aspect_ratio, target_velocity, rounding_mm,
+                    viscosity, density, default_roughness_mm, default_width_mm, default_height_mm,
+                    regain_factor, min_velocity,
+                )
+                continue
+
             for edge_ref in comp.comp_edges:
                 seg_obj = segment_map[edge_ref.tag]
                 flow_lps = comp.edge_flow_lps[edge_ref]
@@ -122,6 +148,58 @@ class DuctSizer:
                     result.warnings.append("{}: {}".format(seg_obj.Label, exc))
 
         return result
+
+    def _solveComponentStaticRegain(self, comp, segment_map, result, mode, aspect_ratio,
+                                     target_velocity, rounding_mm, viscosity, density,
+                                     default_roughness_mm, default_width_mm, default_height_mm,
+                                     regain_factor, min_velocity):
+        """
+        Size every segment in this component in order from the balancing
+        terminal (comp.root_node_id) outward, using comp.order (a BFS walk
+        that always visits a node after its parent) so each segment's own
+        upstream velocity is already resolved by the time it's needed.
+
+        The section(s) leaving the source directly (parent == root) have no
+        upstream section to regain from, so -- standard practice -- they are
+        sized directly at the network's TargetVelocity (a chosen starting
+        velocity) via constant-velocity sizing. Every other section is sized
+        by the regain-balance equation against its own parent's already-
+        resolved velocity.
+        """
+        velocity_by_node = {}
+
+        for node_id in comp.order[1:]:
+            edge_ref = comp.parent_edge[node_id]
+            parent_id = comp.parent_node[node_id]
+            seg_obj = segment_map[edge_ref.tag]
+            flow_lps = comp.edge_flow_lps[edge_ref]
+
+            if parent_id == comp.root_node_id:
+                effective_method = "ConstantVelocity"
+                upstream_vp = 0.0  # unused by _size_segment for ConstantVelocity
+            else:
+                effective_method = "StaticRegain"
+                upstream_vp = airflow.velocity_pressure(density, velocity_by_node[parent_id])
+
+            try:
+                sres = self._size_segment(
+                    seg_obj, flow_lps, effective_method, mode, aspect_ratio,
+                    target_velocity, 0.0, rounding_mm,
+                    viscosity, density, default_roughness_mm,
+                    default_width_mm, default_height_mm,
+                    upstream_velocity_pressure_pa=upstream_vp,
+                    regain_factor=regain_factor, min_velocity=min_velocity,
+                )
+                result.segments.append(sres)
+                velocity_by_node[node_id] = sres.velocity_ms
+            except ValueError as exc:
+                result.warnings.append("{}: {}".format(seg_obj.Label, exc))
+                # Can't resolve this section's own velocity -- seed anything
+                # downstream of it with a sensible fallback (the upstream
+                # velocity, or the network's TargetVelocity at the source) so
+                # the rest of this sub-tree still gets an (less accurate)
+                # answer instead of cascading into more failures.
+                velocity_by_node[node_id] = velocity_by_node.get(parent_id, target_velocity)
 
     def apply(self, result):
         """Write every changed proposed size onto its real segment object."""
@@ -145,7 +223,8 @@ class DuctSizer:
     def _size_segment(self, seg_obj, flow_lps, method, mode, aspect_ratio,
                        target_velocity, target_friction_rate, rounding_mm,
                        viscosity, density, default_roughness_mm,
-                       default_width_mm, default_height_mm):
+                       default_width_mm, default_height_mm,
+                       upstream_velocity_pressure_pa=0.0, regain_factor=0.75, min_velocity=2.5):
         profile = str(getattr(seg_obj, "Profile", "") or "")
         section_params = hvaclib.get_segment_section_params(seg_obj)
         old_diameter_mm = float(section_params.get("Diameter", 0.0) or 0.0)
@@ -204,9 +283,16 @@ class DuctSizer:
                 )
             fixed_dim_m = airflow.mm_to_m(fixed_mm)
 
+        length_m = airflow.mm_to_m(float(getattr(seg_obj, "EffectiveLength", 0.0) or 0.0))
+
         if profile == "Circular":
             if method == "ConstantVelocity":
                 diameter_m = airflow.circular_diameter_for_velocity(flow_m3s, target_velocity)
+            elif method == "StaticRegain":
+                diameter_m = airflow.circular_diameter_for_static_regain(
+                    flow_m3s, upstream_velocity_pressure_pa, regain_factor, length_m,
+                    roughness_m, viscosity, density, min_velocity
+                )
             else:
                 diameter_m = airflow.circular_diameter_for_friction_rate(
                     flow_m3s, target_friction_rate, roughness_m, viscosity, density
@@ -217,15 +303,25 @@ class DuctSizer:
             dh_m = airflow.hydraulic_diameter_circular(airflow.mm_to_m(new_diameter_mm))
         else:
             if profile == "Rectangular":
-                dims_velocity, dims_friction = airflow.rect_dims_for_velocity, airflow.rect_dims_for_friction_rate
+                dims_velocity = airflow.rect_dims_for_velocity
+                dims_friction = airflow.rect_dims_for_friction_rate
+                dims_regain = airflow.rect_dims_for_static_regain
                 area_fn, dh_fn = airflow.rectangular_area, airflow.hydraulic_diameter_rectangular
             else:
-                dims_velocity, dims_friction = airflow.oval_dims_for_velocity, airflow.oval_dims_for_friction_rate
+                dims_velocity = airflow.oval_dims_for_velocity
+                dims_friction = airflow.oval_dims_for_friction_rate
+                dims_regain = airflow.oval_dims_for_static_regain
                 area_fn, dh_fn = airflow.oval_area, airflow.hydraulic_diameter_oval
 
             if method == "ConstantVelocity":
                 width_m, height_m = dims_velocity(
                     flow_m3s, target_velocity, mode, aspect_ratio=aspect_ratio, fixed_dim_m=fixed_dim_m
+                )
+            elif method == "StaticRegain":
+                width_m, height_m = dims_regain(
+                    flow_m3s, upstream_velocity_pressure_pa, regain_factor, length_m,
+                    roughness_m, viscosity, density, min_velocity,
+                    mode, aspect_ratio=aspect_ratio, fixed_dim_m=fixed_dim_m
                 )
             else:
                 width_m, height_m = dims_friction(
