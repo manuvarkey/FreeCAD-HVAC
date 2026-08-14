@@ -1363,6 +1363,8 @@ class DuctNetwork:
             "InsulationThickness": float(getattr(obj, "InsulationThickness", 0.0)),
             "Roughness": float(getattr(obj, "Roughness", 0.0)),
             "Velocity": float(getattr(obj, "Velocity", 0.0)),
+            "RectangularSizingMode": str(getattr(obj, "RectangularSizingMode", "UseNetworkDefault")),
+            "TargetAspectRatio": float(getattr(obj, "TargetAspectRatio", 0.0)),
         }
     
     @staticmethod
@@ -1405,7 +1407,11 @@ class DuctNetwork:
             set_if_needed("Roughness", params["Roughness"])
         if "Velocity" in params:
             set_if_needed("Velocity", params["Velocity"])
-    
+        if "RectangularSizingMode" in params:
+            set_if_needed("RectangularSizingMode", params["RectangularSizingMode"])
+        if "TargetAspectRatio" in params:
+            set_if_needed("TargetAspectRatio", params["TargetAspectRatio"])
+
         return changed
     
     @staticmethod

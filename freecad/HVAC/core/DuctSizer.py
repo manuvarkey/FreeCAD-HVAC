@@ -180,6 +180,16 @@ class DuctSizer:
             method = "ConstantVelocity"
             target_velocity = segment_velocity
 
+        # A segment's own RectangularSizingMode/TargetAspectRatio, if set, override
+        # the network's for this segment only -- e.g. one run is height-constrained
+        # by a beam or ceiling while the rest of the system uses a fixed aspect ratio.
+        seg_mode_raw = str(getattr(seg_obj, "RectangularSizingMode", "UseNetworkDefault") or "UseNetworkDefault")
+        if seg_mode_raw != "UseNetworkDefault":
+            mode = _RECT_MODE_MAP.get(seg_mode_raw, mode)
+        seg_aspect_ratio = float(getattr(seg_obj, "TargetAspectRatio", 0.0) or 0.0)
+        if seg_aspect_ratio > 0.0:
+            aspect_ratio = seg_aspect_ratio
+
         fixed_dim_m = None
         if profile in ("Rectangular", "Oval") and mode in ("fixed_height", "fixed_width"):
             if mode == "fixed_height":
