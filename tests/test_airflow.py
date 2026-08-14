@@ -304,3 +304,122 @@ def test_friction_rate_sizing_clamps_to_bracket_when_unreachable():
     # largest bracketed diameter rather than raising or looping forever.
     d = airflow.circular_diameter_for_friction_rate(0.5, 1e-6, ROUGHNESS_M, VISCOSITY, DENSITY)
     assert d == pytest.approx(5.0)
+
+
+# ----------------------------------------------------------------------------
+# Duct sizing: static regain
+# ----------------------------------------------------------------------------
+
+REGAIN_FACTOR = 0.75
+MIN_VELOCITY = 3.0
+
+# Chosen (and verified numerically) so the regain-vs-friction crossing point
+# falls strictly between the minimum-velocity floor and the 5m bracket
+# ceiling -- i.e. this scenario is NOT floor-clamped, so the round-trip
+# balance equation is the thing actually being exercised.
+ROUND_TRIP_UPSTREAM_V = 4.0
+ROUND_TRIP_LENGTH = 30.0
+
+
+def _regain_balance(area_m2, dh_m, flow_m3_s, upstream_vp_pa, regain_factor, length_m):
+    v = airflow.velocity_from_flow(flow_m3_s, area_m2)
+    vp = airflow.velocity_pressure(DENSITY, v)
+    re = airflow.reynolds_number(v, dh_m, VISCOSITY)
+    f = airflow.friction_factor_altshul_tsal(re, ROUGHNESS_M / dh_m)
+    friction = airflow.darcy_weisbach_pressure_loss(f, length_m, dh_m, DENSITY, v)
+    regain = regain_factor * (upstream_vp_pa - vp)
+    return regain, friction, v
+
+
+def test_circular_static_regain_round_trip_balances_when_not_floor_clamped():
+    flow = 0.3
+    upstream_vp = airflow.velocity_pressure(DENSITY, ROUND_TRIP_UPSTREAM_V)
+    d = airflow.circular_diameter_for_static_regain(
+        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY
+    )
+    floor_d = airflow.circular_diameter_for_velocity(flow, MIN_VELOCITY)
+    assert d > floor_d + 1e-9  # sanity: this case must not be floor-clamped
+
+    regain, friction, _v = _regain_balance(
+        airflow.circular_area(d), airflow.hydraulic_diameter_circular(d),
+        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH
+    )
+    assert regain == pytest.approx(friction, rel=1e-3)
+
+
+def test_circular_static_regain_clamps_to_minimum_velocity_floor():
+    # A fast upstream section (8 m/s) feeding a short, low-friction run: even
+    # at the fastest allowed velocity (the floor), the available regain
+    # (driven by the big upstream/downstream velocity-pressure gap) already
+    # exceeds this section's modest friction loss -- the unconstrained
+    # balance point would require an even faster duct than the floor allows,
+    # so sizing clamps to the floor rather than extrapolating past it.
+    flow, length = 0.05, 0.5
+    upstream_vp = airflow.velocity_pressure(DENSITY, 8.0)
+    d = airflow.circular_diameter_for_static_regain(
+        flow, upstream_vp, REGAIN_FACTOR, length, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY
+    )
+    floor_d = airflow.circular_diameter_for_velocity(flow, MIN_VELOCITY)
+    assert d == pytest.approx(floor_d)
+
+
+def test_static_regain_higher_regain_factor_gives_smaller_duct():
+    flow = 0.3
+    upstream_vp = airflow.velocity_pressure(DENSITY, ROUND_TRIP_UPSTREAM_V)
+    d_low_r = airflow.circular_diameter_for_static_regain(
+        flow, upstream_vp, 0.5, ROUND_TRIP_LENGTH, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY
+    )
+    d_high_r = airflow.circular_diameter_for_static_regain(
+        flow, upstream_vp, 1.0, ROUND_TRIP_LENGTH, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY
+    )
+    assert d_high_r < d_low_r
+
+
+@pytest.mark.parametrize("mode,kwargs", [
+    ("aspect_ratio", {"aspect_ratio": 2.0}),
+    ("fixed_height", {"fixed_dim_m": 0.3}),
+    ("fixed_width", {"fixed_dim_m": 0.5}),
+])
+def test_rect_dims_for_static_regain_round_trip(mode, kwargs):
+    flow = 0.3
+    upstream_vp = airflow.velocity_pressure(DENSITY, ROUND_TRIP_UPSTREAM_V)
+    w, h = airflow.rect_dims_for_static_regain(
+        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH, ROUGHNESS_M, VISCOSITY, DENSITY,
+        MIN_VELOCITY, mode, **kwargs
+    )
+    assert w > 0.0 and h > 0.0
+    regain, friction, _v = _regain_balance(
+        airflow.rectangular_area(w, h), airflow.hydraulic_diameter_rectangular(w, h),
+        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH
+    )
+    assert regain == pytest.approx(friction, rel=1e-3)
+
+
+@pytest.mark.parametrize("mode,kwargs", [
+    ("aspect_ratio", {"aspect_ratio": 2.0}),
+    ("fixed_height", {"fixed_dim_m": 0.25}),
+    ("fixed_width", {"fixed_dim_m": 0.6}),
+])
+def test_oval_dims_for_static_regain_round_trip(mode, kwargs):
+    flow = 0.3
+    upstream_vp = airflow.velocity_pressure(DENSITY, ROUND_TRIP_UPSTREAM_V)
+    w, h = airflow.oval_dims_for_static_regain(
+        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH, ROUGHNESS_M, VISCOSITY, DENSITY,
+        MIN_VELOCITY, mode, **kwargs
+    )
+    assert w >= h > 0.0
+    regain, friction, _v = _regain_balance(
+        airflow.oval_area(w, h), airflow.hydraulic_diameter_oval(w, h),
+        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH
+    )
+    assert regain == pytest.approx(friction, rel=1e-3)
+
+
+def test_rect_dims_for_static_regain_fixed_height_keeps_height_exact():
+    flow, length = 0.3, 10.0
+    upstream_vp = airflow.velocity_pressure(DENSITY, 8.0)
+    w, h = airflow.rect_dims_for_static_regain(
+        flow, upstream_vp, REGAIN_FACTOR, length, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY,
+        "fixed_height", fixed_dim_m=0.3
+    )
+    assert h == pytest.approx(0.3)

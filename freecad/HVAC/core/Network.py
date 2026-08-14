@@ -346,7 +346,7 @@ class DuctNetwork:
             obj.DefaultRoughness = 0.09  # mm, galvanized steel
 
         # -------------------------------------------------
-        # Duct sizing (constant velocity / constant friction rate)
+        # Duct sizing (constant velocity / constant friction rate / static regain)
         # -------------------------------------------------
 
         if "SizingMethod" not in obj.PropertiesList:
@@ -356,7 +356,7 @@ class DuctNetwork:
                 "HVAC Duct Sizing",
                 "Method used by the Size Ducts command"
             )
-            obj.SizingMethod = ["ConstantVelocity", "ConstantFrictionRate"]
+            obj.SizingMethod = ["ConstantVelocity", "ConstantFrictionRate", "StaticRegain"]
             obj.SizingMethod = "ConstantVelocity"
 
         if "TargetVelocity" not in obj.PropertiesList:
@@ -364,7 +364,8 @@ class DuctNetwork:
                 "App::PropertyFloat",
                 "TargetVelocity",
                 "HVAC Duct Sizing",
-                "Target duct velocity (m/s) used when SizingMethod is ConstantVelocity"
+                "Target duct velocity (m/s) used when SizingMethod is ConstantVelocity, and as the "
+                "starting velocity for sections leaving the balancing terminal when SizingMethod is StaticRegain"
             )
 
         if "TargetFrictionRate" not in obj.PropertiesList:
@@ -373,6 +374,23 @@ class DuctNetwork:
                 "TargetFrictionRate",
                 "HVAC Duct Sizing",
                 "Target friction rate (Pa/m) used when SizingMethod is ConstantFrictionRate"
+            )
+
+        if "StaticRegainFactor" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyFloat",
+                "StaticRegainFactor",
+                "HVAC Duct Sizing",
+                "Fraction of velocity-pressure regain actually recovered (0-1) when SizingMethod is StaticRegain"
+            )
+
+        if "MinimumVelocity" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyFloat",
+                "MinimumVelocity",
+                "HVAC Duct Sizing",
+                "Velocity floor (m/s) used when SizingMethod is StaticRegain, since regain sizing alone "
+                "can propose impractically large/slow ducts on small or low-velocity branches"
             )
 
         if "RectangularSizingMode" not in obj.PropertiesList:
@@ -406,6 +424,12 @@ class DuctNetwork:
 
         if not getattr(obj, "TargetFrictionRate", 0):
             obj.TargetFrictionRate = 1.0
+
+        if not getattr(obj, "StaticRegainFactor", 0):
+            obj.StaticRegainFactor = 0.75
+
+        if not getattr(obj, "MinimumVelocity", 0):
+            obj.MinimumVelocity = 2.5
 
         if not getattr(obj, "TargetAspectRatio", 0):
             obj.TargetAspectRatio = 2.0
