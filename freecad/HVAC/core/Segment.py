@@ -202,6 +202,23 @@ class DuctSegment:
         self._addProperty(obj, "App::PropertyLength", "Roughness", "Parameters", "Wall roughness; 0 uses the network's DefaultRoughness")
         self._addProperty(obj, "App::PropertyFloat", "Velocity", "Parameters", "Target velocity (m/s) override for duct sizing on this segment only; 0 uses the network's SizingMethod/TargetVelocity")
 
+        if "RectangularSizingMode" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyEnumeration",
+                "RectangularSizingMode",
+                "Parameters",
+                "Per-segment override of the network's RectangularSizingMode for duct sizing; "
+                "UseNetworkDefault defers to the network setting"
+            )
+            obj.RectangularSizingMode = ["UseNetworkDefault", "FixedAspectRatio", "FixedHeight", "FixedWidth"]
+            obj.RectangularSizingMode = "UseNetworkDefault"
+
+        self._addProperty(
+            obj, "App::PropertyFloat", "TargetAspectRatio", "Parameters",
+            "Target Width:Height ratio override (used when RectangularSizingMode resolves to "
+            "FixedAspectRatio); 0 uses the network's TargetAspectRatio"
+        )
+
         self._addProperty(obj, "App::PropertyFloat", "CalcFlowRate", "Airflow", "Computed flow rate (L/s)")
         self._addProperty(obj, "App::PropertyFloat", "CalcVelocity", "Airflow", "Computed air velocity (m/s)")
         self._addProperty(obj, "App::PropertyFloat", "CalcReynoldsNumber", "Airflow", "Computed Reynolds number")

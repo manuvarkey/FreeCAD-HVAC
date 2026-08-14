@@ -27,6 +27,7 @@ from freecad.HVAC.core.DuctSizer import DuctSizer
 
 def _two_node_tree(profile, diameter_mm=0.0, width_mm=0.0, height_mm=0.0,
                     length_mm=4000.0, roughness_mm=0.0, flow_lps=100.0, velocity_ms=0.0,
+                    rectangular_sizing_mode="UseNetworkDefault", target_aspect_ratio=0.0,
                     net_extra_props=None):
     """Single segment A: J1 (balancing terminal) --A--> J2 (leaf, flow_lps)."""
     node_ports = {1: [("A", "start")], 2: [("A", "end")]}
@@ -34,7 +35,9 @@ def _two_node_tree(profile, diameter_mm=0.0, width_mm=0.0, height_mm=0.0,
     parser = FakeParser(node_ports, edge_endpoints)
     segment_map = {
         "A": make_segment("A", diameter_mm, length_mm, roughness_mm=roughness_mm, profile=profile,
-                           width_mm=width_mm, height_mm=height_mm, velocity_ms=velocity_ms),
+                           width_mm=width_mm, height_mm=height_mm, velocity_ms=velocity_ms,
+                           rectangular_sizing_mode=rectangular_sizing_mode,
+                           target_aspect_ratio=target_aspect_ratio),
     }
     junction_map = {
         "N1": make_junction("J1", design_flow=0.0, type_id="end_terminal_marker"),
@@ -324,3 +327,74 @@ def test_no_segment_velocity_override_uses_network_default():
     expected_d_m = airflow.circular_diameter_for_velocity(airflow.lps_to_m3s(200.0), 5.0)
     expected_mm = _round_up(expected_d_m * 1000.0, 10.0)
     assert sres.new_diameter_mm == pytest.approx(expected_mm)
+
+
+# ----------------------------------------------------------------------------
+# Per-segment RectangularSizingMode / TargetAspectRatio override
+# ----------------------------------------------------------------------------
+
+def test_segment_mode_override_switches_from_network_aspect_ratio_to_fixed_height():
+    # Network default is FixedAspectRatio, but this one segment is height-constrained
+    # (e.g. a beam or ceiling) and overrides to FixedHeight with its own existing Height.
+    net, segment_map, _ = _two_node_tree(
+        "Rectangular", height_mm=280.0, flow_lps=300.0,
+        rectangular_sizing_mode="FixedHeight",
+        net_extra_props=_sizing_props(method="ConstantVelocity", target_velocity=6.0,
+                                       rect_mode="FixedAspectRatio", aspect_ratio=2.0, rounding_mm=10.0),
+    )
+    result = DuctSizer(net).solve()
+
+    assert result.warnings == []
+    sres = result.segments[0]
+    assert sres.new_height_mm == pytest.approx(280.0)  # held fixed, per the segment's own override
+
+
+def test_segment_mode_override_switches_from_network_fixed_height_to_fixed_width():
+    net, segment_map, _ = _two_node_tree(
+        "Rectangular", width_mm=450.0, flow_lps=300.0,
+        rectangular_sizing_mode="FixedWidth",
+        net_extra_props=_sizing_props(method="ConstantVelocity", target_velocity=6.0,
+                                       rect_mode="FixedHeight", default_height=300.0, rounding_mm=10.0),
+    )
+    result = DuctSizer(net).solve()
+
+    assert result.warnings == []
+    sres = result.segments[0]
+    assert sres.new_width_mm == pytest.approx(450.0)  # held fixed, per the segment's own override
+
+
+def test_segment_aspect_ratio_override_used_within_fixed_aspect_ratio_mode():
+    net_default, _, _ = _two_node_tree(
+        "Rectangular", flow_lps=300.0,
+        net_extra_props=_sizing_props(method="ConstantVelocity", target_velocity=6.0,
+                                       rect_mode="FixedAspectRatio", aspect_ratio=2.0, rounding_mm=10.0),
+    )
+    result_default = DuctSizer(net_default).solve()
+    ratio_default = result_default.segments[0].new_width_mm / result_default.segments[0].new_height_mm
+
+    net_override, _, _ = _two_node_tree(
+        "Rectangular", flow_lps=300.0, target_aspect_ratio=3.5,
+        net_extra_props=_sizing_props(method="ConstantVelocity", target_velocity=6.0,
+                                       rect_mode="FixedAspectRatio", aspect_ratio=2.0, rounding_mm=10.0),
+    )
+    result_override = DuctSizer(net_override).solve()
+    ratio_override = result_override.segments[0].new_width_mm / result_override.segments[0].new_height_mm
+
+    assert ratio_default == pytest.approx(2.0, rel=0.15)
+    assert ratio_override == pytest.approx(3.5, rel=0.15)
+
+
+def test_no_segment_mode_override_uses_network_default():
+    net, segment_map, _ = _two_node_tree(
+        "Rectangular", height_mm=999.0, flow_lps=300.0,
+        rectangular_sizing_mode="UseNetworkDefault",  # explicit, but same as default
+        net_extra_props=_sizing_props(method="ConstantVelocity", target_velocity=6.0,
+                                       rect_mode="FixedAspectRatio", aspect_ratio=2.0, rounding_mm=10.0),
+    )
+    result = DuctSizer(net).solve()
+
+    sres = result.segments[0]
+    # FixedAspectRatio mode solves both dimensions -- the segment's pre-existing
+    # Height (999mm) must NOT be held fixed, since no per-segment override was set.
+    assert sres.new_height_mm != pytest.approx(999.0)
+    assert sres.new_width_mm / sres.new_height_mm == pytest.approx(2.0, rel=0.15)
