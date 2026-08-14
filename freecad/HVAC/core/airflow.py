@@ -473,11 +473,19 @@ def _solve_scale_for_static_regain(area_and_dh_fn, flow_m3_s, upstream_velocity_
     since it's slower, more regain), so the bracket is well-posed.
 
     lo is the scale at the minimum allowed velocity (a floor) -- see the
-    module note above. Clamps to hi if the balance can't be reached even at
-    the largest bracketed size (e.g. a very long or rough run).
+    module note above.
+
+    Returns (scale, balanced). balanced is False when the equation could not
+    actually be satisfied within [lo, hi] -- clamped to lo (regain already
+    exceeds friction even at the fastest allowed velocity -- the classic
+    static-regain failure mode on small/low-flow branches) or to hi (friction
+    is too high to offset even at the largest bracketed size, e.g. a very
+    long or rough run). Callers should treat balanced=False as "this section
+    did not actually regain-balance; a balancing damper may still be needed
+    here", not as an error -- a size is still returned either way.
     """
     if lo >= hi:
-        return lo
+        return lo, False
 
     def balance(scale):
         return _regain_minus_friction(
@@ -486,9 +494,9 @@ def _solve_scale_for_static_regain(area_and_dh_fn, flow_m3_s, upstream_velocity_
         )
 
     if balance(lo) >= 0.0:
-        return lo
+        return lo, False
     if balance(hi) < 0.0:
-        return hi
+        return hi, False
 
     for _ in range(iterations):
         mid = (lo + hi) / 2.0
@@ -496,12 +504,13 @@ def _solve_scale_for_static_regain(area_and_dh_fn, flow_m3_s, upstream_velocity_
             lo = mid
         else:
             hi = mid
-    return (lo + hi) / 2.0
+    return (lo + hi) / 2.0, True
 
 
 def circular_diameter_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
                                          length_m, roughness_m, kinematic_viscosity_m2_s,
                                          air_density_kg_m3, min_velocity_m_s):
+    """Returns (diameter_m, balanced) -- see _solve_scale_for_static_regain for what balanced means."""
     def area_and_dh(diameter_m):
         return circular_area(diameter_m), hydraulic_diameter_circular(diameter_m)
 
@@ -515,6 +524,7 @@ def circular_diameter_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa
 def rect_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
                                  length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
                                  min_velocity_m_s, mode, aspect_ratio=None, fixed_dim_m=None):
+    """Returns (width_m, height_m, balanced) -- see _solve_scale_for_static_regain for what balanced means."""
     floor_w, floor_h = rect_dims_for_velocity(
         flow_m3_s, min_velocity_m_s, mode, aspect_ratio=aspect_ratio, fixed_dim_m=fixed_dim_m
     )
@@ -527,11 +537,11 @@ def rect_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
             width_m = aspect_ratio * height_m
             return rectangular_area(width_m, height_m), hydraulic_diameter_rectangular(width_m, height_m)
 
-        height = _solve_scale_for_static_regain(
+        height, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
             length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, lo=floor_h
         )
-        return aspect_ratio * height, height
+        return aspect_ratio * height, height, balanced
 
     if mode == "fixed_height":
         if not fixed_dim_m or fixed_dim_m <= 0.0:
@@ -541,11 +551,11 @@ def rect_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
         def area_and_dh(width_m):
             return rectangular_area(width_m, height), hydraulic_diameter_rectangular(width_m, height)
 
-        width = _solve_scale_for_static_regain(
+        width, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
             length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, lo=floor_w
         )
-        return width, height
+        return width, height, balanced
 
     if mode == "fixed_width":
         if not fixed_dim_m or fixed_dim_m <= 0.0:
@@ -555,11 +565,11 @@ def rect_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
         def area_and_dh(height_m):
             return rectangular_area(width, height_m), hydraulic_diameter_rectangular(width, height_m)
 
-        height = _solve_scale_for_static_regain(
+        height, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
             length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, lo=floor_h
         )
-        return width, height
+        return width, height, balanced
 
     raise ValueError("Unknown mode: {!r}".format(mode))
 
@@ -567,6 +577,7 @@ def rect_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
 def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
                                  length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
                                  min_velocity_m_s, mode, aspect_ratio=None, fixed_dim_m=None):
+    """Returns (width_m, height_m, balanced) -- see _solve_scale_for_static_regain for what balanced means."""
     floor_w, floor_h = oval_dims_for_velocity(
         flow_m3_s, min_velocity_m_s, mode, aspect_ratio=aspect_ratio, fixed_dim_m=fixed_dim_m
     )
@@ -579,11 +590,11 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
             width_m = aspect_ratio * height_m
             return oval_area(width_m, height_m), hydraulic_diameter_oval(width_m, height_m)
 
-        height = _solve_scale_for_static_regain(
+        height, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
             length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, lo=floor_h
         )
-        return aspect_ratio * height, height
+        return aspect_ratio * height, height, balanced
 
     if mode == "fixed_height":
         if not fixed_dim_m or fixed_dim_m <= 0.0:
@@ -593,12 +604,12 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
         def area_and_dh(width_m):
             return oval_area(width_m, height), hydraulic_diameter_oval(width_m, height)
 
-        width = _solve_scale_for_static_regain(
+        width, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
             length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
             lo=max(floor_w, height),  # width must also stay >= height for a valid oval
         )
-        return width, height
+        return width, height, balanced
 
     if mode == "fixed_width":
         if not fixed_dim_m or fixed_dim_m <= 0.0:
@@ -608,11 +619,11 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
         def area_and_dh(height_m):
             return oval_area(width, height_m), hydraulic_diameter_oval(width, height_m)
 
-        height = _solve_scale_for_static_regain(
+        height, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
             length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
             lo=floor_h, hi=width,  # height must also stay <= width for a valid oval
         )
-        return width, height
+        return width, height, balanced
 
     raise ValueError("Unknown mode: {!r}".format(mode))

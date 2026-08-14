@@ -76,6 +76,7 @@ class SegmentSizeResult:
     new_height_mm: float = 0.0
     velocity_ms: float = 0.0
     friction_rate_pa_per_m: float = 0.0
+    regain_balanced: bool = True  # only meaningful for SizingMethod=StaticRegain; see module docstring
     changed: bool = False
 
 
@@ -192,6 +193,12 @@ class DuctSizer:
                 )
                 result.segments.append(sres)
                 velocity_by_node[node_id] = sres.velocity_ms
+                if not sres.regain_balanced:
+                    result.warnings.append(
+                        "{}: static regain could not be balanced for this section (clamped to the "
+                        "minimum/maximum velocity bracket) -- a balancing damper may be needed "
+                        "here.".format(seg_obj.Label)
+                    )
             except ValueError as exc:
                 result.warnings.append("{}: {}".format(seg_obj.Label, exc))
                 # Can't resolve this section's own velocity -- seed anything
@@ -285,11 +292,13 @@ class DuctSizer:
 
         length_m = airflow.mm_to_m(float(getattr(seg_obj, "EffectiveLength", 0.0) or 0.0))
 
+        regain_balanced = True  # only ever set False by the StaticRegain branches below
+
         if profile == "Circular":
             if method == "ConstantVelocity":
                 diameter_m = airflow.circular_diameter_for_velocity(flow_m3s, target_velocity)
             elif method == "StaticRegain":
-                diameter_m = airflow.circular_diameter_for_static_regain(
+                diameter_m, regain_balanced = airflow.circular_diameter_for_static_regain(
                     flow_m3s, upstream_velocity_pressure_pa, regain_factor, length_m,
                     roughness_m, viscosity, density, min_velocity
                 )
@@ -318,7 +327,7 @@ class DuctSizer:
                     flow_m3s, target_velocity, mode, aspect_ratio=aspect_ratio, fixed_dim_m=fixed_dim_m
                 )
             elif method == "StaticRegain":
-                width_m, height_m = dims_regain(
+                width_m, height_m, regain_balanced = dims_regain(
                     flow_m3s, upstream_velocity_pressure_pa, regain_factor, length_m,
                     roughness_m, viscosity, density, min_velocity,
                     mode, aspect_ratio=aspect_ratio, fixed_dim_m=fixed_dim_m
@@ -361,5 +370,5 @@ class DuctSizer:
         return SegmentSizeResult(
             new_diameter_mm=new_diameter_mm, new_width_mm=new_width_mm, new_height_mm=new_height_mm,
             velocity_ms=velocity_ms, friction_rate_pa_per_m=friction_rate_pa_per_m,
-            changed=changed, **base_result
+            regain_balanced=regain_balanced, changed=changed, **base_result
         )

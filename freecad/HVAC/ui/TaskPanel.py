@@ -940,7 +940,8 @@ class TaskPanelAirflowResults:
 class TaskPanelDuctSizingResults:
     """Preview panel for a duct-sizing pass. OK applies the proposed sizes; Cancel discards them."""
 
-    HEADERS = ["Segment", "Profile", "Current Size", "Proposed Size", "Velocity (m/s)", "Friction Rate (Pa/m)"]
+    HEADERS = ["Segment", "Profile", "Current Size", "Proposed Size", "Velocity (m/s)",
+               "Friction Rate (Pa/m)", "Balanced"]
 
     def __init__(self, network_obj, sizer, result):
         self.network_obj = network_obj
@@ -985,6 +986,7 @@ class TaskPanelDuctSizingResults:
                 proposed,
                 "{:.2f}".format(sres.velocity_ms),
                 "{:.3f}".format(sres.friction_rate_pa_per_m),
+                "" if sres.regain_balanced else translate("HVAC_SizeDucts", "No (see warnings)"),
             ]
             for col, value in enumerate(values):
                 table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
