@@ -345,6 +345,74 @@ class DuctNetwork:
         if not getattr(obj, "DefaultRoughness", 0):
             obj.DefaultRoughness = 0.09  # mm, galvanized steel
 
+        # -------------------------------------------------
+        # Duct sizing (constant velocity / constant friction rate)
+        # -------------------------------------------------
+
+        if "SizingMethod" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyEnumeration",
+                "SizingMethod",
+                "HVAC Duct Sizing",
+                "Method used by the Size Ducts command"
+            )
+            obj.SizingMethod = ["ConstantVelocity", "ConstantFrictionRate"]
+            obj.SizingMethod = "ConstantVelocity"
+
+        if "TargetVelocity" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyFloat",
+                "TargetVelocity",
+                "HVAC Duct Sizing",
+                "Target duct velocity (m/s) used when SizingMethod is ConstantVelocity"
+            )
+
+        if "TargetFrictionRate" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyFloat",
+                "TargetFrictionRate",
+                "HVAC Duct Sizing",
+                "Target friction rate (Pa/m) used when SizingMethod is ConstantFrictionRate"
+            )
+
+        if "RectangularSizingMode" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyEnumeration",
+                "RectangularSizingMode",
+                "HVAC Duct Sizing",
+                "How the second dimension of a rectangular/oval duct is determined when sizing"
+            )
+            obj.RectangularSizingMode = ["FixedAspectRatio", "FixedHeight", "FixedWidth"]
+            obj.RectangularSizingMode = "FixedAspectRatio"
+
+        if "TargetAspectRatio" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyFloat",
+                "TargetAspectRatio",
+                "HVAC Duct Sizing",
+                "Target Width:Height ratio used when RectangularSizingMode is FixedAspectRatio"
+            )
+
+        if "SizeRoundingIncrement" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyLength",
+                "SizeRoundingIncrement",
+                "HVAC Duct Sizing",
+                "Computed duct sizes are rounded up to the nearest multiple of this increment"
+            )
+
+        if not getattr(obj, "TargetVelocity", 0):
+            obj.TargetVelocity = 5.0
+
+        if not getattr(obj, "TargetFrictionRate", 0):
+            obj.TargetFrictionRate = 1.0
+
+        if not getattr(obj, "TargetAspectRatio", 0):
+            obj.TargetAspectRatio = 2.0
+
+        if not getattr(obj, "SizeRoundingIncrement", 0):
+            obj.SizeRoundingIncrement = 10.0  # mm
+
     def getDefaultLibraryId(self):
         net = self.Object
         lib_id = getattr(net, "DefaultLibraryId", "")

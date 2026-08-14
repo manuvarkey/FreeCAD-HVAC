@@ -24,35 +24,26 @@
 """
 Whole-network airflow and pressure-drop solver.
 
-Assumes each connected sub-network of the duct network is a tree: exactly one
-terminal (degree-1 junction) is left with no Design Flow Rate (the balancing
-terminal, e.g. the AHU/fan connection); every other terminal carries a
-user-specified design flow rate (e.g. a diffuser/grille). Flow magnitudes are
-solved by mass conservation from the leaves toward the balancing terminal,
-using the existing per-port flow_into_junction data (derived from base
-geometry direction) to know each segment's fixed physical flow direction.
-Static pressure is then propagated outward from the balancing terminal
-(0 Pa reference) using straight-duct friction loss (Darcy-Weisbach with the
-Altshul-Tsal friction factor) and per-fitting dynamic loss (pluggable via the
-library's loss_module/loss_function, falling back to a generic coefficient).
-
-Loops (non-tree sub-networks) are rejected with a clear error rather than
-solved.
+Flow distribution (which sub-networks are solvable trees, and how much air
+moves through each segment) is solved by FlowNetwork.solve_flow_components;
+see that module for the balancing-terminal/conservation model. This module
+takes it from there: given a segment's own duct size, compute its velocity/
+Reynolds number/friction loss (Darcy-Weisbach with the Altshul-Tsal friction
+factor), compute each junction's fitting/dynamic loss (pluggable via the
+library's loss_module/loss_function, falling back to a generic coefficient),
+and propagate static pressure outward from the balancing terminal (0 Pa
+reference).
 """
 
-from collections import deque
 from dataclasses import asdict, dataclass, field
 
 from ..utils import hvaclib
 from . import airflow
+from .FlowNetwork import FlowSolveError as AirflowSolveError
+from .FlowNetwork import solve_flow_components
 
 
 K_DEFAULT = 0.3
-
-
-class AirflowSolveError(Exception):
-    """Raised when a sub-network cannot be solved (loop, bad boundary conditions, missing data)."""
-    pass
 
 
 @dataclass
@@ -101,25 +92,12 @@ class AirflowSolver:
 
     def solve(self):
         net = self.net_obj
-        parser = net.Proxy.getParser(rebuild=True)
-        segment_map = net.Proxy.collectSegmentObjects()
-        junction_map = net.Proxy.collectJunctionObjects()
+        parser, junction_map, segment_map, components, warnings = solve_flow_components(net)
 
-        adjacency = {node_id: list(parser.node_edges(node_id)) for node_id in parser.nodes()}
-        edge_endpoints = {}
-        for node_id, edge_refs in adjacency.items():
-            for edge_ref in edge_refs:
-                edge_endpoints[edge_ref] = parser.edge_analysis_nodes(edge_ref)
-
-        result = AirflowSolveResult()
-        for comp_nodes, comp_edges in self._find_components(adjacency, edge_endpoints):
-            if not comp_edges:
-                continue
+        result = AirflowSolveResult(warnings=list(warnings))
+        for comp in components:
             try:
-                comp_result = self._solve_component(
-                    parser, comp_nodes, comp_edges, adjacency, edge_endpoints,
-                    segment_map, junction_map, result.warnings,
-                )
+                comp_result = self._solve_component(parser, comp, segment_map, junction_map, result.warnings)
                 result.components.append(comp_result)
             except AirflowSolveError as exc:
                 result.warnings.append(str(exc))
@@ -127,172 +105,19 @@ class AirflowSolver:
         return result
 
     # ------------------------------------------------------------------
-    # Topology helpers
-    # ------------------------------------------------------------------
-
-    def _find_components(self, adjacency, edge_endpoints):
-        """Group analysis nodes into connected components (node set, edge set)."""
-        visited = set()
-        components = []
-        for start in adjacency:
-            if start in visited:
-                continue
-            comp_nodes = set()
-            comp_edges = set()
-            stack = [start]
-            visited.add(start)
-            while stack:
-                n = stack.pop()
-                comp_nodes.add(n)
-                for edge_ref in adjacency[n]:
-                    comp_edges.add(edge_ref)
-                    au, av = edge_endpoints[edge_ref]
-                    other = av if au == n else au
-                    if other not in visited:
-                        visited.add(other)
-                        stack.append(other)
-            components.append((comp_nodes, comp_edges))
-        return components
-
-    # ------------------------------------------------------------------
     # Per-component solve
     # ------------------------------------------------------------------
 
-    def _solve_component(self, parser, comp_nodes, comp_edges, adjacency, edge_endpoints,
-                          segment_map, junction_map, global_warnings):
+    def _solve_component(self, parser, comp, segment_map, junction_map, global_warnings):
         net = self.net_obj
-
-        n_nodes = len(comp_nodes)
-        n_edges = len(comp_edges)
-        if n_edges != n_nodes - 1:
-            raise AirflowSolveError(
-                "Loop detected: a sub-network with {} junction(s) has {} duct segment(s); "
-                "a tree requires exactly {}. Loops are not supported for airflow calculation.".format(
-                    n_nodes, n_edges, n_nodes - 1
-                )
-            )
-
-        # Resolve FreeCAD objects and per-node port analysis up front.
-        analysis_by_node = {}
-        port_lookup = {}
-        for node_id in comp_nodes:
-            node_key = parser.node_key(node_id)
-            junction_obj = junction_map.get(node_key)
-            if junction_obj is None:
-                raise AirflowSolveError(
-                    "Junction data missing for node '{}'; recompute the network before "
-                    "calculating airflow.".format(node_key)
-                )
-            ja = parser.build_junction_analysis(node_id, segment_map)
-            if ja is None:
-                raise AirflowSolveError("Could not analyze junction '{}'.".format(junction_obj.Label))
-            analysis_by_node[node_id] = ja
-            for port in ja.connected_ports:
-                port_lookup[(node_id, port.edge_key)] = port
-
-        for edge_ref in comp_edges:
-            if segment_map.get(edge_ref.tag) is None:
-                raise AirflowSolveError(
-                    "Segment data missing for edge '{}'; recompute the network before "
-                    "calculating airflow.".format(edge_ref.tag)
-                )
-
-        # Terminals and the balancing (unspecified) terminal.
-        terminal_ids = [n for n in comp_nodes if len(adjacency[n]) == 1]
-        if len(terminal_ids) < 2:
-            any_label = junction_map[parser.node_key(next(iter(comp_nodes)))].Label
-            raise AirflowSolveError(
-                "Sub-network containing junction '{}' has fewer than 2 terminals; "
-                "nothing to solve.".format(any_label)
-            )
-
-        specified = []
-        unspecified = []
-        for node_id in terminal_ids:
-            junction_obj = junction_map[parser.node_key(node_id)]
-            design = float(getattr(junction_obj, "DesignFlowRate", 0.0) or 0.0)
-            if abs(design) > 1e-9:
-                specified.append((node_id, junction_obj))
-            else:
-                unspecified.append((node_id, junction_obj))
-
-        if len(unspecified) == 0:
-            labels = ", ".join(j.Label for _, j in specified)
-            raise AirflowSolveError(
-                "All terminals in this sub-network have a Design Flow Rate set ({}). "
-                "Leave exactly one terminal's Design Flow Rate blank to act as the "
-                "balancing terminal.".format(labels)
-            )
-        if len(unspecified) > 1:
-            labels = ", ".join(j.Label for _, j in unspecified)
-            raise AirflowSolveError(
-                "Multiple terminals have no Design Flow Rate set ({}). Set Design Flow Rate "
-                "on all terminals except exactly one.".format(labels)
-            )
-
-        root_node_id, root_obj = unspecified[0]
-
-        # BFS from the balancing terminal to get a rooted-tree traversal order.
-        parent_node = {}
-        parent_edge = {}
-        order = [root_node_id]
-        visited_bfs = {root_node_id}
-        queue = deque([root_node_id])
-        while queue:
-            n = queue.popleft()
-            for edge_ref in adjacency[n]:
-                au, av = edge_endpoints[edge_ref]
-                other = av if au == n else au
-                if other in visited_bfs:
-                    continue
-                visited_bfs.add(other)
-                parent_node[other] = n
-                parent_edge[other] = edge_ref
-                order.append(other)
-                queue.append(other)
-
-        # Phase C: flow-magnitude accumulation, leaves -> root.
-        edge_flow_lps = {}
-        for node_id in reversed(order[1:]):
-            edge = parent_edge[node_id]
-
-            if len(adjacency[node_id]) == 1:
-                junction_obj = junction_map[parser.node_key(node_id)]
-                edge_flow_lps[edge] = abs(float(getattr(junction_obj, "DesignFlowRate", 0.0) or 0.0))
-                continue
-
-            known_in = 0.0
-            known_out = 0.0
-            for edge_ref in adjacency[node_id]:
-                if edge_ref == edge:
-                    continue
-                port = port_lookup[(node_id, edge_ref.tag)]
-                mag = edge_flow_lps[edge_ref]
-                if port.flow_into_junction:
-                    known_in += mag
-                else:
-                    known_out += mag
-
-            p_port = port_lookup[(node_id, edge.tag)]
-            if p_port.flow_into_junction:
-                p_mag = known_out - known_in
-            else:
-                p_mag = known_in - known_out
-
-            if p_mag < -1e-6:
-                junction_obj = junction_map[parser.node_key(node_id)]
-                raise AirflowSolveError(
-                    "Inconsistent flow direction at junction '{}': incoming and outgoing design "
-                    "flows don't balance given the current segment directions. Check base geometry "
-                    "direction (HVAC_ReverseGeometryDirection / Edit Duct Directions).".format(
-                        junction_obj.Label
-                    )
-                )
-            edge_flow_lps[edge] = max(p_mag, 0.0)
+        adjacency = comp.adjacency
+        edge_flow_lps = comp.edge_flow_lps
+        port_lookup = comp.port_lookup
+        analysis_by_node = comp.analysis_by_node
 
         # Phase D: per-segment sizing (flow, velocity, Reynolds, friction loss).
         seg_result = {}
-        for edge_ref in comp_edges:
+        for edge_ref in comp.comp_edges:
             seg_obj = segment_map[edge_ref.tag]
             seg_result[edge_ref.tag] = self._size_segment(net, seg_obj, edge_flow_lps[edge_ref])
 
@@ -302,7 +127,7 @@ class AirflowSolver:
         air_density = float(getattr(net, "AirDensity", 1.204) or 1.204)
         air_viscosity = float(getattr(net, "AirKinematicViscosity", 1.51e-5) or 1.51e-5)
 
-        for node_id in comp_nodes:
+        for node_id in comp.comp_nodes:
             if len(adjacency[node_id]) <= 1:
                 continue
 
@@ -387,10 +212,10 @@ class AirflowSolver:
             sres.total_loss_pa = sres.friction_loss_pa + sres.fitting_loss_pa
 
         # Phase F: pressure propagation, root -> leaves (0 Pa reference at the balancing terminal).
-        static_pressure = {root_node_id: 0.0}
-        for node_id in order[1:]:
-            parent = parent_node[node_id]
-            edge = parent_edge[node_id]
+        static_pressure = {comp.root_node_id: 0.0}
+        for node_id in comp.order[1:]:
+            parent = comp.parent_node[node_id]
+            edge = comp.parent_edge[node_id]
             port_at_node = port_lookup[(node_id, edge.tag)]
             loss = seg_result[edge.tag].total_loss_pa
             if port_at_node.flow_into_junction:
@@ -405,7 +230,7 @@ class AirflowSolver:
         # up to this point only touches local Python structures, so a failure in any
         # earlier phase never leaves a partial write on a junction/segment object.
         junction_results = {}
-        for node_id in comp_nodes:
+        for node_id in comp.comp_nodes:
             junction_obj = junction_map[parser.node_key(node_id)]
             degree = len(adjacency[node_id])
             if degree == 1:
@@ -434,7 +259,7 @@ class AirflowSolver:
                 warning=junction_warning.get(node_id, ""),
             )
 
-        for edge_ref in comp_edges:
+        for edge_ref in comp.comp_edges:
             sres = seg_result[edge_ref.tag]
             obj = sres.obj
             obj.CalcFlowRate = sres.flow_lps
@@ -451,12 +276,12 @@ class AirflowSolver:
             jres.obj.IsFlowSource = jres.is_source
             jres.obj.CalcLossWarning = jres.warning
 
-        critical_node_id = max(terminal_ids, key=lambda n: abs(static_pressure[n]))
+        critical_node_id = max(comp.terminal_ids, key=lambda n: abs(static_pressure[n]))
 
         return ComponentResult(
-            reference_terminal_key=parser.node_key(root_node_id),
-            segments=[seg_result[e.tag] for e in comp_edges],
-            junctions=[junction_results[n] for n in comp_nodes],
+            reference_terminal_key=parser.node_key(comp.root_node_id),
+            segments=[seg_result[e.tag] for e in comp.comp_edges],
+            junctions=[junction_results[n] for n in comp.comp_nodes],
             critical_terminal_key=parser.node_key(critical_node_id),
             critical_pressure_pa=abs(static_pressure[critical_node_id]),
         )

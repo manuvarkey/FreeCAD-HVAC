@@ -935,3 +935,72 @@ class TaskPanelAirflowResults:
 
     def reject(self):
         return True
+
+
+class TaskPanelDuctSizingResults:
+    """Preview panel for a duct-sizing pass. OK applies the proposed sizes; Cancel discards them."""
+
+    HEADERS = ["Segment", "Profile", "Current Size", "Proposed Size", "Velocity (m/s)", "Friction Rate (Pa/m)"]
+
+    def __init__(self, network_obj, sizer, result):
+        self.network_obj = network_obj
+        self.sizer = sizer
+        self.result = result
+
+        self.form = QtWidgets.QWidget()
+        self.form.setWindowTitle(translate("HVAC_SizeDucts", "Duct Sizing Results"))
+        layout = QtWidgets.QVBoxLayout(self.form)
+
+        if result.warnings:
+            warn_box = QtWidgets.QGroupBox(translate("HVAC_SizeDucts", "Warnings"))
+            warn_layout = QtWidgets.QVBoxLayout(warn_box)
+            warn_label = QtWidgets.QLabel("\n".join(result.warnings))
+            warn_label.setWordWrap(True)
+            warn_layout.addWidget(warn_label)
+            layout.addWidget(warn_box)
+
+        info = QtWidgets.QLabel(
+            translate(
+                "HVAC_SizeDucts",
+                "Review the proposed duct sizes below, then click OK to apply them to the "
+                "segments, or Cancel to discard."
+            )
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        table = QtWidgets.QTableWidget(len(result.segments), len(self.HEADERS))
+        table.setHorizontalHeaderLabels(self.HEADERS)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        for row, sres in enumerate(result.segments):
+            current = self._formatSize(sres.profile, sres.old_diameter_mm, sres.old_width_mm, sres.old_height_mm)
+            proposed = self._formatSize(sres.profile, sres.new_diameter_mm, sres.new_width_mm, sres.new_height_mm)
+            if not sres.changed:
+                proposed = translate("HVAC_SizeDucts", "(unchanged)")
+            values = [
+                sres.obj.Label,
+                sres.profile,
+                current,
+                proposed,
+                "{:.2f}".format(sres.velocity_ms),
+                "{:.3f}".format(sres.friction_rate_pa_per_m),
+            ]
+            for col, value in enumerate(values):
+                table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
+        table.resizeColumnsToContents()
+        layout.addWidget(table)
+
+    def _formatSize(self, profile, diameter_mm, width_mm, height_mm):
+        if profile == "Circular":
+            return "{:.0f} mm dia".format(diameter_mm)
+        return "{:.0f} x {:.0f} mm".format(width_mm, height_mm)
+
+    def accept(self):
+        changed_count = self.sizer.apply(self.result)
+        if changed_count and getattr(self.network_obj, "Document", None):
+            self.network_obj.Document.recompute()
+        return True
+
+    def reject(self):
+        return True

@@ -1052,6 +1052,50 @@ class CommandCalculateAirflow:
         Gui.Control.showDialog(self.task_panel)
 
 
+class CommandSizeDucts:
+    """Compute proposed duct sizes for the active network (preview before applying)."""
+
+    def __init__(self):
+        self.task_panel = None
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("Defaults.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_SizeDucts', 'Size Ducts'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_SizeDucts',
+                'Compute proposed duct sizes for the active network from a target velocity or friction rate'
+            ),
+            'CmdType': 'ForEdit',
+        }
+
+    def IsActive(self):
+        if Gui.ActiveDocument is None:
+            return False
+        return hvaclib.activeHVACNetwork() is not None
+
+    def Activated(self):
+        from ..core.DuctSizer import DuctSizer
+        from ..ui.TaskPanel import TaskPanelDuctSizingResults
+
+        net = hvaclib.activeHVACNetwork()
+        if net is None:
+            return
+
+        sizer = DuctSizer(net)
+        try:
+            result = sizer.solve()
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(
+                "HVAC - SizeDucts - Error sizing network '{}': {}\n".format(net.Label, e)
+            )
+            FreeCAD.Console.PrintMessage(traceback.format_exc())
+            return
+
+        self.task_panel = TaskPanelDuctSizingResults(net, sizer, result)
+        Gui.Control.showDialog(self.task_panel)
+
+
 class CommandResetTypesToNetworkDefaults:
     """Reset selected HVAC geometry objects to their network defaults."""
 
@@ -1123,5 +1167,6 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_EditPlacement', CommandEditPlacement())
     FreeCAD.Gui.addCommand('HVAC_EditNetworkTypeDefaults', CommandEditNetworkTypeDefaults())
     FreeCAD.Gui.addCommand('HVAC_CalculateAirflow', CommandCalculateAirflow())
+    FreeCAD.Gui.addCommand('HVAC_SizeDucts', CommandSizeDucts())
     FreeCAD.Gui.addCommand('HVAC_ResetTypesToDefaults', CommandResetTypesToNetworkDefaults())
     FreeCAD.Gui.addCommand('HVAC_ReloadLibraries', CommandReloadHVACLibraries())  # Debug method
