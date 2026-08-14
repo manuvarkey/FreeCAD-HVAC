@@ -26,14 +26,15 @@ from freecad.HVAC.core.DuctSizer import DuctSizer
 
 
 def _two_node_tree(profile, diameter_mm=0.0, width_mm=0.0, height_mm=0.0,
-                    length_mm=4000.0, roughness_mm=0.0, flow_lps=100.0, net_extra_props=None):
+                    length_mm=4000.0, roughness_mm=0.0, flow_lps=100.0, velocity_ms=0.0,
+                    net_extra_props=None):
     """Single segment A: J1 (balancing terminal) --A--> J2 (leaf, flow_lps)."""
     node_ports = {1: [("A", "start")], 2: [("A", "end")]}
     edge_endpoints = {"A": (1, 2)}
     parser = FakeParser(node_ports, edge_endpoints)
     segment_map = {
         "A": make_segment("A", diameter_mm, length_mm, roughness_mm=roughness_mm, profile=profile,
-                           width_mm=width_mm, height_mm=height_mm),
+                           width_mm=width_mm, height_mm=height_mm, velocity_ms=velocity_ms),
     }
     junction_map = {
         "N1": make_junction("J1", design_flow=0.0, type_id="end_terminal_marker"),
@@ -275,3 +276,51 @@ def test_base_tree_all_segments_sized():
     assert result.warnings == []
     assert {s.key for s in result.segments} == {"A", "B", "C"}
     assert all(s.new_diameter_mm > 0.0 for s in result.segments)
+
+
+# ----------------------------------------------------------------------------
+# Per-segment Velocity override
+# ----------------------------------------------------------------------------
+
+def test_segment_velocity_override_ignores_network_target_velocity():
+    net, segment_map, _ = _two_node_tree(
+        "Circular", diameter_mm=100.0, flow_lps=200.0, velocity_ms=8.0,
+        net_extra_props=_sizing_props(method="ConstantVelocity", target_velocity=5.0, rounding_mm=10.0),
+    )
+    result = DuctSizer(net).solve()
+
+    assert result.warnings == []
+    sres = result.segments[0]
+    expected_d_m = airflow.circular_diameter_for_velocity(airflow.lps_to_m3s(200.0), 8.0)
+    expected_mm = _round_up(expected_d_m * 1000.0, 10.0)
+    assert sres.new_diameter_mm == pytest.approx(expected_mm)
+    # Sanity: the override diameter must differ from what the network's own 5.0 m/s target would give.
+    unoverridden_d_m = airflow.circular_diameter_for_velocity(airflow.lps_to_m3s(200.0), 5.0)
+    assert sres.new_diameter_mm != pytest.approx(_round_up(unoverridden_d_m * 1000.0, 10.0))
+
+
+def test_segment_velocity_override_forces_constant_velocity_even_under_friction_rate_method():
+    net, segment_map, _ = _two_node_tree(
+        "Circular", diameter_mm=100.0, flow_lps=200.0, velocity_ms=8.0,
+        net_extra_props=_sizing_props(method="ConstantFrictionRate", target_friction_rate=1.0, rounding_mm=10.0),
+    )
+    result = DuctSizer(net).solve()
+
+    assert result.warnings == []
+    sres = result.segments[0]
+    expected_d_m = airflow.circular_diameter_for_velocity(airflow.lps_to_m3s(200.0), 8.0)
+    expected_mm = _round_up(expected_d_m * 1000.0, 10.0)
+    assert sres.new_diameter_mm == pytest.approx(expected_mm)
+
+
+def test_no_segment_velocity_override_uses_network_default():
+    net, segment_map, _ = _two_node_tree(
+        "Circular", diameter_mm=100.0, flow_lps=200.0, velocity_ms=0.0,
+        net_extra_props=_sizing_props(method="ConstantVelocity", target_velocity=5.0, rounding_mm=10.0),
+    )
+    result = DuctSizer(net).solve()
+
+    sres = result.segments[0]
+    expected_d_m = airflow.circular_diameter_for_velocity(airflow.lps_to_m3s(200.0), 5.0)
+    expected_mm = _round_up(expected_d_m * 1000.0, 10.0)
+    assert sres.new_diameter_mm == pytest.approx(expected_mm)
