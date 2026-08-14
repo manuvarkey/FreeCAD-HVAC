@@ -129,6 +129,43 @@ def build_terminal_marker(context):
     }
 
 
+def build_diffuser_generic(context):
+    """
+    Generic terminal air device (diffuser/grille/register): a short solid
+    stub extending from the connecting duct's own port profile, standing in
+    for the physical device housing. Purely schematic -- not a manufacturer-
+    accurate shape -- length is nominal (half the NeckSize, with a 50mm
+    floor), not read from any catalog.
+    """
+    api = context.get("hvac_api", None)
+
+    ports = list(context.get("connected_ports", []) or [])
+    if len(ports) != 1:
+        raise ValueError("Diffuser/grille/register requires exactly 1 port")
+    props = dict(context.get("properties", {}) or {})
+    port = ports[0]
+
+    neck_size = float(props.get("NeckSize", 0.0) or 0.0)
+    stub_length = max(neck_size * 0.5, 50.0)
+
+    center = api.port_position(port)
+    direction = api.port_direction(port)
+    end_point = center + direction * stub_length
+
+    shape = api.make_straight_shape(
+        start_point=center,
+        end_point=end_point,
+        profile=api.port_profile(port),
+        section_params=api.port_section_params(port),
+        profile_x_axis=api.port_profile_x_axis(port),
+    )
+
+    return {
+        "shape": shape,
+        "connection_lengths": api.build_trim_rec_from_context_uniform(context, 0.0),
+    }
+
+
 def build_transition_marker(context):
     return _build_marker(context, default_diameter=240.0, trim_factor=0.30)
 

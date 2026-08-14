@@ -84,3 +84,7 @@ def loss_cross_generic(context):
 def loss_multiport_generic(context):
     result = context["hvac_api"].manifold_loss(context)
     return result if result is not None else 1.0
+
+
+def loss_diffuser_generic(context):
+    return context["hvac_api"].terminal_component_loss(context)

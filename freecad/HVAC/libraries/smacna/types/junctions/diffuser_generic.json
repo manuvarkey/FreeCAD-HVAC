@@ -1,0 +1,35 @@
+{
+  "id": "diffuser_generic",
+  "label": "Diffuser / Grille / Register - Generic",
+  "category": "junction",
+  "topology": "end",
+  "family": ["end.diffuser", "end.grille", "end.register"],
+  "profiles": ["Circular", "Rectangular", "Oval"],
+  "constraints": {
+    "degree": 1
+  },
+  "properties": [
+    {
+      "name": "NeckSize",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Diffuser/grille/register neck (collar) diameter",
+      "default": 200.0
+    },
+    {
+      "name": "LossCoefficient",
+      "prop_type": "App::PropertyFloat",
+      "group": "Parameters",
+      "description": "Pressure-loss coefficient K, referenced to velocity at the neck",
+      "default": 1.0
+    }
+  ],
+  "generator": {
+    "module": "junctions",
+    "function": "build_diffuser_generic"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_diffuser_generic"
+  }
+}

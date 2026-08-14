@@ -227,3 +227,68 @@ def test_missing_duct_size_is_an_error():
     assert result.components == []
     assert len(result.warnings) == 1
     assert "Diameter" in result.warnings[0]
+
+
+# ----------------------------------------------------------------------------
+# Terminal (degree-1) fitting loss -- e.g. a diffuser/grille component
+# ----------------------------------------------------------------------------
+
+def test_terminal_component_loss_wired_contributes_to_connecting_segment(monkeypatch):
+    from freecad.HVAC.core import AirflowSolver as solver_mod
+
+    # branch_tee_generic (J2) still resolves normally (K=0.5, same as the
+    # default fixture) so this test isolates the NEW behavior (the diffuser
+    # at J3) rather than also triggering an unrelated K_DEFAULT fallback at J2.
+    tee_k = 0.5
+
+    class _DiffuserRegistry:
+        def resolve_type(self, library_id, type_id):
+            if type_id in ("branch_tee_generic", "diffuser_generic"):
+                return _FakeTypeDef()
+            return None
+
+        def call_loss(self, library_id, type_def, context):
+            if context["type_id"] == "diffuser_generic":
+                return {"B": 0.8}
+            return tee_k
+
+    monkeypatch.setattr(
+        solver_mod.hvaclib.HVACLibraryService,
+        "get_hvac_library_registry",
+        staticmethod(lambda: _DiffuserRegistry()),
+    )
+
+    net, segment_map, junction_map = _base_tree()
+    junction_map["N3"].TypeId = "diffuser_generic"  # J3 is a sink terminal (inlet port)
+
+    result = AirflowSolver(net).solve()
+
+    assert result.warnings == []
+    segB = segment_map["B"]
+    vB, _re, _f = _expected_segment(150.0, 3000.0, 50.0)
+    # Both contributions must be present -- the tee's (upstream, J2) AND the
+    # diffuser's (downstream, J3) -- summed, not one clobbering the other.
+    expected = (tee_k + 0.8) * airflow.velocity_pressure(AIR_DENSITY, vB)
+    assert segB.CalcFittingLoss == pytest.approx(expected)
+    assert junction_map["N3"].CalcLossWarning == ""
+
+
+def test_unwired_terminal_marker_adds_nothing_beyond_its_upstream_fitting():
+    # Default end_terminal_marker (or any type the registry doesn't
+    # recognize) at a degree-1 node must NOT trigger the K_DEFAULT fallback
+    # or a warning the way an unresolved degree>=2 fitting would -- most
+    # terminals are intentionally non-physical placeholders. The segment's
+    # fitting loss should still reflect its upstream fitting (J2, a real
+    # tee) alone, unchanged by the fact that J3/J4 are unwired terminals.
+    net, segment_map, junction_map = _base_tree()
+
+    result = AirflowSolver(net).solve()
+
+    assert result.warnings == []
+    vB, _re, _f = _expected_segment(150.0, 3000.0, 50.0)
+    vC, _re, _f = _expected_segment(150.0, 6000.0, 30.0)
+    assert segment_map["B"].CalcFittingLoss == pytest.approx(FITTING_K * airflow.velocity_pressure(AIR_DENSITY, vB))
+    assert segment_map["C"].CalcFittingLoss == pytest.approx(FITTING_K * airflow.velocity_pressure(AIR_DENSITY, vC))
+    assert junction_map["N1"].CalcLossWarning == ""
+    assert junction_map["N3"].CalcLossWarning == ""
+    assert junction_map["N4"].CalcLossWarning == ""

@@ -128,7 +128,8 @@ class AirflowSolver:
         air_viscosity = float(getattr(net, "AirKinematicViscosity", 1.51e-5) or 1.51e-5)
 
         for node_id in comp.comp_nodes:
-            if len(adjacency[node_id]) <= 1:
+            degree = len(adjacency[node_id])
+            if degree < 1:
                 continue
 
             junction_obj = junction_map[parser.node_key(node_id)]
@@ -186,10 +187,26 @@ class AirflowSolver:
                     sres = seg_result.get(edge_key)
                     if sres is None:
                         continue
-                    sres.fitting_loss_pa = float(k) * airflow.velocity_pressure(air_density, sres.velocity_ms)
+                    # += , not = : a segment can be attributed loss from BOTH ends
+                    # independently -- its upstream fitting (an outlet port there)
+                    # and its downstream terminal device, e.g. a diffuser (an inlet
+                    # port there, handled by this same dict branch). Each junction
+                    # in this loop is visited exactly once, so this never double-
+                    # counts a single contribution -- it only ever sums genuinely
+                    # distinct ones.
+                    sres.fitting_loss_pa += float(k) * airflow.velocity_pressure(air_density, sres.velocity_ms)
                 continue
 
             if k_result is None:
+                if degree == 1:
+                    # Most terminals are intentionally non-physical placeholders
+                    # (e.g. the default end_terminal_marker) with no real device
+                    # modeled -- silently contributing no loss is the expected
+                    # default here, not a missing-data problem worth a fallback
+                    # coefficient or a warning (unlike a real degree>=2 fitting,
+                    # which always has SOME physical loss).
+                    junction_warning[node_id] = ""
+                    continue
                 k_uniform = K_DEFAULT
                 warning = "No fitting-loss data for type '{}'; using generic default K={}.".format(
                     type_id or "(none)", K_DEFAULT
@@ -206,7 +223,9 @@ class AirflowSolver:
                 sres = seg_result.get(port.edge_key)
                 if sres is None:
                     continue
-                sres.fitting_loss_pa = k_uniform * airflow.velocity_pressure(air_density, sres.velocity_ms)
+                # += : see the dict-branch above -- a segment's downstream terminal
+                # device may independently contribute via that branch.
+                sres.fitting_loss_pa += k_uniform * airflow.velocity_pressure(air_density, sres.velocity_ms)
 
         for sres in seg_result.values():
             sres.total_loss_pa = sres.friction_loss_pa + sres.fitting_loss_pa

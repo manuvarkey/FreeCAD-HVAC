@@ -313,3 +313,83 @@ def test_manifold_loss_zero_primary_flow_returns_zero_for_all_secondaries():
     branch_b = _port("BRANCH_B", (0, 0, 1), False, diameter=150.0, velocity_ms=0.0)
     context = {"connected_ports": [primary, straight, branch_a, branch_b], "properties": {}}
     assert api.manifold_loss(context) == {"STRAIGHT": 0.0, "BRANCH_A": 0.0, "BRANCH_B": 0.0}
+
+
+# ----------------------------------------------------------------------------
+# terminal_component_loss
+# ----------------------------------------------------------------------------
+
+def test_terminal_component_loss_neck_matches_duct_size_gives_k_unchanged():
+    # Neck same size as the connecting duct -> neck velocity == duct velocity
+    # -> K_effective == K exactly (no conversion needed).
+    port = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=5.0, flow_rate_lps=_flow_lps(5.0, 200.0))
+    context = {
+        "connected_ports": [port],
+        "properties": {"NeckSize": 200.0, "LossCoefficient": 1.5},
+    }
+    result = api.terminal_component_loss(context)
+    assert result == pytest.approx({"A": 1.5})
+
+
+def test_terminal_component_loss_smaller_neck_increases_effective_k():
+    # A neck narrower than the duct means higher velocity at the neck, so
+    # more of the *duct's own* velocity pressure the coefficient is scaled
+    # against -- K_effective must come out larger than the raw K.
+    duct_flow_lps = _flow_lps(5.0, 200.0)
+    port = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=5.0, flow_rate_lps=duct_flow_lps)
+    context = {
+        "connected_ports": [port],
+        "properties": {"NeckSize": 100.0, "LossCoefficient": 1.5},
+    }
+    result = api.terminal_component_loss(context)
+
+    neck_v = airflow.velocity_from_flow(airflow.lps_to_m3s(duct_flow_lps), airflow.circular_area(0.1))
+    expected_k = 1.5 * (neck_v / 5.0) ** 2
+    assert result == pytest.approx({"A": expected_k})
+    assert expected_k > 1.5
+
+
+def test_terminal_component_loss_larger_neck_decreases_effective_k():
+    duct_flow_lps = _flow_lps(5.0, 200.0)
+    port = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=5.0, flow_rate_lps=duct_flow_lps)
+    context = {
+        "connected_ports": [port],
+        "properties": {"NeckSize": 400.0, "LossCoefficient": 1.5},
+    }
+    result = api.terminal_component_loss(context)
+
+    neck_v = airflow.velocity_from_flow(airflow.lps_to_m3s(duct_flow_lps), airflow.circular_area(0.4))
+    expected_k = 1.5 * (neck_v / 5.0) ** 2
+    assert result == pytest.approx({"A": expected_k})
+    assert expected_k < 1.5
+
+
+def test_terminal_component_loss_missing_neck_size_returns_none():
+    port = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=5.0)
+    context = {"connected_ports": [port], "properties": {"LossCoefficient": 1.5}}
+    assert api.terminal_component_loss(context) is None
+
+
+def test_terminal_component_loss_missing_loss_coefficient_returns_none():
+    port = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=5.0)
+    context = {"connected_ports": [port], "properties": {"NeckSize": 200.0}}
+    assert api.terminal_component_loss(context) is None
+
+
+def test_terminal_component_loss_wrong_port_count_returns_none():
+    p1 = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=5.0)
+    p2 = _port("B", (-1, 0, 0), True, diameter=200.0, velocity_ms=5.0)
+    context = {
+        "connected_ports": [p1, p2],
+        "properties": {"NeckSize": 200.0, "LossCoefficient": 1.5},
+    }
+    assert api.terminal_component_loss(context) is None
+
+
+def test_terminal_component_loss_zero_flow_returns_zero_not_none():
+    port = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=0.0, flow_rate_lps=0.0)
+    context = {
+        "connected_ports": [port],
+        "properties": {"NeckSize": 200.0, "LossCoefficient": 1.5},
+    }
+    assert api.terminal_component_loss(context) == {"A": 0.0}

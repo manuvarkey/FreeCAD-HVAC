@@ -691,6 +691,49 @@ class HVACLibraryAPI:
             return None
 
     @staticmethod
+    def terminal_component_loss(context):
+        """
+        Generic terminal air device (diffuser/grille/register) loss: a
+        dimensionless coefficient K (from properties["LossCoefficient"]),
+        referenced to velocity at the device's own neck
+        (properties["NeckSize"]) rather than the connecting duct's own
+        velocity -- the neck is often a different size than the duct feeding
+        it. Converted to a K_effective referenced to the connecting duct's
+        velocity (K_effective = K * (V_neck / V_duct)^2, since velocity
+        pressure ~ V^2 at constant density) so it composes with the solver's
+        existing K * velocity_pressure(duct) convention used for every other
+        fitting -- no special-casing needed downstream.
+
+        Expects exactly 1 connected port (a terminal). Returns
+        {edge_key: K_effective} or None if NeckSize/LossCoefficient aren't
+        set (nothing to compute) or the port geometry is invalid.
+        """
+        try:
+            ports = HVACLibraryAPI.connected_ports(context)
+            if len(ports) != 1:
+                return None
+            port = ports[0]
+
+            properties = context.get("properties") or {}
+            neck_size_mm = float(properties.get("NeckSize", 0.0) or 0.0)
+            k = float(properties.get("LossCoefficient", 0.0) or 0.0)
+            if neck_size_mm <= 0.0 or k <= 0.0:
+                return None
+
+            duct_velocity = float(port.get("velocity_ms", 0.0) or 0.0)
+            flow_lps = float(port.get("flow_rate_lps", 0.0) or 0.0)
+            if flow_lps <= 0.0 or duct_velocity <= 1e-9:
+                return {port["edge_key"]: 0.0}
+
+            neck_area_m2 = airflow.circular_area(airflow.mm_to_m(neck_size_mm))
+            neck_velocity_ms = airflow.velocity_from_flow(airflow.lps_to_m3s(flow_lps), neck_area_m2)
+
+            k_effective = k * (neck_velocity_ms / duct_velocity) ** 2
+            return {port["edge_key"]: k_effective}
+        except Exception:
+            return None
+
+    @staticmethod
     def copy_port(port, position=None, direction=None, profile_x_axis=None):
         out = dict(port)
         if position is not None:
