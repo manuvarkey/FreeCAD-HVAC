@@ -111,7 +111,7 @@ class FakeProxy:
 
 
 def make_segment(tag, diameter_mm, length_mm, roughness_mm=0.0, profile="Circular",
-                  width_mm=0.0, height_mm=0.0):
+                  width_mm=0.0, height_mm=0.0, velocity_ms=0.0):
     return FakeObj(
         Label=tag,
         SegmentKey=tag,
@@ -122,6 +122,7 @@ def make_segment(tag, diameter_mm, length_mm, roughness_mm=0.0, profile="Circula
         Height=height_mm,
         Roughness=roughness_mm,
         EffectiveLength=length_mm,
+        Velocity=velocity_ms,
     )
 
 

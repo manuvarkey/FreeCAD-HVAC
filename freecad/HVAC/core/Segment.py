@@ -199,9 +199,8 @@ class DuctSegment:
         self._addProperty(obj, "App::PropertyLength", "Width", "Dimensions", "Rectangular duct width")
         self._addProperty(obj, "App::PropertyLength", "Height", "Dimensions", "Rectangular duct height")
         self._addProperty(obj, "App::PropertyLength", "InsulationThickness", "Parameters", "Insulation thickness")
-        self._addProperty(obj, "App::PropertyLength", "Roughness", "Parameters", "Wall roughness")
-        self._addProperty(obj, "App::PropertyFloat", "FlowRate", "Parameters", "Design flow rate")
-        self._addProperty(obj, "App::PropertyFloat", "Velocity", "Parameters", "Design air velocity")
+        self._addProperty(obj, "App::PropertyLength", "Roughness", "Parameters", "Wall roughness; 0 uses the network's DefaultRoughness")
+        self._addProperty(obj, "App::PropertyFloat", "Velocity", "Parameters", "Target velocity (m/s) override for duct sizing on this segment only; 0 uses the network's SizingMethod/TargetVelocity")
 
         self._addProperty(obj, "App::PropertyFloat", "CalcFlowRate", "Airflow", "Computed flow rate (L/s)")
         self._addProperty(obj, "App::PropertyFloat", "CalcVelocity", "Airflow", "Computed air velocity (m/s)")

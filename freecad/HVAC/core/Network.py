@@ -1362,7 +1362,6 @@ class DuctNetwork:
             "Height": float(getattr(obj, "Height", 0.0)),
             "InsulationThickness": float(getattr(obj, "InsulationThickness", 0.0)),
             "Roughness": float(getattr(obj, "Roughness", 0.0)),
-            "FlowRate": float(getattr(obj, "FlowRate", 0.0)),
             "Velocity": float(getattr(obj, "Velocity", 0.0)),
         }
     
@@ -1404,8 +1403,6 @@ class DuctNetwork:
             set_if_needed("InsulationThickness", params["InsulationThickness"])
         if "Roughness" in params:
             set_if_needed("Roughness", params["Roughness"])
-        if "FlowRate" in params:
-            set_if_needed("FlowRate", params["FlowRate"])
         if "Velocity" in params:
             set_if_needed("Velocity", params["Velocity"])
     

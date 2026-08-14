@@ -172,6 +172,14 @@ class DuctSizer:
         roughness_mm = float(getattr(seg_obj, "Roughness", 0.0) or 0.0) or default_roughness_mm
         roughness_m = airflow.mm_to_m(roughness_mm)
 
+        # A segment's own Velocity, if set, overrides both the network's SizingMethod
+        # and TargetVelocity for this segment only -- e.g. deliberately running one
+        # riser faster/slower than the rest of the system.
+        segment_velocity = float(getattr(seg_obj, "Velocity", 0.0) or 0.0)
+        if segment_velocity > 0.0:
+            method = "ConstantVelocity"
+            target_velocity = segment_velocity
+
         fixed_dim_m = None
         if profile in ("Rectangular", "Oval") and mode in ("fixed_height", "fixed_width"):
             if mode == "fixed_height":
