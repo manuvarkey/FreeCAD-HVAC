@@ -192,3 +192,241 @@ def darcy_weisbach_pressure_loss(friction_factor, length_m, hydraulic_diameter_m
     if length < 0.0:
         raise ValueError("length_m must be non-negative")
     return float(friction_factor) * (length / dh) * velocity_pressure(air_density_kg_m3, velocity_m_s)
+
+
+# ----------------------------------------------------------------------------
+# Duct sizing: constant velocity (direct/closed-form)
+#
+# Solve duct dimensions from a required flow rate and a target velocity.
+# Rectangular/oval ducts have two dimensions but sizing only fixes one
+# number (area), so a "mode" picks how the second dimension is determined:
+#   "aspect_ratio": width/height held at a fixed ratio, both solved from area
+#   "fixed_height": height held fixed, width solved from area
+#   "fixed_width":  width held fixed, height solved from area
+# ----------------------------------------------------------------------------
+
+_OVAL_SHAPE_FACTOR = 1.0 - math.pi / 4.0  # area(w,h) = h^2*(w/h - 1 + pi/4) for an oval
+
+
+def circular_diameter_for_velocity(flow_m3_s, velocity_m_s):
+    """Circular duct diameter that gives exactly the target velocity for the given flow."""
+    if velocity_m_s <= 0.0:
+        raise ValueError("velocity_m_s must be positive")
+    area = float(flow_m3_s) / float(velocity_m_s)
+    return 2.0 * math.sqrt(area / math.pi)
+
+
+def rect_dims_for_velocity(flow_m3_s, velocity_m_s, mode, aspect_ratio=None, fixed_dim_m=None):
+    """Rectangular duct (width_m, height_m) that gives exactly the target velocity."""
+    if velocity_m_s <= 0.0:
+        raise ValueError("velocity_m_s must be positive")
+    area = float(flow_m3_s) / float(velocity_m_s)
+
+    if mode == "aspect_ratio":
+        if not aspect_ratio or aspect_ratio <= 0.0:
+            raise ValueError("aspect_ratio must be positive")
+        height = math.sqrt(area / aspect_ratio)
+        return aspect_ratio * height, height
+    if mode == "fixed_height":
+        if not fixed_dim_m or fixed_dim_m <= 0.0:
+            raise ValueError("fixed_dim_m must be positive")
+        return area / fixed_dim_m, fixed_dim_m
+    if mode == "fixed_width":
+        if not fixed_dim_m or fixed_dim_m <= 0.0:
+            raise ValueError("fixed_dim_m must be positive")
+        return fixed_dim_m, area / fixed_dim_m
+    raise ValueError("Unknown mode: {!r}".format(mode))
+
+
+def oval_dims_for_velocity(flow_m3_s, velocity_m_s, mode, aspect_ratio=None, fixed_dim_m=None):
+    """
+    Flat-oval duct (width_m, height_m) that gives exactly the target
+    velocity. Unlike a rectangle, oval area = (width-height)*height +
+    pi*(height/2)^2 isn't a simple product, so each mode has its own
+    closed-form inverse (derived from that area formula; all three exist in
+    closed form, no iteration needed):
+      aspect_ratio r=width/height (r>=1): area = height^2*(r-1+pi/4)
+      fixed height h:  width = h + area/h - pi*h/4
+      fixed width w:   height = smaller root of (1-pi/4)*h^2 - w*h + area = 0
+    """
+    if velocity_m_s <= 0.0:
+        raise ValueError("velocity_m_s must be positive")
+    area = float(flow_m3_s) / float(velocity_m_s)
+
+    if mode == "aspect_ratio":
+        if not aspect_ratio or aspect_ratio < 1.0:
+            raise ValueError("aspect_ratio must be >= 1.0 for an oval (width >= height)")
+        height = math.sqrt(area / (aspect_ratio - 1.0 + math.pi / 4.0))
+        return aspect_ratio * height, height
+    if mode == "fixed_height":
+        if not fixed_dim_m or fixed_dim_m <= 0.0:
+            raise ValueError("fixed_dim_m must be positive")
+        height = fixed_dim_m
+        width = height + area / height - math.pi * height / 4.0
+        return width, height
+    if mode == "fixed_width":
+        if not fixed_dim_m or fixed_dim_m <= 0.0:
+            raise ValueError("fixed_dim_m must be positive")
+        width = fixed_dim_m
+        discriminant = width ** 2 - 4.0 * _OVAL_SHAPE_FACTOR * area
+        if discriminant < 0.0:
+            raise ValueError("No valid oval height for the given width and flow/velocity")
+        height = (width - math.sqrt(discriminant)) / (2.0 * _OVAL_SHAPE_FACTOR)
+        return width, height
+    raise ValueError("Unknown mode: {!r}".format(mode))
+
+
+# ----------------------------------------------------------------------------
+# Duct sizing: constant friction rate (bisection)
+#
+# The Darcy-Weisbach friction rate is an implicit function of duct size (size
+# affects area, hydraulic diameter, Reynolds number, and relative roughness
+# all at once), so unlike the constant-velocity case there is no closed-form
+# inverse. Solved instead by bisecting on a single free "scale" parameter --
+# friction rate decreases monotonically as duct size increases for a fixed
+# flow rate, so the bracket is well-posed.
+# ----------------------------------------------------------------------------
+
+def _friction_rate_pa_per_m(area_m2, hydraulic_diameter_m, flow_m3_s,
+                             roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3):
+    velocity_m_s = velocity_from_flow(flow_m3_s, area_m2)
+    reynolds = reynolds_number(velocity_m_s, hydraulic_diameter_m, kinematic_viscosity_m2_s)
+    friction_factor = friction_factor_altshul_tsal(reynolds, roughness_m / hydraulic_diameter_m)
+    return darcy_weisbach_pressure_loss(friction_factor, 1.0, hydraulic_diameter_m, air_density_kg_m3, velocity_m_s)
+
+
+def _solve_scale_for_friction_rate(area_and_dh_fn, flow_m3_s, target_rate_pa_per_m,
+                                    roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
+                                    lo=0.01, hi=5.0, iterations=60):
+    """
+    Bisect a single scale parameter (e.g. diameter, or one duct dimension)
+    so that _friction_rate_pa_per_m(*area_and_dh_fn(scale), ...) equals
+    target_rate_pa_per_m. area_and_dh_fn(scale) -> (area_m2, hydraulic_diameter_m).
+
+    Clamps to [lo, hi] if the target can't be reached within that bracket
+    (e.g. an unrealistically high/low friction rate target) rather than
+    raising -- callers can compare the result's actual resulting rate against
+    the target if they need to detect this.
+    """
+    def rate_at(scale):
+        area_m2, dh_m = area_and_dh_fn(scale)
+        return _friction_rate_pa_per_m(area_m2, dh_m, flow_m3_s, roughness_m,
+                                        kinematic_viscosity_m2_s, air_density_kg_m3)
+
+    if rate_at(lo) <= target_rate_pa_per_m:
+        return lo
+    if rate_at(hi) > target_rate_pa_per_m:
+        return hi
+
+    for _ in range(iterations):
+        mid = (lo + hi) / 2.0
+        if rate_at(mid) > target_rate_pa_per_m:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
+
+
+def circular_diameter_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
+                                         kinematic_viscosity_m2_s, air_density_kg_m3):
+    """Circular duct diameter that gives (approximately) the target friction rate (Pa/m)."""
+    def area_and_dh(diameter_m):
+        return circular_area(diameter_m), hydraulic_diameter_circular(diameter_m)
+
+    return _solve_scale_for_friction_rate(
+        area_and_dh, flow_m3_s, target_rate_pa_per_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3
+    )
+
+
+def rect_dims_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
+                                 kinematic_viscosity_m2_s, air_density_kg_m3,
+                                 mode, aspect_ratio=None, fixed_dim_m=None):
+    """Rectangular duct (width_m, height_m) that gives (approximately) the target friction rate."""
+    if mode == "aspect_ratio":
+        if not aspect_ratio or aspect_ratio <= 0.0:
+            raise ValueError("aspect_ratio must be positive")
+
+        def area_and_dh(height_m):
+            width_m = aspect_ratio * height_m
+            return rectangular_area(width_m, height_m), hydraulic_diameter_rectangular(width_m, height_m)
+
+        height = _solve_scale_for_friction_rate(
+            area_and_dh, flow_m3_s, target_rate_pa_per_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3
+        )
+        return aspect_ratio * height, height
+
+    if mode == "fixed_height":
+        if not fixed_dim_m or fixed_dim_m <= 0.0:
+            raise ValueError("fixed_dim_m must be positive")
+        height = fixed_dim_m
+
+        def area_and_dh(width_m):
+            return rectangular_area(width_m, height), hydraulic_diameter_rectangular(width_m, height)
+
+        width = _solve_scale_for_friction_rate(
+            area_and_dh, flow_m3_s, target_rate_pa_per_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3
+        )
+        return width, height
+
+    if mode == "fixed_width":
+        if not fixed_dim_m or fixed_dim_m <= 0.0:
+            raise ValueError("fixed_dim_m must be positive")
+        width = fixed_dim_m
+
+        def area_and_dh(height_m):
+            return rectangular_area(width, height_m), hydraulic_diameter_rectangular(width, height_m)
+
+        height = _solve_scale_for_friction_rate(
+            area_and_dh, flow_m3_s, target_rate_pa_per_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3
+        )
+        return width, height
+
+    raise ValueError("Unknown mode: {!r}".format(mode))
+
+
+def oval_dims_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
+                                 kinematic_viscosity_m2_s, air_density_kg_m3,
+                                 mode, aspect_ratio=None, fixed_dim_m=None):
+    """Flat-oval duct (width_m, height_m) that gives (approximately) the target friction rate."""
+    if mode == "aspect_ratio":
+        if not aspect_ratio or aspect_ratio < 1.0:
+            raise ValueError("aspect_ratio must be >= 1.0 for an oval (width >= height)")
+
+        def area_and_dh(height_m):
+            width_m = aspect_ratio * height_m
+            return oval_area(width_m, height_m), hydraulic_diameter_oval(width_m, height_m)
+
+        height = _solve_scale_for_friction_rate(
+            area_and_dh, flow_m3_s, target_rate_pa_per_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3
+        )
+        return aspect_ratio * height, height
+
+    if mode == "fixed_height":
+        if not fixed_dim_m or fixed_dim_m <= 0.0:
+            raise ValueError("fixed_dim_m must be positive")
+        height = fixed_dim_m
+
+        def area_and_dh(width_m):
+            return oval_area(width_m, height), hydraulic_diameter_oval(width_m, height)
+
+        width = _solve_scale_for_friction_rate(
+            area_and_dh, flow_m3_s, target_rate_pa_per_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
+            lo=height,  # width must be >= height for a valid oval
+        )
+        return width, height
+
+    if mode == "fixed_width":
+        if not fixed_dim_m or fixed_dim_m <= 0.0:
+            raise ValueError("fixed_dim_m must be positive")
+        width = fixed_dim_m
+
+        def area_and_dh(height_m):
+            return oval_area(width, height_m), hydraulic_diameter_oval(width, height_m)
+
+        height = _solve_scale_for_friction_rate(
+            area_and_dh, flow_m3_s, target_rate_pa_per_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
+            hi=width,  # height must be <= width for a valid oval
+        )
+        return width, height
+
+    raise ValueError("Unknown mode: {!r}".format(mode))

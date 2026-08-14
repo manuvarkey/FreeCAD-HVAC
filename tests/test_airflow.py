@@ -151,3 +151,156 @@ def test_darcy_weisbach_pressure_loss_zero_length_is_zero():
                                                hydraulic_diameter_m=0.2,
                                                air_density_kg_m3=1.2, velocity_m_s=5.0)
     assert dp == pytest.approx(0.0)
+
+
+# ----------------------------------------------------------------------------
+# Duct sizing: constant velocity
+# ----------------------------------------------------------------------------
+
+def test_circular_diameter_for_velocity_round_trip():
+    flow, v = 0.5, 6.0
+    d = airflow.circular_diameter_for_velocity(flow, v)
+    got_v = airflow.velocity_from_flow(flow, airflow.circular_area(d))
+    assert got_v == pytest.approx(v)
+
+
+def test_circular_diameter_for_velocity_rejects_nonpositive_velocity():
+    with pytest.raises(ValueError):
+        airflow.circular_diameter_for_velocity(0.5, 0.0)
+
+
+@pytest.mark.parametrize("mode,kwargs", [
+    ("aspect_ratio", {"aspect_ratio": 2.0}),
+    ("fixed_height", {"fixed_dim_m": 0.3}),
+    ("fixed_width", {"fixed_dim_m": 0.5}),
+])
+def test_rect_dims_for_velocity_round_trip(mode, kwargs):
+    flow, v = 0.5, 6.0
+    w, h = airflow.rect_dims_for_velocity(flow, v, mode, **kwargs)
+    got_v = airflow.velocity_from_flow(flow, airflow.rectangular_area(w, h))
+    assert got_v == pytest.approx(v)
+
+
+def test_rect_dims_for_velocity_aspect_ratio_is_honored():
+    w, h = airflow.rect_dims_for_velocity(0.5, 6.0, "aspect_ratio", aspect_ratio=2.5)
+    assert w / h == pytest.approx(2.5)
+
+
+def test_rect_dims_for_velocity_fixed_height_keeps_height():
+    w, h = airflow.rect_dims_for_velocity(0.5, 6.0, "fixed_height", fixed_dim_m=0.3)
+    assert h == pytest.approx(0.3)
+
+
+def test_rect_dims_for_velocity_fixed_width_keeps_width():
+    w, h = airflow.rect_dims_for_velocity(0.5, 6.0, "fixed_width", fixed_dim_m=0.5)
+    assert w == pytest.approx(0.5)
+
+
+def test_rect_dims_for_velocity_unknown_mode_raises():
+    with pytest.raises(ValueError):
+        airflow.rect_dims_for_velocity(0.5, 6.0, "bogus")
+
+
+@pytest.mark.parametrize("mode,kwargs", [
+    ("aspect_ratio", {"aspect_ratio": 2.0}),
+    ("fixed_height", {"fixed_dim_m": 0.25}),
+    ("fixed_width", {"fixed_dim_m": 0.6}),
+])
+def test_oval_dims_for_velocity_round_trip(mode, kwargs):
+    flow, v = 0.4, 6.0
+    w, h = airflow.oval_dims_for_velocity(flow, v, mode, **kwargs)
+    assert w >= h > 0.0
+    got_v = airflow.velocity_from_flow(flow, airflow.oval_area(w, h))
+    assert got_v == pytest.approx(v)
+
+
+def test_oval_dims_for_velocity_aspect_ratio_is_honored():
+    w, h = airflow.oval_dims_for_velocity(0.4, 6.0, "aspect_ratio", aspect_ratio=1.8)
+    assert w / h == pytest.approx(1.8)
+
+
+def test_oval_dims_for_velocity_aspect_ratio_one_matches_circle():
+    # At aspect_ratio=1 an oval degenerates to a circle.
+    flow, v = 0.4, 6.0
+    w, h = airflow.oval_dims_for_velocity(flow, v, "aspect_ratio", aspect_ratio=1.0)
+    d = airflow.circular_diameter_for_velocity(flow, v)
+    assert w == pytest.approx(d)
+    assert h == pytest.approx(d)
+
+
+def test_oval_dims_for_velocity_aspect_ratio_below_one_rejected():
+    with pytest.raises(ValueError):
+        airflow.oval_dims_for_velocity(0.4, 6.0, "aspect_ratio", aspect_ratio=0.5)
+
+
+def test_oval_dims_for_velocity_fixed_height_keeps_height():
+    w, h = airflow.oval_dims_for_velocity(0.4, 6.0, "fixed_height", fixed_dim_m=0.25)
+    assert h == pytest.approx(0.25)
+
+
+def test_oval_dims_for_velocity_fixed_width_keeps_width():
+    w, h = airflow.oval_dims_for_velocity(0.4, 6.0, "fixed_width", fixed_dim_m=0.6)
+    assert w == pytest.approx(0.6)
+
+
+# ----------------------------------------------------------------------------
+# Duct sizing: constant friction rate
+# ----------------------------------------------------------------------------
+
+ROUGHNESS_M = airflow.mm_to_m(0.09)
+VISCOSITY = 1.51e-5
+DENSITY = 1.204
+
+
+def _actual_friction_rate(flow_m3_s, area_m2, dh_m):
+    v = airflow.velocity_from_flow(flow_m3_s, area_m2)
+    re = airflow.reynolds_number(v, dh_m, VISCOSITY)
+    f = airflow.friction_factor_altshul_tsal(re, ROUGHNESS_M / dh_m)
+    return airflow.darcy_weisbach_pressure_loss(f, 1.0, dh_m, DENSITY, v)
+
+
+def test_circular_diameter_for_friction_rate_round_trip():
+    flow, target = 0.5, 1.0
+    d = airflow.circular_diameter_for_friction_rate(flow, target, ROUGHNESS_M, VISCOSITY, DENSITY)
+    got_rate = _actual_friction_rate(flow, airflow.circular_area(d), airflow.hydraulic_diameter_circular(d))
+    assert got_rate == pytest.approx(target, rel=1e-3)
+
+
+@pytest.mark.parametrize("mode,kwargs", [
+    ("aspect_ratio", {"aspect_ratio": 2.0}),
+    ("fixed_height", {"fixed_dim_m": 0.3}),
+    ("fixed_width", {"fixed_dim_m": 0.5}),
+])
+def test_rect_dims_for_friction_rate_round_trip(mode, kwargs):
+    flow, target = 0.5, 1.0
+    w, h = airflow.rect_dims_for_friction_rate(flow, target, ROUGHNESS_M, VISCOSITY, DENSITY, mode, **kwargs)
+    got_rate = _actual_friction_rate(flow, airflow.rectangular_area(w, h), airflow.hydraulic_diameter_rectangular(w, h))
+    assert got_rate == pytest.approx(target, rel=1e-3)
+
+
+@pytest.mark.parametrize("mode,kwargs", [
+    ("aspect_ratio", {"aspect_ratio": 2.0}),
+    ("fixed_height", {"fixed_dim_m": 0.25}),
+    ("fixed_width", {"fixed_dim_m": 0.6}),
+])
+def test_oval_dims_for_friction_rate_round_trip(mode, kwargs):
+    flow, target = 0.4, 1.0
+    w, h = airflow.oval_dims_for_friction_rate(flow, target, ROUGHNESS_M, VISCOSITY, DENSITY, mode, **kwargs)
+    assert w >= h > 0.0
+    got_rate = _actual_friction_rate(flow, airflow.oval_area(w, h), airflow.hydraulic_diameter_oval(w, h))
+    assert got_rate == pytest.approx(target, rel=1e-3)
+
+
+def test_friction_rate_sizing_monotonic_with_target():
+    # A looser (smaller) target friction rate should always require a bigger duct.
+    flow = 0.5
+    d_tight = airflow.circular_diameter_for_friction_rate(flow, 2.0, ROUGHNESS_M, VISCOSITY, DENSITY)
+    d_loose = airflow.circular_diameter_for_friction_rate(flow, 0.5, ROUGHNESS_M, VISCOSITY, DENSITY)
+    assert d_loose > d_tight
+
+
+def test_friction_rate_sizing_clamps_to_bracket_when_unreachable():
+    # An absurdly tight target (unreachable within the bracket) clamps to the
+    # largest bracketed diameter rather than raising or looping forever.
+    d = airflow.circular_diameter_for_friction_rate(0.5, 1e-6, ROUGHNESS_M, VISCOSITY, DENSITY)
+    assert d == pytest.approx(5.0)
