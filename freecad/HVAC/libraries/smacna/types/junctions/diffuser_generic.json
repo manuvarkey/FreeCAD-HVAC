@@ -3,7 +3,7 @@
   "label": "Diffuser / Grille / Register - Generic",
   "category": "junction",
   "topology": "end",
-  "family": ["end.diffuser", "end.grille", "end.register"],
+  "family": ["end.terminal.diffuser", "end.terminal.grille", "end.terminal.register"],
   "profiles": ["Circular", "Rectangular", "Oval"],
   "constraints": {
     "degree": 1

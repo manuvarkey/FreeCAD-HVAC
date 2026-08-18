@@ -75,12 +75,15 @@ class HVACLibrary:
     def get_type(self, type_id: str):
         return self.types_by_id.get(type_id)
 
+    def _family_match(self, parent, child):
+        return child == parent or child.startswith(parent + ".")
+
     def list_types(self, category=None, family=None, profile=None):
         out = []
         for t in self.types_by_id.values():
             if category and t.category != category:
                 continue
-            if family and family not in t.family:
+            if family and not any(self._family_match(family, candidate) for candidate in t.family):
                 continue
             if profile and t.profiles and profile not in t.profiles:
                 continue
@@ -92,7 +95,7 @@ class HVACLibrary:
         for t in self.types_by_id.values():
             if category and t.category != category:
                 continue
-            if family and family not in t.family:
+            if family and not any(self._family_match(family, candidate) for candidate in t.family):
                 continue
             for p in (t.profiles or []):
                 profiles.add(p)
