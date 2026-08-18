@@ -9,6 +9,7 @@ installation or real base geometry.
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 
 from freecad.HVAC.core.NetworkParser import EdgeRef, JunctionAnalysis, JunctionPort
+from freecad.HVAC.utils.hvaclib import nx
 
 
 AIR_DENSITY = 1.204
@@ -47,23 +48,24 @@ def _port(edge_key, segment_end, flow_into_junction):
 
 class FakeParser:
     """
-    node_edges/edge_endpoints/node_key/build_junction_analysis, driven from a
-    plain description of {node_id: [(edge_tag, "start"|"end"), ...]}.
+    analysis_graph/node_key/build_junction_analysis, driven from a plain
+    description of {node_id: [(edge_tag, "start"|"end"), ...]}.
+
+    analysis_graph mirrors the real NetworkParser's: a plain networkx Graph
+    with each edge's real EdgeRef stored under the "key" attribute, matching
+    NetworkParser._rebuild_analysis_graph_from_groups exactly -- FlowNetwork.py
+    consumes this attribute directly rather than any parser method call.
     """
 
     def __init__(self, node_ports, edge_endpoints):
         # node_ports: {node_id: [(edge_tag, segment_end), ...]}
+        # edge_endpoints: {edge_tag: (u, v)}  (u = "start" node, v = "end" node)
         self._node_ports = node_ports
-        self._edge_endpoints = edge_endpoints  # {edge_tag: (u, v)}  (u = "start" node, v = "end" node)
 
-    def nodes(self):
-        return sorted(self._node_ports.keys())
-
-    def node_edges(self, node_id):
-        return [_edge(tag) for tag, _end in self._node_ports[node_id]]
-
-    def edge_analysis_nodes(self, edge_ref):
-        return self._edge_endpoints[edge_ref.tag]
+        self.analysis_graph = nx.Graph()
+        for tag, (u, v) in edge_endpoints.items():
+            edge_ref = _edge(tag)
+            self.analysis_graph.add_edge(u, v, key=edge_ref, obj=edge_ref.obj_name, local_index=edge_ref.local_index)
 
     def node_key(self, node_id):
         return "N{}".format(node_id)

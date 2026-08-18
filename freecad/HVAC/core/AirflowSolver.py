@@ -110,7 +110,7 @@ class AirflowSolver:
 
     def _solve_component(self, parser, comp, segment_map, junction_map, global_warnings):
         net = self.net_obj
-        adjacency = comp.adjacency
+        graph = comp.graph
         edge_flow_lps = comp.edge_flow_lps
         port_lookup = comp.port_lookup
         analysis_by_node = comp.analysis_by_node
@@ -128,7 +128,7 @@ class AirflowSolver:
         air_viscosity = float(getattr(net, "AirKinematicViscosity", 1.51e-5) or 1.51e-5)
 
         for node_id in comp.comp_nodes:
-            degree = len(adjacency[node_id])
+            degree = graph.degree[node_id]
             if degree < 1:
                 continue
 
@@ -251,21 +251,29 @@ class AirflowSolver:
         junction_results = {}
         for node_id in comp.comp_nodes:
             junction_obj = junction_map[parser.node_key(node_id)]
-            degree = len(adjacency[node_id])
+            degree = graph.degree[node_id]
+
+            total_in = 0.0
+            total_out = 0.0
+            has_outlet_port = False
+            for _u, _v, edge in graph.edges(node_id, data="key"):
+                port = port_lookup[(node_id, edge.tag)]
+                mag = edge_flow_lps[edge]
+                if port.flow_into_junction:
+                    total_in += mag
+                else:
+                    total_out += mag
+                    has_outlet_port = True
+
             if degree == 1:
-                edge = adjacency[node_id][0]
-                total_flow = edge_flow_lps[edge]
-                is_source = not port_lookup[(node_id, edge.tag)].flow_into_junction
+                # Exactly one edge, so their sum is that edge's own flow
+                # magnitude (regardless of which of total_in/total_out it
+                # landed in); is_source is direction-based, not magnitude-
+                # based, so it stays correct even for a (degenerate) zero-flow
+                # source rather than depending on total_out being nonzero.
+                total_flow = total_in + total_out
+                is_source = has_outlet_port
             else:
-                total_in = 0.0
-                total_out = 0.0
-                for edge in adjacency[node_id]:
-                    port = port_lookup[(node_id, edge.tag)]
-                    mag = edge_flow_lps[edge]
-                    if port.flow_into_junction:
-                        total_in += mag
-                    else:
-                        total_out += mag
                 total_flow = max(total_in, total_out)
                 is_source = False
 

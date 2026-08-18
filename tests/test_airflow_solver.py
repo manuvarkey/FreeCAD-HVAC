@@ -186,17 +186,25 @@ def test_fallback_loss_coefficient_and_warning():
 
 
 def test_loop_detected_and_reported_as_warning_not_exception():
-    # Two nodes joined by two parallel edges -> a 2-node loop (not a tree: 2 nodes, 2 edges).
+    # A 3-node cycle -> a loop (not a tree: 3 nodes, 3 edges, needs exactly 2).
+    # Duct networks never have two segments directly between the same pair of
+    # junctions, so a real loop always involves 3+ distinct nodes like this.
     node_ports = {
-        1: [("A", "start"), ("B", "start")],
-        2: [("A", "end"), ("B", "end")],
+        1: [("A", "start"), ("C", "end")],
+        2: [("A", "end"), ("B", "start")],
+        3: [("B", "end"), ("C", "start")],
     }
-    edge_endpoints = {"A": (1, 2), "B": (1, 2)}
+    edge_endpoints = {"A": (1, 2), "B": (2, 3), "C": (3, 1)}
     parser = FakeParser(node_ports, edge_endpoints)
-    segment_map = {"A": _make_segment("A", 200.0, 5000.0), "B": _make_segment("B", 200.0, 5000.0)}
+    segment_map = {
+        "A": _make_segment("A", 200.0, 5000.0),
+        "B": _make_segment("B", 200.0, 5000.0),
+        "C": _make_segment("C", 200.0, 5000.0),
+    }
     junction_map = {
         "N1": _make_junction("J1", type_id="end_terminal_marker"),
         "N2": _make_junction("J2", type_id="end_terminal_marker"),
+        "N3": _make_junction("J3", type_id="end_terminal_marker"),
     }
     net = _make_net(parser, segment_map, junction_map)
 

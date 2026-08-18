@@ -37,10 +37,20 @@ geometry direction) to know each segment's fixed physical flow direction.
 
 Loops (non-tree sub-networks) are rejected with a clear error rather than
 solved.
+
+Topology (connectivity, degree, BFS ordering) is answered directly from
+parser.analysis_graph -- the same networkx Graph NetworkParser already
+builds and maintains -- rather than re-deriving an equivalent structure here.
+Each edge on that graph carries a "key" attribute holding the real EdgeRef,
+so callers can go from a graph traversal straight back to the segment it
+represents. Two segments between the same pair of junctions never occurs in
+a valid duct network, so a plain (non-multi) Graph unambiguously represents
+every edge.
 """
 
-from collections import deque
 from dataclasses import dataclass, field
+
+from ..utils.hvaclib import nx
 
 
 class FlowSolveError(Exception):
@@ -58,8 +68,7 @@ class FlowComponent:
     """
     comp_nodes: set
     comp_edges: set
-    adjacency: dict          # node_id -> [edge_ref, ...]
-    edge_endpoints: dict     # edge_ref -> (u, v) analysis node ids
+    graph: object             # nx.Graph subgraph of parser.analysis_graph, scoped to comp_nodes; edge attr "key" -> EdgeRef
     root_node_id: int
     order: list              # BFS order from root (root first)
     parent_node: dict        # node_id -> parent node_id (root excluded)
@@ -86,22 +95,15 @@ def solve_flow_components(net_obj):
     segment_map = net_obj.Proxy.collectSegmentObjects()
     junction_map = net_obj.Proxy.collectJunctionObjects()
 
-    adjacency = {node_id: list(parser.node_edges(node_id)) for node_id in parser.nodes()}
-    edge_endpoints = {}
-    for node_id, edge_refs in adjacency.items():
-        for edge_ref in edge_refs:
-            edge_endpoints[edge_ref] = parser.edge_analysis_nodes(edge_ref)
-
     warnings = []
     components = []
-    for comp_nodes, comp_edges in _find_node_edge_components(adjacency, edge_endpoints):
-        if not comp_edges:
+    for comp_nodes in nx.connected_components(parser.analysis_graph):
+        subgraph = parser.analysis_graph.subgraph(comp_nodes)
+        if subgraph.number_of_edges() == 0:
             continue
         try:
             components.append(
-                _solve_component_flow(
-                    parser, comp_nodes, comp_edges, adjacency, edge_endpoints, segment_map, junction_map
-                )
+                _solve_component_flow(parser, comp_nodes, subgraph, segment_map, junction_map)
             )
         except FlowSolveError as exc:
             warnings.append(str(exc))
@@ -110,39 +112,11 @@ def solve_flow_components(net_obj):
 
 
 # ----------------------------------------------------------------------------
-# Topology helpers
-# ----------------------------------------------------------------------------
-
-def _find_node_edge_components(adjacency, edge_endpoints):
-    """Group analysis nodes into connected components (node set, edge set)."""
-    visited = set()
-    components = []
-    for start in adjacency:
-        if start in visited:
-            continue
-        comp_nodes = set()
-        comp_edges = set()
-        stack = [start]
-        visited.add(start)
-        while stack:
-            n = stack.pop()
-            comp_nodes.add(n)
-            for edge_ref in adjacency[n]:
-                comp_edges.add(edge_ref)
-                au, av = edge_endpoints[edge_ref]
-                other = av if au == n else au
-                if other not in visited:
-                    visited.add(other)
-                    stack.append(other)
-        components.append((comp_nodes, comp_edges))
-    return components
-
-
-# ----------------------------------------------------------------------------
 # Per-component flow solve
 # ----------------------------------------------------------------------------
 
-def _solve_component_flow(parser, comp_nodes, comp_edges, adjacency, edge_endpoints, segment_map, junction_map):
+def _solve_component_flow(parser, comp_nodes, graph, segment_map, junction_map):
+    comp_edges = {edge_ref for _u, _v, edge_ref in graph.edges(data="key")}
     n_nodes = len(comp_nodes)
     n_edges = len(comp_edges)
     if n_edges != n_nodes - 1:
@@ -179,7 +153,7 @@ def _solve_component_flow(parser, comp_nodes, comp_edges, adjacency, edge_endpoi
             )
 
     # Terminals and the balancing (unspecified) terminal.
-    terminal_ids = [n for n in comp_nodes if len(adjacency[n]) == 1]
+    terminal_ids = [n for n in comp_nodes if graph.degree[n] == 1]
     if len(terminal_ids) < 2:
         any_label = junction_map[parser.node_key(next(iter(comp_nodes)))].Label
         raise FlowSolveError(
@@ -213,38 +187,30 @@ def _solve_component_flow(parser, comp_nodes, comp_edges, adjacency, edge_endpoi
 
     root_node_id, root_obj = unspecified[0]
 
-    # BFS from the balancing terminal to get a rooted-tree traversal order.
+    # BFS from the balancing terminal to get a rooted-tree traversal order,
+    # directly off the (already tree-sized) graph -- no separate structure
+    # to build; each traversal edge's real EdgeRef is just its "key" attribute.
     parent_node = {}
     parent_edge = {}
     order = [root_node_id]
-    visited_bfs = {root_node_id}
-    queue = deque([root_node_id])
-    while queue:
-        n = queue.popleft()
-        for edge_ref in adjacency[n]:
-            au, av = edge_endpoints[edge_ref]
-            other = av if au == n else au
-            if other in visited_bfs:
-                continue
-            visited_bfs.add(other)
-            parent_node[other] = n
-            parent_edge[other] = edge_ref
-            order.append(other)
-            queue.append(other)
+    for u, v in nx.bfs_edges(graph, root_node_id):
+        parent_node[v] = u
+        parent_edge[v] = graph[u][v]["key"]
+        order.append(v)
 
     # Flow-magnitude accumulation, leaves -> root.
     edge_flow_lps = {}
     for node_id in reversed(order[1:]):
         edge = parent_edge[node_id]
 
-        if len(adjacency[node_id]) == 1:
+        if graph.degree[node_id] == 1:
             junction_obj = junction_map[parser.node_key(node_id)]
             edge_flow_lps[edge] = abs(float(getattr(junction_obj, "DesignFlowRate", 0.0) or 0.0))
             continue
 
         known_in = 0.0
         known_out = 0.0
-        for edge_ref in adjacency[node_id]:
+        for _u, _v, edge_ref in graph.edges(node_id, data="key"):
             if edge_ref == edge:
                 continue
             port = port_lookup[(node_id, edge_ref.tag)]
@@ -274,8 +240,7 @@ def _solve_component_flow(parser, comp_nodes, comp_edges, adjacency, edge_endpoi
     return FlowComponent(
         comp_nodes=comp_nodes,
         comp_edges=comp_edges,
-        adjacency=adjacency,
-        edge_endpoints=edge_endpoints,
+        graph=graph,
         root_node_id=root_node_id,
         order=order,
         parent_node=parent_node,
