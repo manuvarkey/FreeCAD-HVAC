@@ -53,8 +53,15 @@ class HVACTypeDef:
     profiles: list[str] = field(default_factory=list)
     constraints: dict = field(default_factory=dict)
     properties: list[HVACPropertyDef] = field(default_factory=list)
+    generator_type: str = "python"
     generator_module: str = ""
     generator_function: str = ""
+    generator_template_file: str = ""
+    generator_template_result_object: str = ""
+    generator_template_params: dict = field(default_factory=dict)
+    generator_template_ports: list = field(default_factory=list)
+    generator_template_tol_mm: float = 0.5
+    generator_template_tol_deg: float = 0.5
     lengths_module: str = ""
     lengths_function: str = ""
     loss_module: str = ""
@@ -154,11 +161,18 @@ class HVACLibraryRegistry:
         return importlib.import_module(full_module)
 
     def call_generator(self, library_id: str, type_def: HVACTypeDef, context: dict):
-        module = self.import_generator(library_id, type_def.generator_module)
-        func = getattr(module, type_def.generator_function)
-        # ctx = dict(context or {})
         context["hvac_api"] = HVACLibraryAPI
         context["hvac_api_version"] = HVACLibraryAPI.API_VERSION
+
+        if type_def.generator_type == "template":
+            lib = self.get_library(library_id)
+            if lib is None:
+                raise ValueError("Unknown HVAC library '{}'".format(library_id))
+            from . import template_shapes
+            return template_shapes.build_shape_from_template(lib, type_def, context)
+
+        module = self.import_generator(library_id, type_def.generator_module)
+        func = getattr(module, type_def.generator_function)
         return func(context)
 
     def call_loss(self, library_id: str, type_def: HVACTypeDef, context: dict):
@@ -305,8 +319,15 @@ class HVACLibraryRegistry:
             profiles=list(raw.get("profiles", []) or []),
             constraints=dict(raw.get("constraints", {}) or {}),
             properties=props,
+            generator_type=gen.get("type", "python"),
             generator_module=gen.get("module", ""),
             generator_function=gen.get("function", ""),
+            generator_template_file=gen.get("file", ""),
+            generator_template_result_object=gen.get("result_object", "ResultObject"),
+            generator_template_params=dict(gen.get("params", {}) or {}),
+            generator_template_ports=list(gen.get("ports", []) or []),
+            generator_template_tol_mm=float(gen.get("placement_tolerance_mm", 0.5)),
+            generator_template_tol_deg=float(gen.get("placement_tolerance_deg", 0.5)),
             lengths_module=lengths.get("module", ""),
             lengths_function=lengths.get("function", ""),
             loss_module=loss.get("module", ""),

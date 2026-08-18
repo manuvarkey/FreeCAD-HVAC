@@ -18,10 +18,56 @@
       "group": "Dimensions",
       "description": "Rectangular duct height",
       "default": 100.0
+    },
+    {
+      "name": "Thickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Sheet metal thickness",
+      "default": 0.8
+    },
+    {
+      "name": "FlangeHeight",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Flange height",
+      "default": 25.0
+    },
+    {
+      "name": "FlangeThickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Flange thickness",
+      "default": 1.0
+    },
+    {
+      "name": "ShowFlange1",
+      "prop_type": "App::PropertyBool",
+      "group": "Options",
+      "description": "Include the flange at port 1 (start)",
+      "default": true
+    },
+    {
+      "name": "ShowFlange2",
+      "prop_type": "App::PropertyBool",
+      "group": "Options",
+      "description": "Include the flange at port 2 (end)",
+      "default": true
     }
   ],
   "generator": {
-    "module": "segments",
-    "function": "build_rectangular_straight"
+    "type": "template",
+    "file": "models/rectangular_straight.FCStd",
+    "params": {
+      "Width": "Duct_Width",
+      "Height": "Duct_Height",
+      "Thickness": "Duct_SheetThickness",
+      "FlangeHeight": "Flange_Height",
+      "FlangeThickness": "Flange_Thickness",
+      "Length": "Duct_Length",
+      "ShowFlange1": "Flange_Flange1",
+      "ShowFlange2": "Flange_Flange2"
+    },
+    "result_object": "ResultObject"
   }
 }

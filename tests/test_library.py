@@ -74,3 +74,72 @@ def test_load_type_def_file_normalizes_string_family_to_list(tmp_path):
 
     lib.add_type(type_def)
     assert lib.list_profiles(category="segment", family="straight_segment") == ["Circular"]
+
+
+def test_load_type_def_file_defaults_generator_type_to_python(tmp_path):
+    type_file = tmp_path / "elbow.json"
+    type_file.write_text(json.dumps({
+        "id": "elbow",
+        "label": "Elbow",
+        "category": "junction",
+        "family": ["through.elbow"],
+        "generator": {"module": "junctions", "function": "build_elbow"},
+    }))
+
+    reg = HVACLibraryRegistry()
+    type_def = reg._load_type_def_file(str(type_file))
+
+    assert type_def.generator_type == "python"
+    assert type_def.generator_module == "junctions"
+    assert type_def.generator_function == "build_elbow"
+    assert type_def.generator_template_file == ""
+
+
+def test_load_type_def_file_parses_template_generator_block(tmp_path):
+    type_file = tmp_path / "damper.json"
+    type_file.write_text(json.dumps({
+        "id": "damper_template",
+        "label": "Damper (template)",
+        "category": "junction",
+        "family": ["through.straight.damper"],
+        "generator": {
+            "type": "template",
+            "file": "models/damper_generic.FCStd",
+            "result_object": "Body",
+            "params": {"Diameter": "Diameter", "BodyLength": "Length"},
+            "ports": ["Inlet", "Outlet"],
+            "placement_tolerance_mm": 1.0,
+            "placement_tolerance_deg": 2.0,
+        },
+    }))
+
+    reg = HVACLibraryRegistry()
+    type_def = reg._load_type_def_file(str(type_file))
+
+    assert type_def.generator_type == "template"
+    assert type_def.generator_template_file == "models/damper_generic.FCStd"
+    assert type_def.generator_template_result_object == "Body"
+    assert type_def.generator_template_params == {"Diameter": "Diameter", "BodyLength": "Length"}
+    assert type_def.generator_template_ports == ["Inlet", "Outlet"]
+    assert type_def.generator_template_tol_mm == 1.0
+    assert type_def.generator_template_tol_deg == 2.0
+
+
+def test_load_type_def_file_template_generator_defaults(tmp_path):
+    type_file = tmp_path / "damper_defaults.json"
+    type_file.write_text(json.dumps({
+        "id": "damper_template_defaults",
+        "label": "Damper (template, defaults)",
+        "category": "junction",
+        "family": ["through.straight.damper"],
+        "generator": {"type": "template", "file": "models/damper.FCStd"},
+    }))
+
+    reg = HVACLibraryRegistry()
+    type_def = reg._load_type_def_file(str(type_file))
+
+    assert type_def.generator_template_result_object == "ResultObject"
+    assert type_def.generator_template_params == {}
+    assert type_def.generator_template_ports == []
+    assert type_def.generator_template_tol_mm == 0.5
+    assert type_def.generator_template_tol_deg == 0.5
