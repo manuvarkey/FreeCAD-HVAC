@@ -326,6 +326,69 @@ def build_transition(context):
 
 
 # --------------------------------------------------------------------------
+# Inline devices (damper, VAV box)
+# --------------------------------------------------------------------------
+
+def _build_inline_device(context, default_length_factor, min_length):
+    """
+    Generic 2-port inline device body: a short constant-section stub
+    between the two connecting ports, standing in for the physical device
+    housing (damper blade, VAV box, ...). Purely schematic -- length is
+    nominal, not read from any catalog.
+    """
+    api = context.get("hvac_api", None)
+
+    ports = list(context.get("connected_ports", []) or [])
+    props = dict(context.get("properties", {}) or {})
+
+    if len(ports) != 2:
+        raise ValueError("Inline device requires exactly 2 ports")
+
+    u1 = api.port_direction(ports[0])
+    u2 = api.port_direction(ports[1])
+    theta = api.angle_between(u1, u2)
+
+    if abs(theta - math.pi) > math.radians(10.0):
+        raise ValueError("Inline device requires near-opposite port directions")
+
+    h1 = _section_size_hint(api, ports[0])
+    h2 = _section_size_hint(api, ports[1])
+    length = _safe_trim(props.get("BodyLength", 0.0), max(h1, h2, 1.0) * default_length_factor)
+    length = max(length, min_length)
+
+    trim1 = 0.5 * length
+    trim2 = 0.5 * length
+
+    p1 = api.port_position(ports[0]) + (u1 * trim1)
+    p2 = api.port_position(ports[1]) + (u2 * trim2)
+
+    port1 = api.copy_port(ports[0], position=p1)
+    port2 = api.copy_port(ports[1], position=p2)
+    wire1 = api.make_section_wire_from_port(port1)
+    wire2 = api.make_section_wire_from_port(port2)
+
+    shape = api.make_loft([wire1, wire2], solid=True, ruled=True)
+
+    return {
+        "shape": shape,
+        "connection_lengths": api.build_trim_rec_from_port_lengths(
+            [
+                (ports[0], trim1),
+                (ports[1], trim2),
+            ]
+        ),
+    }
+
+
+def build_damper_generic(context):
+    return _build_inline_device(context, default_length_factor=0.5, min_length=100.0)
+
+
+def build_vav_generic(context):
+    return _build_inline_device(context, default_length_factor=1.0, min_length=300.0)
+
+
+# --------------------------------------------------------------------------
 # Tee / Wye helpers
 # --------------------------------------------------------------------------
 

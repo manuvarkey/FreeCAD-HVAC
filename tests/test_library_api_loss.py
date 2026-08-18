@@ -393,3 +393,29 @@ def test_terminal_component_loss_zero_flow_returns_zero_not_none():
         "properties": {"NeckSize": 200.0, "LossCoefficient": 1.5},
     }
     assert api.terminal_component_loss(context) == {"A": 0.0}
+
+
+# ----------------------------------------------------------------------------
+# inline_device_loss
+# ----------------------------------------------------------------------------
+
+def test_inline_device_loss_returns_raw_coefficient():
+    # No neck-size conversion -- the coefficient is returned as-is, to be
+    # applied by the solver against the connecting duct's own velocity.
+    context = {"properties": {"LossCoefficient": 0.35}}
+    assert api.inline_device_loss(context) == pytest.approx(0.35)
+
+
+def test_inline_device_loss_missing_coefficient_returns_none():
+    context = {"properties": {}}
+    assert api.inline_device_loss(context) is None
+
+
+def test_inline_device_loss_zero_coefficient_returns_none():
+    context = {"properties": {"LossCoefficient": 0.0}}
+    assert api.inline_device_loss(context) is None
+
+
+def test_inline_device_loss_negative_coefficient_returns_none():
+    context = {"properties": {"LossCoefficient": -1.0}}
+    assert api.inline_device_loss(context) is None

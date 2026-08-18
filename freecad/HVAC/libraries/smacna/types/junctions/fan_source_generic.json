@@ -1,0 +1,35 @@
+{
+  "id": "fan_source_generic",
+  "label": "AHU / Fan Connection - Generic",
+  "category": "junction",
+  "topology": "end",
+  "family": ["end.terminal.fan", "end.terminal.ahu"],
+  "profiles": ["Circular", "Rectangular", "Oval"],
+  "constraints": {
+    "degree": 1
+  },
+  "properties": [
+    {
+      "name": "NeckSize",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "AHU/fan discharge or return connection diameter",
+      "default": 200.0
+    },
+    {
+      "name": "LossCoefficient",
+      "prop_type": "App::PropertyFloat",
+      "group": "Parameters",
+      "description": "Pressure-loss coefficient K, referenced to velocity at the neck (0 = no loss modeled at this connection; the fan's own required static pressure is read from the critical-path result instead)",
+      "default": 0.0
+    }
+  ],
+  "generator": {
+    "module": "junctions",
+    "function": "build_diffuser_generic"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_diffuser_generic"
+  }
+}

@@ -734,6 +734,29 @@ class HVACLibraryAPI:
             return None
 
     @staticmethod
+    def inline_device_loss(context):
+        """
+        Generic inline device (damper, VAV box, ...) loss: a single
+        dimensionless coefficient K taken directly from
+        properties["LossCoefficient"], applied uniformly by the solver to
+        the connecting duct's own velocity pressure. No neck-size
+        conversion is needed here (unlike terminal_component_loss) since
+        these devices carry the same duct through both ports rather than
+        stepping down to a separate neck size.
+
+        Returns a float K, or None if LossCoefficient isn't set (nothing
+        to compute -- falls back to the solver's generic default).
+        """
+        try:
+            properties = context.get("properties") or {}
+            k = float(properties.get("LossCoefficient", 0.0) or 0.0)
+            if k <= 0.0:
+                return None
+            return k
+        except Exception:
+            return None
+
+    @staticmethod
     def copy_port(port, position=None, direction=None, profile_x_axis=None):
         out = dict(port)
         if position is not None:

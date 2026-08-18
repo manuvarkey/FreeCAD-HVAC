@@ -88,3 +88,11 @@ def loss_multiport_generic(context):
 
 def loss_diffuser_generic(context):
     return context["hvac_api"].terminal_component_loss(context)
+
+
+def loss_damper_generic(context):
+    return context["hvac_api"].inline_device_loss(context)
+
+
+def loss_vav_generic(context):
+    return context["hvac_api"].inline_device_loss(context)
