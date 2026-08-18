@@ -292,12 +292,16 @@ class HVACLibraryRegistry:
         lengths = raw.get("connection_lengths", {}) or {}
         loss = raw.get("loss", {}) or {}
 
+        family = raw["family"]
+        if isinstance(family, str):
+            family = [family]
+
         return HVACTypeDef(
             id=raw["id"],
             label=raw.get("label", raw["id"]),
             category=raw["category"],
             topology=raw.get("topology", "generic"),
-            family=raw["family"],
+            family=family,
             profiles=list(raw.get("profiles", []) or []),
             constraints=dict(raw.get("constraints", {}) or {}),
             properties=props,

@@ -2,7 +2,7 @@
   "id": "oval_generic",
   "label": "Oval Generic",
   "category": "segment",
-  "family": "curved_segment",
+  "family": ["curved_segment"],
   "profiles": ["Oval"],
   "properties": [
     {

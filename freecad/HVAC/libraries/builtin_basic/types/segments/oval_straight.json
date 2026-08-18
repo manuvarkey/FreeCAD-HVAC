@@ -2,7 +2,7 @@
   "id": "oval_straight",
   "label": "Oval Straight",
   "category": "segment",
-  "family": "straight_segment",
+  "family": ["straight_segment"],
   "profiles": ["Oval"],
   "properties": [
     {

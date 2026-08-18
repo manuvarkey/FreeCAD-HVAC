@@ -2,7 +2,7 @@
   "id": "circular_generic",
   "label": "Circular Generic",
   "category": "segment",
-  "family": "curved_segment",
+  "family": ["curved_segment"],
   "profiles": ["Circular"],
   "properties": [
     {

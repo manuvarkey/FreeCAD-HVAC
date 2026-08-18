@@ -2,7 +2,7 @@
   "id": "rectangular_straight",
   "label": "Rectangular Straight",
   "category": "segment",
-  "family": "straight_segment",
+  "family": ["straight_segment"],
   "profiles": ["Rectangular"],
   "properties": [
     {

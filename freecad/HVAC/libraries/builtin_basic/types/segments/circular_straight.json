@@ -2,7 +2,7 @@
   "id": "circular_straight",
   "label": "Circular Straight",
   "category": "segment",
-  "family": "straight_segment",
+  "family": ["straight_segment"],
   "profiles": ["Circular"],
   "properties": [
     {

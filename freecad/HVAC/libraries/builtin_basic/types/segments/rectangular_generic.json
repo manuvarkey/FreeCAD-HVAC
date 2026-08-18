@@ -2,7 +2,7 @@
   "id": "rectangular_generic",
   "label": "Rectangular Generic",
   "category": "segment",
-  "family": "curved_segment",
+  "family": ["curved_segment"],
   "profiles": ["Rectangular"],
   "properties": [
     {
