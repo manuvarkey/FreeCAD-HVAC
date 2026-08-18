@@ -56,18 +56,7 @@
     }
   ],
   "generator": {
-    "type": "template",
-    "file": "models/rectangular_straight.FCStd",
-    "params": {
-      "Width": "Duct_Width",
-      "Height": "Duct_Height",
-      "Thickness": "Duct_SheetThickness",
-      "FlangeHeight": "Flange_Height",
-      "FlangeThickness": "Flange_Thickness",
-      "Length": "Duct_Length",
-      "ShowFlange1": "Flange_Flange1",
-      "ShowFlange2": "Flange_Flange2"
-    },
-    "result_object": "ResultObject"
+    "module": "segments",
+    "function": "build_rectangular_straight_fcstd"
   }
 }

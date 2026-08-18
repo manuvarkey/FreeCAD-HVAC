@@ -22,6 +22,7 @@
 ################################################################################
 
 import math
+import os
 import FreeCAD
 import Part
 
@@ -1069,3 +1070,24 @@ class HVACLibraryAPI:
             return out.removeSplitter()
         except Exception:
             return out
+
+    # ------------------------------------------------------------------
+    # External geometry sources
+    # ------------------------------------------------------------------
+    @staticmethod
+    def shape_from_openscad(scad_path, params=None, timeout=60):
+        from . import openscad_shapes
+        return openscad_shapes.build_shape_from_openscad(scad_path, params, timeout)
+
+    @staticmethod
+    def shape_from_fcstd(fcstd_path, context, params=None, result_object="Result",
+                          port_names=None, tol_mm=0.5, tol_deg=0.5):
+        from . import template_shapes
+        return template_shapes.build_shape_from_template(
+            fcstd_path, context, params, result_object, port_names, tol_mm, tol_deg
+        )
+
+    @staticmethod
+    def resolve_library_file(context, relative_path):
+        lib = hvaclib.HVACLibraryService.get_hvac_library_registry().get_library(context["library_id"])
+        return os.path.normpath(os.path.join(lib.root_path, relative_path))

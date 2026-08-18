@@ -1,0 +1,27 @@
+{
+  "id": "circular_straight_openscad",
+  "label": "Circular Straight (OpenSCAD test)",
+  "category": "segment",
+  "family": ["straight_segment"],
+  "profiles": ["Circular"],
+  "properties": [
+    {
+      "name": "Diameter",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Circular duct diameter",
+      "default": 100.0
+    },
+    {
+      "name": "Thickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Sheet metal thickness",
+      "default": 0.8
+    }
+  ],
+  "generator": {
+    "module": "segments",
+    "function": "build_circular_straight_openscad"
+  }
+}
