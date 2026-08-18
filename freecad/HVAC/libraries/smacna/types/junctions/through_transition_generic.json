@@ -3,7 +3,7 @@
   "label": "Transition - Generic",
   "category": "junction",
   "topology": "through",
-  "family": ["transition"],
+  "family": ["through.straight", "through.offset"],
   "profiles": ["Circular", "Rectangular", "Oval"],
   "constraints": {
     "degree": 2

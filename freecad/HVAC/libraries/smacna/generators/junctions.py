@@ -192,8 +192,26 @@ def build_manifold_marker(context):
 
 # --------------------------------------------------------------------------
 # Generic geometric helpers
-# --------------------------------------------------------------------------    
+# --------------------------------------------------------------------------
 
+
+def build_through_generic(context):
+    """
+    Generic through-topology junction: dispatches to build_elbow for a bend
+    family or build_transition for a straight/offset family, based on the
+    object's own classified Family -- lets one type adapt its shape as the
+    duct is dragged and its classification changes, instead of requiring the
+    user to manually reassign between through_elbow_generic/through_
+    transition_generic.
+    """
+    family = context.get("family", None)
+    if family:
+        if family in ["through.bend", "through.bend.3d", "through.bend_90", "through.bend_90.3d"]:
+            return build_elbow(context)
+        elif family in ["through.straight", "through.offset"]:
+            return build_transition(context)
+
+    return build_terminal_marker(context)
 
 
 # --------------------------------------------------------------------------

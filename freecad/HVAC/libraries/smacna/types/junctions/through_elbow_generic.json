@@ -3,7 +3,7 @@
   "label": "Elbow - Generic",
   "category": "junction",
   "topology": "through",
-  "family": ["elbow"],
+  "family": ["through.bend", "through.bend.3d", "through.bend_90", "through.bend_90.3d"],
   "profiles": ["Circular", "Rectangular", "Oval"],
   "constraints": {
     "degree": 2

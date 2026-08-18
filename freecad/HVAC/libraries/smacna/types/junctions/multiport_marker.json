@@ -3,7 +3,7 @@
   "label": "Multiport - Marker",
   "category": "junction",
   "topology": "multiport",
-  "family": ["multiport"],
+  "family": ["multiport.multiport", "multiport.multiport.3d"],
   "profiles": ["Generic"],
   "constraints": {
     "degree_min": 5

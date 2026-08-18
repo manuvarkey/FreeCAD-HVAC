@@ -3,7 +3,7 @@
   "label": "Through - Marker",
   "category": "junction",
   "topology": "through",
-  "family": ["through"],
+  "family": ["through.straight", "through.offset", "through.bend", "through.bend.3d", "through.bend_90", "through.bend_90.3d"],
   "profiles": ["Generic"],
   "constraints": {
     "degree": 2

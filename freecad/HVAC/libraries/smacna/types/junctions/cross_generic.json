@@ -3,7 +3,7 @@
   "label": "Cross - Generic",
   "category": "junction",
   "topology": "cross",
-  "family": ["cross"],
+  "family": ["cross.cross", "cross.cross.3d", "cross.double_wye", "cross.double_wye.3d", "cross.generic"],
   "profiles": ["Circular", "Rectangular", "Oval"],
   "constraints": {
     "degree": 4

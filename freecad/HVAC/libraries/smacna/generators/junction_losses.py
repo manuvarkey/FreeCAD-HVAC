@@ -48,8 +48,11 @@ than one outlet, which has no single trunk to decompose against).
 
 
 def loss_through_generic(context):
-    # No "through_generic" type is currently wired up in this library
-    # (unlike builtin_basic), but kept for parity/reuse if one is added.
+    # This generic "through" type covers straight/offset/bend families in one
+    # type (unlike the more specific through_elbow_generic/through_transition_
+    # generic), so it may be a bend, an area change, or both -- try the elbow
+    # (CenterlineRadius-driven) reading first, then fall back to the
+    # transition (area-change) reading.
     api = context["hvac_api"]
     result = api.elbow_loss(context)
     if result is not None:
