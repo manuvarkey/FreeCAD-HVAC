@@ -162,7 +162,7 @@ def build_diffuser_generic(context):
 
     return {
         "shape": shape,
-        "connection_lengths": api.build_trim_rec_from_context_uniform(context, 0.0),
+        "connection_lengths": api.build_trim_rec_from_context_uniform(context, stub_length),
     }
 
 
