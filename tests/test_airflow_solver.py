@@ -251,12 +251,12 @@ def test_terminal_component_loss_wired_contributes_to_connecting_segment(monkeyp
 
     class _DiffuserRegistry:
         def resolve_type(self, library_id, type_id):
-            if type_id in ("branch_tee_generic", "diffuser_generic"):
+            if type_id in ("branch_tee_generic", "end_diffuser_generic"):
                 return _FakeTypeDef()
             return None
 
         def call_loss(self, library_id, type_def, context):
-            if context["type_id"] == "diffuser_generic":
+            if context["type_id"] == "end_diffuser_generic":
                 return {"B": 0.8}
             return tee_k
 
@@ -267,7 +267,7 @@ def test_terminal_component_loss_wired_contributes_to_connecting_segment(monkeyp
     )
 
     net, segment_map, junction_map = _base_tree()
-    junction_map["N3"].TypeId = "diffuser_generic"  # J3 is a sink terminal (inlet port)
+    junction_map["N3"].TypeId = "end_diffuser_generic"  # J3 is a sink terminal (inlet port)
 
     result = AirflowSolver(net).solve()
 

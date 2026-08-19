@@ -61,7 +61,7 @@ def test_samples_library_holds_the_fcstd_and_static_diffuser_samples():
     assert rect.generator_function == "build_rectangular_straight_fcstd"
     assert os.path.isfile(os.path.join(samples.root_path, "models", "rectangular_straight.FCStd"))
 
-    diffuser = samples.get_type("static_diffuser_250")
+    diffuser = samples.get_type("end_diffuser_static")
     assert diffuser is not None
     assert diffuser.geometry.backend == "static"
     assert os.path.isfile(os.path.join(samples.root_path, diffuser.geometry.descriptor))

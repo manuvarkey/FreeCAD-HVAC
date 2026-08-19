@@ -1,10 +1,16 @@
 {
-  "id": "vav_generic",
+  "id": "through_vav_generic",
   "label": "VAV Box - Generic",
   "category": "junction",
   "topology": "through",
-  "family": ["through.straight.vav"],
-  "profiles": ["Circular", "Rectangular", "Oval"],
+  "family": [
+    "through.straight.vav"
+  ],
+  "profiles": [
+    "Circular",
+    "Rectangular",
+    "Oval"
+  ],
   "constraints": {
     "degree": 2
   },

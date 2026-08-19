@@ -1,10 +1,16 @@
 {
-  "id": "damper_generic",
+  "id": "through_damper_generic",
   "label": "Damper - Generic",
   "category": "junction",
   "topology": "through",
-  "family": ["through.straight.damper"],
-  "profiles": ["Circular", "Rectangular", "Oval"],
+  "family": [
+    "through.straight.damper"
+  ],
+  "profiles": [
+    "Circular",
+    "Rectangular",
+    "Oval"
+  ],
   "constraints": {
     "degree": 2
   },

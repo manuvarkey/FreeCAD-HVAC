@@ -1,10 +1,17 @@
 {
-  "id": "diffuser_generic",
-  "label": "Diffuser / Grille / Register - Generic",
+  "id": "end_fan_source_generic",
+  "label": "AHU / Fan Connection - Generic",
   "category": "junction",
   "topology": "end",
-  "family": ["end.terminal.diffuser", "end.terminal.grille", "end.terminal.register"],
-  "profiles": ["Circular", "Rectangular", "Oval"],
+  "family": [
+    "end.terminal.fan",
+    "end.terminal.ahu"
+  ],
+  "profiles": [
+    "Circular",
+    "Rectangular",
+    "Oval"
+  ],
   "constraints": {
     "degree": 1
   },
@@ -13,15 +20,15 @@
       "name": "NeckSize",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Diffuser/grille/register neck (collar) diameter",
+      "description": "AHU/fan discharge or return connection diameter",
       "default": 200.0
     },
     {
       "name": "LossCoefficient",
       "prop_type": "App::PropertyFloat",
       "group": "Parameters",
-      "description": "Pressure-loss coefficient K, referenced to velocity at the neck",
-      "default": 1.0
+      "description": "Pressure-loss coefficient K, referenced to velocity at the neck (0 = no loss modeled at this connection; the fan's own required static pressure is read from the critical-path result instead)",
+      "default": 0.0
     }
   ],
   "generator": {

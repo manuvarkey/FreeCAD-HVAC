@@ -82,17 +82,60 @@ These components load and organize the available HVAC definitions used by the mo
 
 Duct segments and junctions are defined in the library using **JSON files**. Shape generation is handled using shape generation functions specified along with element definition. This keeps the system modular and extensible. New profiles, fitting types, and parameters can be added through library data instead of hard-coding everything in the core logic.
 
+Three shipped libraries: `builtin_basic` (minimal generic types), `smacna`
+(SMACNA-based sheet-metal types, the ones meant for day-to-day modeling), and
+`samples` (reference-only examples of each geometry backend). For the
+directory layout, `library.json`/type-def JSON schema, and the junction
+naming convention (`topology_family_sub_classification`), see
+[`freecad/HVAC/libraries/README.md`](freecad/HVAC/libraries/README.md). For
+the three ways a type can produce geometry -- PartScript, static BREP/STEP,
+and the legacy generator function (including its use as an FCStd-template
+loader) -- see [`freecad/HVAC/libraries/samples/README.md`](freecad/HVAC/libraries/samples/README.md).
+
 ## Design goals
 
 
 - [x] Duct routing module (may use the same module or reuse components for piping also).
 - [ ] Detailing of ducts and fittings for rectangular/ circular/ oval ducts.
 - [ ] Add BIM data
-- [ ] Standard library of commonly used air side HVAC components like Diffusers, grills, registers, dampers, intake and exhaust accessories, VAV units, AHUs etc.
-- [ ] Pressure drop calculation based on terminal flow rates and static pressure calculation for nodes.
-- [ ] Automatic sizing module based on constant friction drop, constant velocity, static regain methods.
+- [x] Standard library of commonly used air side HVAC components like Diffusers, grills, registers, dampers, intake and exhaust accessories, VAV units, AHUs etc.
+- [x] Pressure drop calculation based on terminal flow rates and static pressure calculation for nodes.
+- [x] Automatic sizing module based on constant friction drop, constant velocity, static regain methods.
 - [ ] Add additional duct classes (custom profile ducts) and detailing like insulation, duct supports, flanges etc.
 - [ ] Add support for defining piping.
+
+### 6. Airflow (pressure drop) calculation
+
+`HVAC_CalculateAirflow` runs `AirflowSolver` over a `DuctNetwork`. Flow
+distribution across the network's balanced sub-trees is solved first by
+`FlowNetwork.solve_flow_components` (terminal design flow rates + mass
+conservation). For each segment, `AirflowSolver` then computes velocity,
+Reynolds number, and friction loss (Darcy-Weisbach with the Altshul-Tsal
+friction factor from its actual duct size), computes each junction's
+fitting/dynamic loss coefficient (pluggable per library type via
+`loss_module`/`loss_function`, using SMACNA-based coefficients where
+defined, with a generic fallback), and propagates static pressure outward
+from each sub-tree's balancing terminal (0 Pa reference). Degree-1 terminals
+(diffusers, grilles, intakes, ...) contribute their own component loss too.
+Results are written back onto the generated segments/junctions and shown in
+a results panel.
+
+### 7. Duct sizing
+
+`HVAC_SizeDucts` runs `DuctSizer` over the same flow distribution/boundary
+conditions as `AirflowSolver`, solving for duct size instead of pressure
+drop, per the network's `SizingMethod`:
+
+- **Constant velocity** and **constant friction rate** size each segment
+  independently from its own flow rate.
+- **Static regain** sizes sections in sequence outward from the balancing
+  terminal (each section's target depends on its already-solved parent's
+  velocity), seeded by the network's target velocity.
+
+A segment can override the network's method locally (a fixed `Velocity`, or
+a `RectangularSizingMode`/`TargetAspectRatio` for converting a sized area to
+rectangular dimensions); sizing runs as a preview/apply panel so results can
+be reviewed before committing to the model.
 
 ## Status
 
@@ -103,5 +146,7 @@ Basic duct creation functionality is now reasonably in place. The project alread
 - generating duct segments
 - generating junction/fitting objects
 - organizing library-based element definitions
+- calculating airflow pressure drop across a network (`AirflowSolver`)
+- automatic duct sizing by constant velocity, constant friction rate, or static regain (`DuctSizer`)
 
 This provides a solid base for further development, including richer fitting logic, validation tools, and future analysis capabilities.

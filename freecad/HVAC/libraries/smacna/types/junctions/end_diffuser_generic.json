@@ -1,10 +1,18 @@
 {
-  "id": "intake_exhaust_generic",
-  "label": "Intake / Exhaust Louver - Generic",
+  "id": "end_diffuser_generic",
+  "label": "Diffuser / Grille / Register - Generic",
   "category": "junction",
   "topology": "end",
-  "family": ["end.terminal.louver", "end.terminal.hood"],
-  "profiles": ["Circular", "Rectangular", "Oval"],
+  "family": [
+    "end.terminal.diffuser",
+    "end.terminal.grille",
+    "end.terminal.register"
+  ],
+  "profiles": [
+    "Circular",
+    "Rectangular",
+    "Oval"
+  ],
   "constraints": {
     "degree": 1
   },
@@ -13,15 +21,15 @@
       "name": "NeckSize",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Louver/hood neck (collar) diameter",
+      "description": "Diffuser/grille/register neck (collar) diameter",
       "default": 200.0
     },
     {
       "name": "LossCoefficient",
       "prop_type": "App::PropertyFloat",
       "group": "Parameters",
-      "description": "Pressure-loss coefficient K, referenced to velocity at the neck (louvers/hoods are typically more restrictive than diffusers, e.g. bird screens/blades)",
-      "default": 2.0
+      "description": "Pressure-loss coefficient K, referenced to velocity at the neck",
+      "default": 1.0
     }
   ],
   "generator": {
