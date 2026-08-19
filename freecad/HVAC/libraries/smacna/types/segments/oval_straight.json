@@ -18,10 +18,17 @@
       "group": "Dimensions",
       "description": "Oval duct overall height",
       "default": 100.0
+    },
+    {
+      "name": "Thickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Sheet metal thickness",
+      "default": 0.8
     }
   ],
-  "generator": {
-    "module": "segments",
-    "function": "build_oval_straight"
+  "geometry": {
+    "backend": "partscript",
+    "file": "models/oval_straight.py"
   }
 }

@@ -21,31 +21,12 @@
 #                                                                              #
 ################################################################################
 
-import FreeCAD
-
-
-def build_rectangular_straight(context):
-    api = context["hvac_api"]
-    
-    sp = context["start_point"]
-    ep = context["end_point"]
-    props = dict(context.get("properties", {}) or {})
-
-    width = float(props.get("Width", 100.0))
-    height = float(props.get("Height", 100.0))
-    profile_x_axis = context.get("profile_x_axis")
-
-    shape = api.make_straight_shape(
-        start_point=sp,
-        end_point=ep,
-        profile="Rectangular",
-        section_params={
-            "Width": width,
-            "Height": height,
-        },
-        profile_x_axis=profile_x_axis,
-    )
-    return {"shape": shape}
+"""
+Sample generator functions demonstrating the FCStd-template geometry
+primitive (HVACLibraryAPI.shape_from_fcstd) -- kept as a reference/sample
+alongside the "samples" library's static-BREP example (static_diffuser),
+separate from the PartScript-backed types the smacna library actually ships.
+"""
 
 
 def build_rectangular_straight_fcstd(context):
@@ -89,53 +70,6 @@ def build_rectangular_straight_fcstd(context):
             "Flange_Flange2": show_flange2,
         },
         result_object="ResultObject",
-    )
-
-    return {"shape": shape}
-
-
-def build_circular_straight(context):
-    api = context["hvac_api"]
-
-    sp = context["start_point"]
-    ep = context["end_point"]
-    props = dict(context.get("properties", {}) or {})
-
-    diameter = float(props.get("Diameter", 100.0))
-    profile_x_axis = context.get("profile_x_axis")
-
-    shape = api.make_straight_shape(
-        start_point=sp,
-        end_point=ep,
-        profile="Circular",
-        section_params={
-            "Diameter": diameter,
-        },
-        profile_x_axis=profile_x_axis,
-    )
-    return {"shape": shape}
-
-
-def build_oval_straight(context):
-    api = context["hvac_api"]
-    
-    sp = context["start_point"]
-    ep = context["end_point"]
-
-    props = dict(context.get("properties", {}) or {})
-    width = float(props.get("Width", 200.0))
-    height = float(props.get("Height", 100.0))
-    profile_x_axis = context.get("profile_x_axis")
-
-    shape = api.make_straight_shape(
-        start_point=sp,
-        end_point=ep,
-        profile="Oval",
-        section_params={
-            "Width": width,
-            "Height": height,
-        },
-        profile_x_axis=profile_x_axis,
     )
 
     return {"shape": shape}

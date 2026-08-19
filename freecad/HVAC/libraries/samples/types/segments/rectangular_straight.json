@@ -55,8 +55,8 @@
       "default": true
     }
   ],
-  "geometry": {
-    "backend": "partscript",
-    "file": "models/rectangular_straight.py"
+  "generator": {
+    "module": "segments",
+    "function": "build_rectangular_straight_fcstd"
   }
 }
