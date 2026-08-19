@@ -10,11 +10,14 @@
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
       "description": "Circular duct diameter",
-      "default": 100.0
+      "default": 100.0,
+      "validation": {
+        "exclusiveMinimum": 0.0
+      }
     }
   ],
-  "generator": {
-    "module": "segments",
-    "function": "build_circular_straight"
+  "geometry": {
+    "backend": "partscript",
+    "file": "models/circular_straight.py"
   }
 }

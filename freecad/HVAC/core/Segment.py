@@ -86,13 +86,8 @@ class DuctSegment:
                     "Unknown segment type '{}' in library '{}'".format(type_id, library_id)
                 )
     
-            props = {}
-            for pdef in getattr(type_def, "properties", []) or []:
-                if hasattr(obj, pdef.name):
-                    props[pdef.name] = getattr(obj, pdef.name)
-                else:
-                    props[pdef.name] = getattr(pdef, "default", None)
-                    
+            params = reg.resolve_params(type_def, obj=obj)
+
             profile = getattr(obj, "Profile", "")
             attachment = getattr(obj, "Attachment", "Center")
             user_offset = getattr(obj, "Offset", FreeCAD.Vector(0, 0, 0))
@@ -109,7 +104,7 @@ class DuctSegment:
                     trim_start=getattr(obj, "TrimStart", 0.0),
                     trim_end=getattr(obj, "TrimEnd", 0.0),
                     profile=profile,
-                    section_params=props,
+                    section_params=params,
                     attachment=attachment,
                     user_offset=user_offset,
                     profile_x_axis=profile_x_axis,
@@ -129,7 +124,7 @@ class DuctSegment:
                 "obj": obj,
                 "start_point": start_point,
                 "end_point": end_point,
-                "properties": props,
+                "params": params,
                 "family": getattr(obj, "Family", ""),
                 "profile": getattr(obj, "Profile", ""),
                 "profile_x_axis": getattr(obj, "ProfileXAxis", None),
@@ -144,7 +139,7 @@ class DuctSegment:
                 "end_direction": end_dir,
             }
     
-            result = reg.call_generator(library_id, type_def, context)
+            result = reg.build_geometry(library_id, type_def, context)
             shape = result.get("shape", None)
             if shape is not None:
                 obj.Shape = shape

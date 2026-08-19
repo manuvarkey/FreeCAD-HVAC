@@ -25,7 +25,7 @@
 Loads a shape from a parametric FreeCAD (.FCStd) template -- a shape-
 building primitive a generator function calls directly (via
 HVACLibraryAPI.shape_from_fcstd), the same way it already calls
-HVACLibraryAPI.make_straight_shape/make_loft/shape_from_openscad/etc. NOT a
+HVACLibraryAPI.make_straight_shape/make_loft/etc. NOT a
 declarative JSON-driven dispatch: the generator function decides which
 .FCStd file to use (so it can pick between several based on its own
 conditions -- size range, family, construction class, ...), builds the

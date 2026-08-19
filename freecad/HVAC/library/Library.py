@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 import FreeCAD
 
 from .library_api import HVACLibraryAPI
+from . import validation
 
 
 @dataclass
@@ -41,6 +42,15 @@ class HVACPropertyDef:
     description: str = ""
     default: object = None
     editor_mode: int = 0
+    required: bool = True
+    validation: dict = field(default_factory=dict)
+
+
+@dataclass
+class HVACGeometryDef:
+    backend: str = ""
+    file: str = ""
+    descriptor: str = ""
 
 
 @dataclass
@@ -53,6 +63,7 @@ class HVACTypeDef:
     profiles: list[str] = field(default_factory=list)
     constraints: dict = field(default_factory=dict)
     properties: list[HVACPropertyDef] = field(default_factory=list)
+    geometry: HVACGeometryDef = field(default_factory=HVACGeometryDef)
     generator_module: str = ""
     generator_function: str = ""
     lengths_module: str = ""
@@ -66,7 +77,7 @@ class HVACLibrary:
     id: str
     label: str
     root_path: str
-    generators_package: str
+    generators_package: str = ""
     types_by_id: dict = field(default_factory=dict)
 
     def add_type(self, type_def: HVACTypeDef):
@@ -150,16 +161,73 @@ class HVACLibraryRegistry:
         lib = self.get_library(library_id)
         if lib is None:
             raise ValueError("Unknown HVAC library '{}'".format(library_id))
+        if not lib.generators_package:
+            raise ValueError("HVAC library '{}' has no generators_package".format(library_id))
         full_module = "{}.{}".format(lib.generators_package, module_name)
         return importlib.import_module(full_module)
 
-    def call_generator(self, library_id: str, type_def: HVACTypeDef, context: dict):
-        context["hvac_api"] = HVACLibraryAPI
-        context["hvac_api_version"] = HVACLibraryAPI.API_VERSION
+    def resolve_library_file(self, library_id: str, relative_path: str):
+        lib = self.get_library(library_id)
+        if lib is None:
+            raise ValueError("Unknown HVAC library '{}'".format(library_id))
+        root = os.path.realpath(lib.root_path)
+        path = os.path.realpath(os.path.join(root, relative_path))
+        if os.path.commonpath([root, path]) != root:
+            raise ValueError("Library path escapes library root: '{}'".format(relative_path))
+        return path
 
-        module = self.import_generator(library_id, type_def.generator_module)
-        func = getattr(module, type_def.generator_function)
-        return func(context)
+    def resolve_params(self, type_def: HVACTypeDef, obj=None, supplied=None):
+        return validation.resolve_params(type_def, obj=obj, supplied=supplied)
+
+    def _prepare_geometry_context(self, type_def: HVACTypeDef, context: dict):
+        prepared = dict(context or {})
+        prepared["hvac_api"] = HVACLibraryAPI
+        prepared["hvac_api_version"] = HVACLibraryAPI.API_VERSION
+
+        params = prepared.get("params")
+        if params is None:
+            params = self.resolve_params(
+                type_def,
+                obj=prepared.get("obj"),
+                supplied=prepared.get("properties"),
+            )
+        prepared["params"] = dict(params or {})
+
+        # Backward compatibility for existing generators/loss helpers.
+        prepared["properties"] = prepared["params"]
+        validation.validate_context(type_def, prepared)
+        return prepared
+
+    def build_geometry(self, library_id: str, type_def: HVACTypeDef, context: dict):
+        context = self._prepare_geometry_context(type_def, context)
+        geometry = getattr(type_def, "geometry", None)
+        backend = str(getattr(geometry, "backend", "") or "").lower()
+
+        if backend == "partscript":
+            from . import partscript_shapes
+            script_path = self.resolve_library_file(library_id, geometry.file)
+            return partscript_shapes.execute_partscript(script_path, context)
+
+        if backend == "static":
+            from . import static_shapes
+            descriptor_path = self.resolve_library_file(library_id, geometry.descriptor)
+            return static_shapes.build_static_geometry(descriptor_path, context)
+
+        if backend:
+            raise ValueError(
+                "Type '{}' uses unsupported geometry backend '{}'".format(type_def.id, backend)
+            )
+
+        # Legacy generator backend.
+        if type_def.generator_module and type_def.generator_function:
+            module = self.import_generator(library_id, type_def.generator_module)
+            func = getattr(module, type_def.generator_function)
+            return func(context)
+
+        raise ValueError("Type '{}' has no geometry definition".format(type_def.id))
+
+    def call_generator(self, library_id: str, type_def: HVACTypeDef, context: dict):
+        return self.build_geometry(library_id, type_def, context)
 
     def call_loss(self, library_id: str, type_def: HVACTypeDef, context: dict):
         """
@@ -243,7 +311,7 @@ class HVACLibraryRegistry:
 
         lib_id = manifest["id"]
         label = manifest.get("label", lib_id)
-        generators_package = manifest["generators_package"]
+        generators_package = manifest.get("generators_package", "")
         type_roots = manifest.get("type_roots", ["types"])
 
         library = HVACLibrary(
@@ -285,12 +353,20 @@ class HVACLibraryRegistry:
                     description=p.get("description", ""),
                     default=p.get("default", None),
                     editor_mode=int(p.get("editor_mode", 0)),
+                    required=bool(p.get("required", True)),
+                    validation=dict(p.get("validation", {}) or {}),
                 )
             )
 
         gen = raw.get("generator", {}) or {}
         lengths = raw.get("connection_lengths", {}) or {}
         loss = raw.get("loss", {}) or {}
+        geometry_raw = raw.get("geometry", {}) or {}
+        geometry = HVACGeometryDef(
+            backend=geometry_raw.get("backend", ""),
+            file=geometry_raw.get("file", ""),
+            descriptor=geometry_raw.get("descriptor", ""),
+        )
 
         family = raw["family"]
         if isinstance(family, str):
@@ -305,6 +381,7 @@ class HVACLibraryRegistry:
             profiles=list(raw.get("profiles", []) or []),
             constraints=dict(raw.get("constraints", {}) or {}),
             properties=props,
+            geometry=geometry,
             generator_module=gen.get("module", ""),
             generator_function=gen.get("function", ""),
             lengths_module=lengths.get("module", ""),

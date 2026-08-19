@@ -94,12 +94,7 @@ class DuctJunction:
                     )
                 )
 
-            props = {}
-            for pdef in getattr(type_def, "properties", []) or []:
-                if hasattr(obj, pdef.name):
-                    props[pdef.name] = getattr(obj, pdef.name)
-                else:
-                    props[pdef.name] = getattr(pdef, "default", None)
+            params = reg.resolve_params(type_def, obj=obj)
 
             connected_ports = []
             raw_analysis = getattr(obj, "AnalysisJson", "") or "{}"
@@ -112,14 +107,15 @@ class DuctJunction:
             context = {
                 "obj": obj,
                 "center_point": center_point,
-                "properties": props,
+                "params": params,
                 "connected_ports": connected_ports,
                 "family": getattr(obj, "Family", ""),
+                "topology": getattr(obj, "Topology", ""),
                 "type_id": type_id,
                 "library_id": library_id,
             }
 
-            result = reg.call_generator(library_id, type_def, context)
+            result = reg.build_geometry(library_id, type_def, context)
             shape = result.get("shape", None)
             lengths = result.get("connection_lengths", [])
 

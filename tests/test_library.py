@@ -1,4 +1,6 @@
 import json
+import sys
+import types
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 
@@ -74,6 +76,49 @@ def test_load_type_def_file_normalizes_string_family_to_list(tmp_path):
 
     lib.add_type(type_def)
     assert lib.list_profiles(category="segment", family="straight_segment") == ["Circular"]
+
+
+def test_build_geometry_dispatches_legacy_generator_and_aliases_params_as_properties(monkeypatch):
+    # Regression for the Library.py/Segment.py/Junction.py rewiring: every
+    # existing generator function (smacna/builtin_basic) still reads
+    # context["properties"], not context["params"] -- build_geometry must
+    # keep aliasing the resolved params dict onto "properties" for the
+    # legacy generator_module/generator_function backend.
+    fake_module = types.ModuleType("fake_hvac_lib_pkg.junctions")
+    captured = {}
+
+    def build_elbow(context):
+        captured["properties"] = context["properties"]
+        captured["params"] = context["params"]
+        return {"shape": "SHAPE"}
+
+    fake_module.build_elbow = build_elbow
+    sys.modules["fake_hvac_lib_pkg.junctions"] = fake_module
+    try:
+        lib = HVACLibrary(
+            id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg"
+        )
+        type_def = HVACTypeDef(
+            id="elbow",
+            label="Elbow",
+            category="other",
+            topology="generic",
+            family=["through.elbow"],
+            generator_module="junctions",
+            generator_function="build_elbow",
+        )
+        lib.add_type(type_def)
+
+        reg = HVACLibraryRegistry()
+        reg.register_library(lib)
+
+        result = reg.build_geometry("lib", type_def, {"params": {"Diameter": 100.0}})
+
+        assert result == {"shape": "SHAPE"}
+        assert captured["params"] == {"Diameter": 100.0}
+        assert captured["properties"] is captured["params"]
+    finally:
+        sys.modules.pop("fake_hvac_lib_pkg.junctions", None)
 
 
 def test_load_type_def_file_parses_generator_module_and_function(tmp_path):

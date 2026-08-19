@@ -116,46 +116,6 @@ def build_circular_straight(context):
     return {"shape": shape}
 
 
-def build_circular_straight_openscad(context):
-    """
-    OpenSCAD-backed circular straight duct -- test type exercising
-    HVACLibraryAPI.shape_from_openscad (see openscad_shapes.py). The .scad
-    model (models/circular_straight.scad) is authored in a canonical local
-    frame -- origin at the start port, +Z along the duct axis toward the
-    end port -- and placed into the real network with the same
-    "frame from direction + origin" transform every other generator uses,
-    via api.make_profile_frame.
-    """
-    api = context["hvac_api"]
-
-    sp = api.vec(context["start_point"])
-    ep = api.vec(context["end_point"])
-    props = dict(context.get("properties", {}) or {})
-
-    diameter = float(props.get("Diameter", 100.0) or 100.0)
-    thickness = float(props.get("Thickness", 0.8) or 0.8)
-    length = (ep - sp).Length
-    if length <= 1e-6:
-        raise ValueError("Circular straight (OpenSCAD) requires non-zero length")
-
-    scad_path = api.resolve_library_file(context, "models/circular_straight.scad")
-    shape = api.shape_from_openscad(
-        scad_path,
-        params={
-            "diameter": diameter,
-            "thickness": thickness,
-            "length": length,
-        },
-    )
-
-    direction = api.unit(ep - sp)
-    profile_x_axis = context.get("profile_x_axis")
-    placement, _x, _y, _z = api.make_profile_frame(direction, preferred_x=profile_x_axis, origin=sp)
-    shape.transformShape(placement.toMatrix(), True, False)
-
-    return {"shape": shape}
-
-
 def build_oval_straight(context):
     api = context["hvac_api"]
     
