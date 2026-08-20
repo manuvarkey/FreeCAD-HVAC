@@ -14,74 +14,45 @@
   },
   "properties": [
     {
-      "name": "d_h_axis_02",
+      "name": "CenterlineRadius",
       "prop_type": "App::PropertyLength",
-      "group": "Side 2",
-      "description": "Horizontal offset of the outlet axis from the inlet axis (read-only -- as-connected)",
-      "default": 0.0,
-      "required": false,
-      "editor_mode": 1
-    },
-    {
-      "name": "d_v_axis_02",
-      "prop_type": "App::PropertyLength",
-      "group": "Side 2",
-      "description": "Vertical offset of the outlet axis from the inlet axis (read-only -- as-connected)",
-      "default": 0.0,
-      "required": false,
-      "editor_mode": 1
-    },
-    {
-      "name": "angle",
-      "prop_type": "App::PropertyAngle",
-      "group": "Bend geometry",
-      "description": "Bend (deflection) angle, e.g. 30/45/60/90 deg (read-only -- as-connected)",
-      "default": 0.0,
-      "required": false,
-      "editor_mode": 1
-    },
-    {
-      "name": "r_axis",
-      "prop_type": "App::PropertyLength",
-      "group": "Bend geometry",
-      "description": "Axis/centreline radius of the bend",
+      "group": "Dimensions",
+      "description": "Elbow centerline radius",
       "default": 300.0
     },
     {
-      "name": "thickness",
+      "name": "Thickness",
       "prop_type": "App::PropertyLength",
-      "group": "Construction",
+      "group": "Dimensions",
       "description": "Sheet metal thickness",
       "default": 0.8
     },
     {
-      "name": "flange_height",
+      "name": "FlangeHeight",
       "prop_type": "App::PropertyLength",
-      "group": "Flanges",
-      "description": "Flange projection/depth",
-      "default": 25.0,
-      "required": false
+      "group": "Dimensions",
+      "description": "Flange height",
+      "default": 25.0
     },
     {
-      "name": "flange_thickness",
+      "name": "FlangeThickness",
       "prop_type": "App::PropertyLength",
-      "group": "Flanges",
-      "description": "Flange material thickness",
-      "default": 1.0,
-      "required": false
+      "group": "Dimensions",
+      "description": "Flange thickness",
+      "default": 1.0
     },
     {
       "name": "ShowFlange1",
       "prop_type": "App::PropertyBool",
-      "group": "Flanges",
-      "description": "Include the flange at side 1 (inlet)",
+      "group": "Options",
+      "description": "Include the flange at port 1",
       "default": true
     },
     {
       "name": "ShowFlange2",
       "prop_type": "App::PropertyBool",
-      "group": "Flanges",
-      "description": "Include the flange at side 2 (outlet)",
+      "group": "Options",
+      "description": "Include the flange at port 2",
       "default": true
     }
   ],

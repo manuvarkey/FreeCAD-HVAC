@@ -1,10 +1,11 @@
 """
 Focused tests for the small DuctJunction framework hooks added to support
-reactive/read-only display properties (e.g. through_elbow_rectangular's
-angle/d_h_axis_02): applyTypeSchema honoring HVACPropertyDef.editor_mode,
-execute() applying a geometry backend's optional result['computed_properties'],
-and applyTypeSchema removing properties left over from a previously-selected
-type that the newly-selected type doesn't declare.
+reactive/read-only display properties (a geometry backend's optional
+result['computed_properties'], applied back onto a matching read-only
+object property): applyTypeSchema honoring HVACPropertyDef.editor_mode,
+execute() applying computed_properties, and applyTypeSchema removing
+properties left over from a previously-selected type that the newly-selected
+type doesn't declare.
 """
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs

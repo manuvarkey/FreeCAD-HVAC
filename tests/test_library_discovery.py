@@ -51,7 +51,7 @@ def test_oval_straight_has_no_flange_properties():
     assert not any(n.startswith("Flange") or n.startswith("ShowFlange") for n in names)
 
 
-def test_through_elbow_rectangular_uses_partscript_backend_and_reactive_properties():
+def test_through_elbow_rectangular_uses_partscript_backend():
     reg = _load_registry()
     type_def = reg._libraries["smacna"].get_type("through_elbow_rectangular")
     assert type_def is not None
@@ -60,12 +60,9 @@ def test_through_elbow_rectangular_uses_partscript_backend_and_reactive_properti
     assert os.path.isfile(os.path.join(reg._libraries["smacna"].root_path, type_def.geometry.file))
 
     by_name = {p.name: p for p in type_def.properties}
-    reactive_names = {"d_h_axis_02", "d_v_axis_02", "angle"}
-    input_names = {"r_axis", "thickness", "flange_height", "flange_thickness", "ShowFlange1", "ShowFlange2"}
-    assert reactive_names | input_names == set(by_name.keys())
+    input_names = {"CenterlineRadius", "Thickness", "FlangeHeight", "FlangeThickness", "ShowFlange1", "ShowFlange2"}
+    assert input_names == set(by_name.keys())
 
-    for name in reactive_names:
-        assert by_name[name].editor_mode == 1, name
     for name in input_names:
         assert by_name[name].editor_mode == 0, name
 

@@ -72,16 +72,16 @@ def generate(context):
     w0, h0 = api.port_width(port0), api.port_height(port0)
     w1, h1 = api.port_width(port1), api.port_height(port1)
 
-    thickness = float(params.get("thickness", 0.8) or 0.8)
-    flange_height = float(params.get("flange_height", 25.0) or 25.0)
-    flange_thickness = float(params.get("flange_thickness", 1.0) or 1.0)
+    thickness = float(params.get("Thickness", 0.8) or 0.8)
+    flange_height = float(params.get("FlangeHeight", 25.0) or 25.0)
+    flange_thickness = float(params.get("FlangeThickness", 1.0) or 1.0)
     show_flange1 = bool(params.get("ShowFlange1", True))
     show_flange2 = bool(params.get("ShowFlange2", True))
 
-    # r_axis is a genuine design choice (fabrication radius), not something
-    # dictated by the network -- kept as a plain user input, with the same
-    # "too tight for the duct size" floor as the generic elbow.
-    radius = float(params.get("r_axis", 0.0) or 0.0)
+    # CenterlineRadius is a genuine design choice (fabrication radius), not
+    # something dictated by the network -- kept as a plain user input, with
+    # the same "too tight for the duct size" floor as the generic elbow.
+    radius = float(params.get("CenterlineRadius", 0.0) or 0.0)
     size_hint = max(w0, h0, w1, h1, 1.0)
     if radius < size_hint / 2.0:
         radius = 0.6 * size_hint
@@ -142,19 +142,6 @@ def generate(context):
 
     shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
-    # Reactive "as-built" parameters: the bend angle and axis offset are
-    # dictated entirely by what's actually connected, not an independent
-    # user choice, so they're reported back as read-only display properties
-    # rather than read as an input (see through_elbow_rectangular.json's
-    # editor_mode=1 fields).
-    offset_vec = c2 - c1
-    _, x_axis0, y_axis0, _ = api.make_profile_frame(u0, api.port_profile_x_axis(port0))
-    computed_properties = {
-        "d_h_axis_02": offset_vec.dot(x_axis0),
-        "d_v_axis_02": offset_vec.dot(y_axis0),
-        "angle": math.degrees(math.pi - theta),
-    }
-
     return {
         "shape": shape,
         "connection_lengths": api.build_trim_rec_from_port_lengths(
@@ -163,5 +150,4 @@ def generate(context):
                 (port1, trim1),
             ]
         ),
-        "computed_properties": computed_properties,
     }

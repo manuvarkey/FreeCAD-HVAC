@@ -77,6 +77,56 @@ def _inset_port(api, port, thickness):
     out["section_params"] = new_params
     return out
 
+
+def _grown_section_params(api, port, delta):
+    """
+    Section params for `port`'s profile grown uniformly (on every side) by
+    `delta` -- the outer edge of a flange collar around the port's own duct
+    section. Inverse of `_inset_port`'s shrink.
+    """
+    profile = api.port_profile(port)
+    params = api.port_section_params(port)
+    delta = float(delta)
+
+    if profile == "Circular":
+        return dict(params, Diameter=float(params.get("Diameter", 0.0) or 0.0) + 2.0 * delta)
+    if profile in ("Rectangular", "Oval"):
+        return dict(
+            params,
+            Width=float(params.get("Width", 0.0) or 0.0) + 2.0 * delta,
+            Height=float(params.get("Height", 0.0) or 0.0) + 2.0 * delta,
+        )
+    raise ValueError("Unsupported profile '{}' for flange".format(profile))
+
+
+def _make_flange(api, port, inward_direction, flange_thickness, flange_height):
+    """
+    Flat flange collar at `port`'s own section (position + profile),
+    extruded `flange_thickness` along `inward_direction` -- into the
+    fitting's own body, overlapping its wall, matching the straight-duct/
+    PartScript-elbow flange convention.
+    """
+    profile = api.port_profile(port)
+    center = api.port_position(port)
+    x_axis = api.port_profile_x_axis(port)
+
+    outer_face = api.make_section_face(
+        profile=profile,
+        section_params=_grown_section_params(api, port, flange_height),
+        center=center,
+        direction=inward_direction,
+        profile_x_axis=x_axis,
+    )
+    inner_face = api.make_section_face(
+        profile=profile,
+        section_params=api.port_section_params(port),
+        center=center,
+        direction=inward_direction,
+        profile_x_axis=x_axis,
+    )
+    extrusion = api.unit(inward_direction) * float(flange_thickness)
+    return outer_face.extrude(extrusion).cut(inner_face.extrude(extrusion))
+
 # --------------------------------------------------------------------------
 # Marker geometry
 # --------------------------------------------------------------------------
@@ -318,7 +368,23 @@ def build_elbow(context):
     inner_wire_2 = api.make_section_wire_from_port(inner_sweep_port_1)
     inner_shape = api.make_pipe_shell(path_wire, [inner_wire_1, inner_wire_2])
 
-    shape = outer_shape.cut(inner_shape)
+    parts = [outer_shape.cut(inner_shape)]
+
+    # Flanges are extruded inward from each tangent plane, into the elbow's
+    # own body (overlapping the wall). port_direction() points *away* from
+    # the junction, along the connected segment, so "into the elbow" from
+    # each tangent plane is -u0 / -u1, not +u0/+u1.
+    flange_height = float(props.get("FlangeHeight", 25.0) or 25.0)
+    flange_thickness = float(props.get("FlangeThickness", 1.0) or 1.0)
+    show_flange1 = bool(props.get("ShowFlange1", True))
+    show_flange2 = bool(props.get("ShowFlange2", True))
+
+    if show_flange1 and flange_height > 0.0 and flange_thickness > 0.0:
+        parts.append(_make_flange(api, sweep_port_0, u0 * -1.0, flange_thickness, flange_height))
+    if show_flange2 and flange_height > 0.0 and flange_thickness > 0.0:
+        parts.append(_make_flange(api, sweep_port_1, u1 * -1.0, flange_thickness, flange_height))
+
+    shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
     return {
         "shape": shape,
@@ -371,8 +437,35 @@ def build_transition(context):
     port2 = api.copy_port(ports[1], position=p2)
     wire1 = api.make_section_wire_from_port(port1)
     wire2 = api.make_section_wire_from_port(port2)
-    
-    shape = api.make_loft([wire1, wire2], solid=True, ruled=True)
+
+    outer_shape = api.make_loft([wire1, wire2], solid=True, ruled=True)
+
+    # Hollow sheet-metal wall: loft a second, uniformly-inset profile between
+    # the same two end planes and cut it from the outer loft. Schematic
+    # constant-inset approximation, matching the fidelity used for the elbow
+    # (see build_elbow above).
+    thickness = float(props.get("Thickness", 0.8) or 0.8)
+    inner_port1 = _inset_port(api, port1, thickness)
+    inner_port2 = _inset_port(api, port2, thickness)
+    inner_wire1 = api.make_section_wire_from_port(inner_port1)
+    inner_wire2 = api.make_section_wire_from_port(inner_port2)
+    inner_shape = api.make_loft([inner_wire1, inner_wire2], solid=True, ruled=True)
+
+    parts = [outer_shape.cut(inner_shape)]
+
+    # Flanges are extruded inward from each end plane, into the transition's
+    # own body (overlapping the wall) -- same convention as build_elbow.
+    flange_height = float(props.get("FlangeHeight", 25.0) or 25.0)
+    flange_thickness = float(props.get("FlangeThickness", 1.0) or 1.0)
+    show_flange1 = bool(props.get("ShowFlange1", True))
+    show_flange2 = bool(props.get("ShowFlange2", True))
+
+    if show_flange1 and flange_height > 0.0 and flange_thickness > 0.0:
+        parts.append(_make_flange(api, port1, u1 * -1.0, flange_thickness, flange_height))
+    if show_flange2 and flange_height > 0.0 and flange_thickness > 0.0:
+        parts.append(_make_flange(api, port2, u2 * -1.0, flange_thickness, flange_height))
+
+    shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
     return {
         "shape": shape,
