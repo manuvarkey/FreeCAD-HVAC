@@ -4,6 +4,10 @@
   "category": "segment",
   "family": ["curved_segment"],
   "profiles": ["Rectangular"],
+  "selection": {
+    "kind": "model",
+    "priority": 50
+  },
   "properties": [
     {
       "name": "Width",

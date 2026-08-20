@@ -5,6 +5,10 @@
   "topology": "multiport",
   "family": ["multiport.multiport", "multiport.multiport.3d"],
   "profiles": ["Circular", "Rectangular", "Oval"],
+  "selection": {
+    "kind": "model",
+    "priority": 50
+  },
   "constraints": {
     "degree_min": 5
   },

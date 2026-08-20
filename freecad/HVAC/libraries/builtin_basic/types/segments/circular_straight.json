@@ -4,6 +4,10 @@
   "category": "segment",
   "family": ["straight_segment"],
   "profiles": ["Circular"],
+  "selection": {
+    "kind": "model",
+    "priority": 50
+  },
   "properties": [
     {
       "name": "Diameter",

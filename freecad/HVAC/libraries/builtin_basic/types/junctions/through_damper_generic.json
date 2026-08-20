@@ -11,6 +11,10 @@
     "Rectangular",
     "Oval"
   ],
+  "selection": {
+    "kind": "model",
+    "priority": 50
+  },
   "constraints": {
     "degree": 2
   },

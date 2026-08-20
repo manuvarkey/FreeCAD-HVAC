@@ -5,6 +5,10 @@
   "topology": "branch",
   "family": ["branch.tee", "branch.lateral_tee", "branch.tee.3d", "branch.lateral_tee.3d"],
   "profiles": ["Circular", "Rectangular", "Oval"],
+  "selection": {
+    "kind": "model",
+    "priority": 50
+  },
   "constraints": {
     "degree": 3
   },

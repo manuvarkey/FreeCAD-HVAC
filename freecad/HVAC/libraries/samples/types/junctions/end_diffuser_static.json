@@ -9,6 +9,10 @@
   "profiles": [
     "Circular"
   ],
+  "selection": {
+    "kind": "model",
+    "priority": 50
+  },
   "constraints": {
     "degree": 1
   },

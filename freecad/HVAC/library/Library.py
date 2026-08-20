@@ -53,6 +53,32 @@ class HVACGeometryDef:
     descriptor: str = ""
 
 
+# Selection kinds a type descriptor may declare under "selection.kind".
+SELECTION_KIND_MODEL = "model"
+SELECTION_KIND_PLACEHOLDER = "placeholder"
+VALID_SELECTION_KINDS = {SELECTION_KIND_MODEL, SELECTION_KIND_PLACEHOLDER}
+
+
+@dataclass
+class HVACSelectionDef:
+    """
+    Registry-driven selection metadata for a type descriptor.
+
+    kind:
+        "model"       -- a real, selectable geometry-producing type.
+        "placeholder" -- an invisible/marker fallback (never sticky; always
+                          re-evaluated on sync so it can upgrade to a model).
+    priority:
+        Tiebreaker used only when choosing among multiple candidates that are
+        otherwise equally specific (same tier: exact-profile model,
+        Generic-profile model, or placeholder). Higher wins. Never used to
+        replace an already-selected compatible type -- see
+        HVACLibraryRegistry.resolve_sticky_type().
+    """
+    kind: str = SELECTION_KIND_MODEL
+    priority: int = 0
+
+
 @dataclass
 class HVACTypeDef:
     id: str
@@ -70,6 +96,71 @@ class HVACTypeDef:
     lengths_function: str = ""
     loss_module: str = ""
     loss_function: str = ""
+    selection: HVACSelectionDef = field(default_factory=HVACSelectionDef)
+
+
+@dataclass(frozen=True)
+class HVACMatchKey:
+    """Index key for HVACLibrary's per-library match indexes."""
+    category: str
+    topology: str
+    family: str
+    profile: str
+
+
+@dataclass(frozen=True)
+class HVACTypeMatchRequest:
+    """
+    What NetworkParser/DuctNetwork sync is asking the registry to match.
+
+    family is the classifier's literal family key (junctions: e.g.
+    "branch.tee.3d", from JunctionAnalysis.family_key; segments:
+    "straight_segment"/"curved_segment"). context carries whatever
+    freecad/HVAC/library/validation.py's context_violations() needs for the
+    second-stage constraint check (junctions: "connected_ports"/"topology";
+    segments: "profile") -- topology/profile are auto-filled from this
+    request's own fields if the caller didn't already put them in context.
+    """
+    category: str
+    topology: str
+    family: str
+    profile: str
+    context: dict = field(default_factory=dict)
+
+
+@dataclass
+class HVACTypeSelection:
+    """Result of HVACLibrary/HVACLibraryRegistry.select_type()."""
+    library_id: str
+    type_def: "HVACTypeDef | None"
+    status: str  # "exact" | "generic_profile" | "placeholder" | "retained" | "ambiguous" | "not_found"
+    reason: str = ""
+    candidates: tuple = ()
+
+
+def _family_key_related(a, b):
+    """
+    True if classifier family key `a` and descriptor-declared family entry
+    `b` refer to the same or an ancestor/descendant point in the dotted
+    family hierarchy (e.g. "branch.tee" and "branch.tee.3d", or
+    "end.terminal" and "end.terminal.diffuser").
+
+    This is intentionally NOT used for automatic-selection index lookups
+    (those require an exact literal family_key match per type-def author's
+    explicit family list -- see HVACLibrary._rebuild_match_index). It's used
+    for the second-stage compatibility check (matches_type()/select_type()'s
+    per-candidate validation), so that e.g. a manually-selected
+    end_diffuser_generic (family=["end.terminal.diffuser", ...]) stays sticky
+    even though the classifier can never literally produce anything more
+    specific than "end.terminal" for a degree-1 node.
+    """
+    if a == b:
+        return True
+    if b.startswith(a + "."):
+        return True
+    if a.startswith(b + "."):
+        return True
+    return False
 
 
 @dataclass
@@ -79,9 +170,13 @@ class HVACLibrary:
     root_path: str
     generators_package: str = ""
     types_by_id: dict = field(default_factory=dict)
+    _index_dirty: bool = field(default=True, repr=False, compare=False)
+    _model_match_index: dict = field(default_factory=dict, repr=False, compare=False)
+    _placeholder_match_index: dict = field(default_factory=dict, repr=False, compare=False)
 
     def add_type(self, type_def: HVACTypeDef):
         self.types_by_id[type_def.id] = type_def
+        self._index_dirty = True
 
     def get_type(self, type_id: str):
         return self.types_by_id.get(type_id)
@@ -89,14 +184,18 @@ class HVACLibrary:
     def _family_match(self, parent, child):
         return child == parent or child.startswith(parent + ".")
 
-    def list_types(self, category=None, family=None, profile=None):
+    def list_types(self, category=None, topology=None, family=None, profile=None, include_placeholders=True):
         out = []
         for t in self.types_by_id.values():
             if category and t.category != category:
                 continue
+            if topology and t.topology != topology:
+                continue
             if family and not any(self._family_match(family, candidate) for candidate in t.family):
                 continue
             if profile and t.profiles and profile not in t.profiles:
+                continue
+            if not include_placeholders and getattr(t.selection, "kind", SELECTION_KIND_MODEL) == SELECTION_KIND_PLACEHOLDER:
                 continue
             out.append(t)
         return out
@@ -115,6 +214,159 @@ class HVACLibrary:
     def default_profile(self, category=None, family=None):
         profiles = self.list_profiles(category=category, family=family)
         return profiles[0] if profiles else ""
+
+    # ------------------------------------------------------------------
+    # Match indexes -- rebuilt lazily whenever a type is added/reloaded.
+    # ------------------------------------------------------------------
+
+    def _rebuild_match_index(self):
+        self._model_match_index = {}
+        self._placeholder_match_index = {}
+
+        for t in self.types_by_id.values():
+            kind = getattr(t.selection, "kind", SELECTION_KIND_MODEL)
+            target = (
+                self._model_match_index
+                if kind == SELECTION_KIND_MODEL
+                else self._placeholder_match_index
+            )
+            index_profiles = list(t.profiles) if t.profiles else ["Generic"]
+            for fam in t.family:
+                for prof in index_profiles:
+                    key = HVACMatchKey(category=t.category, topology=t.topology, family=fam, profile=prof)
+                    target.setdefault(key, []).append(t)
+
+        self._index_dirty = False
+
+    def _ensure_match_index(self):
+        if self._index_dirty:
+            self._rebuild_match_index()
+
+    @property
+    def model_match_index(self):
+        self._ensure_match_index()
+        return self._model_match_index
+
+    @property
+    def placeholder_match_index(self):
+        self._ensure_match_index()
+        return self._placeholder_match_index
+
+    def reindex(self):
+        """Force an immediate rebuild of the match indexes."""
+        self._rebuild_match_index()
+
+    # ------------------------------------------------------------------
+    # Automatic / compatibility matching
+    # ------------------------------------------------------------------
+
+    def _index_candidates(self, index, request: HVACTypeMatchRequest):
+        """Return (exact_profile_candidates, generic_profile_candidates)."""
+        exact_key = HVACMatchKey(request.category, request.topology, request.family, request.profile)
+        exact = list(index.get(exact_key, []))
+
+        generic = []
+        if request.profile != "Generic":
+            generic_key = HVACMatchKey(request.category, request.topology, request.family, "Generic")
+            generic = list(index.get(generic_key, []))
+
+        return exact, generic
+
+    def _compatible(self, type_def: HVACTypeDef, request: HVACTypeMatchRequest):
+        if type_def.category != request.category:
+            return False
+        if not any(_family_key_related(request.family, candidate) for candidate in type_def.family):
+            return False
+
+        ctx = dict(request.context or {})
+        ctx.setdefault("topology", request.topology)
+        ctx.setdefault("profile", request.profile)
+        return validation.is_context_valid(type_def, ctx)
+
+    @staticmethod
+    def _rank_tier(candidates):
+        """
+        Return (winner_or_None, is_ambiguous, candidate_ids) for one
+        specificity tier, using selection.priority as the tiebreaker.
+        Never uses dict/list insertion order to break a tie.
+        """
+        if not candidates:
+            return None, False, ()
+
+        max_priority = max(getattr(t.selection, "priority", 0) for t in candidates)
+        top = [t for t in candidates if getattr(t.selection, "priority", 0) == max_priority]
+        ids = tuple(t.id for t in candidates)
+
+        if len(top) == 1:
+            return top[0], False, ids
+        return None, True, tuple(sorted(t.id for t in top))
+
+    def select_type(self, request: HVACTypeMatchRequest, strict=False) -> HVACTypeSelection:
+        """
+        Choose the best compatible type for `request` in this library.
+
+        Tiers, in priority order (see freecad/HVAC/libraries/README.md):
+            1. model,       exact profile match
+            2. model,       Generic-profile (wildcard) match
+            3. placeholder, exact profile match
+            4. placeholder, Generic-profile match
+
+        Within a tier, selection.priority breaks ties; a genuine tie (equal
+        highest priority, more than one candidate) is ambiguous -- in
+        strict mode this is reported as status="ambiguous"; otherwise a
+        console warning is logged and matching falls through to the next
+        tier (eventually a placeholder) rather than silently picking one.
+        """
+        self._ensure_match_index()
+
+        model_exact, model_generic = self._index_candidates(self.model_match_index, request)
+        ph_exact, ph_generic = self._index_candidates(self.placeholder_match_index, request)
+
+        tiers = (
+            ([t for t in model_exact if self._compatible(t, request)], "exact"),
+            ([t for t in model_generic if self._compatible(t, request)], "generic_profile"),
+            ([t for t in ph_exact if self._compatible(t, request)], "placeholder"),
+            ([t for t in ph_generic if self._compatible(t, request)], "placeholder"),
+        )
+
+        for candidates, status in tiers:
+            winner, ambiguous, ids = self._rank_tier(candidates)
+            if winner is not None:
+                return HVACTypeSelection(
+                    library_id=self.id, type_def=winner, status=status, reason="", candidates=ids
+                )
+            if ambiguous:
+                reason = (
+                    "Ambiguous type selection in library '{}' for category={!r} topology={!r} "
+                    "family={!r} profile={!r}: candidates {} tie at the same priority".format(
+                        self.id, request.category, request.topology, request.family, request.profile, ids
+                    )
+                )
+                if strict:
+                    return HVACTypeSelection(
+                        library_id=self.id, type_def=None, status="ambiguous", reason=reason, candidates=ids
+                    )
+                FreeCAD.Console.PrintWarning("HVAC - " + reason + "\n")
+                # Fall through to the next (broader) tier rather than
+                # silently picking one of the tied candidates.
+
+        return HVACTypeSelection(
+            library_id=self.id,
+            type_def=None,
+            status="not_found",
+            reason=(
+                "No compatible model or placeholder type found in library '{}' for "
+                "category={!r} topology={!r} family={!r} profile={!r}".format(
+                    self.id, request.category, request.topology, request.family, request.profile
+                )
+            ),
+        )
+
+    def matches_type(self, type_def, request: HVACTypeMatchRequest) -> bool:
+        """Does this already-selected type remain valid for `request`?"""
+        if type_def is None:
+            return False
+        return self._compatible(type_def, request)
 
 
 class HVACLibraryRegistry:
@@ -152,10 +404,61 @@ class HVACLibraryRegistry:
         return self._libraries.get(self._active_library_id)
 
     def resolve_type(self, library_id: str, type_id: str):
+        """Exact TypeId lookup. Never fuzzy -- geometry execution relies on this."""
         lib = self.get_library(library_id)
         if lib is None:
             return None
         return lib.get_type(type_id)
+
+    def select_type(self, library_id: str, request: HVACTypeMatchRequest, strict=False) -> HVACTypeSelection:
+        """Automatic selection: choose the best compatible type in `library_id`."""
+        lib = self.get_library(library_id)
+        if lib is None:
+            return HVACTypeSelection(
+                library_id=library_id,
+                type_def=None,
+                status="not_found",
+                reason="Unknown HVAC library '{}'".format(library_id),
+            )
+        return lib.select_type(request, strict=strict)
+
+    def matches_type(self, library_id: str, type_id: str, request: HVACTypeMatchRequest) -> bool:
+        """Compatibility check: does `type_id` in `library_id` remain valid for `request`?"""
+        lib = self.get_library(library_id)
+        if lib is None:
+            return False
+        return lib.matches_type(lib.get_type(type_id), request)
+
+    def resolve_sticky_type(
+        self, library_id: str, current_type_id: str, request: HVACTypeMatchRequest, strict=False
+    ) -> HVACTypeSelection:
+        """
+        Normal (non-reset) synchronization policy:
+
+            current TypeId exists, resolves in library_id, is a real model
+            (not a placeholder), and remains compatible with `request`?
+                -> retain it (status="retained")
+            otherwise
+                -> automatic selection (select_type)
+
+        Placeholders are deliberately never retained here -- they're
+        re-evaluated every sync so they can upgrade to a real model.
+        """
+        lib = self.get_library(library_id)
+        if lib is not None and current_type_id:
+            current_type = lib.get_type(current_type_id)
+            if current_type is not None:
+                kind = getattr(current_type.selection, "kind", SELECTION_KIND_MODEL)
+                if kind != SELECTION_KIND_PLACEHOLDER and lib.matches_type(current_type, request):
+                    return HVACTypeSelection(
+                        library_id=library_id,
+                        type_def=current_type,
+                        status="retained",
+                        reason="Current type remains compatible",
+                        candidates=(current_type_id,),
+                    )
+
+        return self.select_type(library_id, request, strict=strict)
 
     def import_generator(self, library_id: str, module_name: str):
         lib = self.get_library(library_id)
@@ -372,6 +675,19 @@ class HVACLibraryRegistry:
         if isinstance(family, str):
             family = [family]
 
+        selection_raw = raw.get("selection", {}) or {}
+        selection_kind = str(selection_raw.get("kind", SELECTION_KIND_MODEL) or SELECTION_KIND_MODEL)
+        if selection_kind not in VALID_SELECTION_KINDS:
+            raise ValueError(
+                "Type '{}' in '{}' has invalid selection.kind '{}'; expected one of {}".format(
+                    raw.get("id", "?"), filepath, selection_kind, sorted(VALID_SELECTION_KINDS)
+                )
+            )
+        selection = HVACSelectionDef(
+            kind=selection_kind,
+            priority=int(selection_raw.get("priority", 0) or 0),
+        )
+
         return HVACTypeDef(
             id=raw["id"],
             label=raw.get("label", raw["id"]),
@@ -388,4 +704,5 @@ class HVACLibraryRegistry:
             lengths_function=lengths.get("function", ""),
             loss_module=loss.get("module", ""),
             loss_function=loss.get("function", ""),
+            selection=selection,
         )

@@ -5,6 +5,10 @@
   "topology": "end",
   "family": ["end.terminal"],
   "profiles": ["Generic"],
+  "selection": {
+    "kind": "placeholder",
+    "priority": 0
+  },
   "constraints": {
     "degree": 1
   },

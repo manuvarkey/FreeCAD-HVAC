@@ -4,6 +4,10 @@
   "category": "segment",
   "family": ["straight_segment"],
   "profiles": ["Oval"],
+  "selection": {
+    "kind": "model",
+    "priority": 50
+  },
   "properties": [
     {
       "name": "Width",

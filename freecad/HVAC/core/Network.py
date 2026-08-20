@@ -488,11 +488,11 @@ class DuctNetwork:
         if profile not in valid_profiles:
             profile = hvaclib.HVACLibraryService.default_segment_profile_for_library(library_id)
 
-        if kind == "straight":
-            type_id = hvaclib.HVACLibraryService.default_segment_type_id(library_id, profile, curved=False)
-        else:
-            type_id = hvaclib.HVACLibraryService.default_segment_type_id(library_id, profile, curved=True)
-        
+        selection = hvaclib.HVACLibraryService.select_segment_type(
+            library_id, profile, curved=(kind != "straight")
+        )
+        type_id = selection.type_def.id if selection.type_def else ""
+
         return {
             "library_id": library_id,
             "profile": profile,
@@ -587,18 +587,16 @@ class DuctNetwork:
                     default_profile = hvaclib.HVACLibraryService.default_segment_profile_for_library(default_lib.id)
 
                 kind = hvaclib.BaseCurveKind(obj.SourceObjectName, obj.SourceIndex)
-                if kind == "straight":
-                    default_type_id = hvaclib.HVACLibraryService.default_segment_type_id(
-                        default_lib.id,
-                        default_profile,
-                        curved=False,
-                    )
-                else:
-                    default_type_id = hvaclib.HVACLibraryService.default_segment_type_id(
-                        default_lib.id,
-                        default_profile,
-                        curved=True,
-                    )
+                # Explicit reset always runs fresh automatic selection against
+                # the network's default library -- it may replace an otherwise
+                # sticky manual TypeId, unlike normal sync (see
+                # HVACLibraryRegistry.resolve_sticky_type).
+                selection = hvaclib.HVACLibraryService.select_segment_type(
+                    default_lib.id,
+                    default_profile,
+                    curved=(kind != "straight"),
+                )
+                default_type_id = selection.type_def.id if selection.type_def else ""
 
                 if hasattr(obj, "LibraryId") and obj.LibraryId != default_lib.id:
                     obj.LibraryId = default_lib.id
@@ -624,7 +622,24 @@ class DuctNetwork:
 
             elif hvaclib.isDuctJunction(obj):
                 topology = getattr(obj, "Topology", "")
-                default_type_id = hvaclib.HVACLibraryService.default_topology_type_id(topology)
+                family_key = getattr(obj, "Family", "")
+                try:
+                    analysis = json.loads(getattr(obj, "AnalysisJson", "") or "{}")
+                except Exception:
+                    analysis = {}
+                connected_ports = list(analysis.get("connected_ports", []) or [])
+                profile = hvaclib.HVACLibraryService.match_profile_from_ports(connected_ports)
+
+                # Explicit reset always runs fresh automatic selection against
+                # the network's default library -- see the segment branch above.
+                selection = hvaclib.HVACLibraryService.select_junction_type(
+                    default_lib.id,
+                    topology=topology,
+                    family_key=family_key,
+                    profile=profile,
+                    connected_ports=connected_ports,
+                )
+                default_type_id = selection.type_def.id if selection.type_def else ""
 
                 if hasattr(obj, "LibraryId") and obj.LibraryId != default_lib.id:
                     obj.LibraryId = default_lib.id
@@ -1070,14 +1085,21 @@ class DuctNetwork:
             valid_profiles = hvaclib.HVACLibraryService.segment_profiles_for_library(library_id)
             if profile not in valid_profiles:
                 profile = hvaclib.HVACLibraryService.default_segment_profile_for_library(library_id)
-            type_id = getattr(segment_obj, "TypeId", "")
-            if not type_id:
-                kind = hvaclib.BaseCurveKind(edge_ref.obj_name, edge_ref.local_index)
-                if kind == "straight":
-                    type_id = hvaclib.HVACLibraryService.default_segment_type_id(library_id, profile, curved=False)
-                else:
-                    type_id = hvaclib.HVACLibraryService.default_segment_type_id(library_id, profile, curved=True)
-            
+
+            kind = hvaclib.BaseCurveKind(edge_ref.obj_name, edge_ref.local_index)
+            family = "straight_segment" if kind == "straight" else "curved_segment"
+
+            # Sticky registry-driven selection: retain the current TypeId if
+            # it's still a compatible real model, otherwise auto-select.
+            current_type_id = getattr(segment_obj, "TypeId", "")
+            selection = hvaclib.HVACLibraryService.resolve_segment_type(
+                library_id,
+                current_type_id,
+                profile,
+                curved=(kind != "straight"),
+            )
+            type_id = selection.type_def.id if selection.type_def else ""
+
             # Update metadata based on updated data
             meta_changed = segment_obj.Proxy.updateMetadata(
                 owner=net,
@@ -1090,7 +1112,7 @@ class DuctNetwork:
                 end_point=hvaclib.vec_to_xyz(end_point),
                 trim_start=trim_start,
                 trim_end=trim_end,
-                family="straight_segment",
+                family=family,
                 type_id=type_id,
                 library_id=library_id,
                 profile=profile
@@ -1158,12 +1180,15 @@ class DuctNetwork:
             junction_analysis = parser.build_junction_analysis(node_id, segment_map)
             if not junction_analysis:
                 continue
-            analysis_json = json.dumps(asdict(junction_analysis))
+            analysis_dict = asdict(junction_analysis)
+            analysis_json = json.dumps(analysis_dict)
+            connected_ports = analysis_dict["connected_ports"]
             degree = junction_analysis.degree
             topology = junction_analysis.topology
             family = junction_analysis.family_key
-            point = junction_analysis.point            
+            point = junction_analysis.point
             connected_edge_keys = [p.edge_key for p in junction_analysis.connected_ports]
+            match_profile = hvaclib.HVACLibraryService.match_profile_from_ports(connected_ports)
     
             # If initial sync, the tags are regenerated hence find element based on position
             # Also update the existing junction's key in the dictionary with the modified key
@@ -1195,14 +1220,13 @@ class DuctNetwork:
                     degree=degree,
                     topology=topology
                 )
-                # Get and set default segment properties from default library
-                default_lib_id = default_lib.id
-                default_type_id = hvaclib.HVACLibraryService.default_topology_type_id(topology)
+                # Seed the new junction's library from the network default;
+                # TypeId selection is handled uniformly below for both new
+                # and existing junctions (resolve_sticky_type sees an empty
+                # current TypeId here and runs automatic selection).
                 if hasattr(junction_obj, "LibraryId"):
-                    junction_obj.LibraryId = default_lib_id
-                if hasattr(junction_obj, "TypeId"):
-                    junction_obj.TypeId = default_type_id
-    
+                    junction_obj.LibraryId = default_lib.id
+
                 changed = True
                 
                 # If source object is marked as hidden, hide junction geometry
@@ -1218,12 +1242,21 @@ class DuctNetwork:
     
             live_objs.add(junction_obj)
     
-            # Get library and type IDs, setting defaults if not present
+            # Sticky registry-driven selection: retain the current TypeId if
+            # it's still a compatible real model, otherwise auto-select
+            # (falling back to a placeholder if no model matches).
             library_id = getattr(junction_obj, "LibraryId", "") or default_lib.id
-            type_id = getattr(junction_obj, "TypeId", "")
-            if not type_id:
-                type_id = hvaclib.HVACLibraryService.default_topology_type_id(topology)
-            
+            current_type_id = getattr(junction_obj, "TypeId", "")
+            selection = hvaclib.HVACLibraryService.resolve_junction_type(
+                library_id,
+                current_type_id,
+                topology=topology,
+                family_key=family,
+                profile=match_profile,
+                connected_ports=connected_ports,
+            )
+            type_id = selection.type_def.id if selection.type_def else ""
+
             # Update metadata based on updated data
             meta_changed = junction_obj.Proxy.updateMetadata(
                 owner=net,

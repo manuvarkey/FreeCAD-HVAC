@@ -5,6 +5,10 @@
   "topology": "through",
   "family": ["through.bend", "through.bend.3d", "through.bend_90", "through.bend_90.3d"],
   "profiles": ["Circular", "Rectangular", "Oval"],
+  "selection": {
+    "kind": "model",
+    "priority": 50
+  },
   "constraints": {
     "degree": 2
   },

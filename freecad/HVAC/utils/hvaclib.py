@@ -33,7 +33,7 @@ from PySide import QtGui, QtCore
 translate = FreeCAD.Qt.translate
 preferences = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/HVAC")
 
-from ..library.Library import HVACLibraryRegistry
+from ..library.Library import HVACLibraryRegistry, HVACTypeMatchRequest
 
 # Enable loading external libraries from the ext_libs directory
 path = os.path.dirname(__file__)
@@ -115,36 +115,103 @@ class HVACLibraryService:
             return ""
         return lib.default_profile(category="segment", family="straight_segment")
 
-    @classmethod
-    def default_segment_type_id(cls, library_id: str, profile: str, curved: bool = False) -> str:
-        lib = cls._get_registry().get_library(library_id)
-        if lib is None:
-            return ""
-        
-        if curved:
-            family = "curved_segment"
-        else:
-            family = "straight_segment"
-            
-        type_defs = lib.list_types(
-            category = "segment",
-            family = family,
-            profile = profile if profile else None,
-        )
-        if not type_defs:
-            return ""
-        return type_defs[0].id
+    # ------------------------------------------------------------------
+    # Registry-driven type selection (see freecad/HVAC/library/Library.py:
+    # HVACLibraryRegistry.select_type / matches_type / resolve_sticky_type).
+    #
+    # select_*        -- fresh automatic selection (used for explicit
+    #                     "reset to network defaults").
+    # resolve_*        -- sticky: retains a current, still-compatible,
+    #                     non-placeholder selection; otherwise selects.
+    # matches_*        -- compatibility check only, no selection.
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def default_topology_type_id(topology: str) -> str:
-        mapping = {
-            "end": "end_terminal_marker",
-            "through": "through_generic",
-            "branch": "branch_generic",
-            "cross": "cross_generic",
-            "multiport": "multiport_generic",
-        }
-        return mapping.get(topology, "multiport_marker")
+    def _segment_request(profile: str, curved: bool, context: dict | None = None) -> HVACTypeMatchRequest:
+        family = "curved_segment" if curved else "straight_segment"
+        ctx = dict(context or {})
+        ctx.setdefault("profile", profile or "")
+        return HVACTypeMatchRequest(
+            category="segment", topology="generic", family=family, profile=profile or "", context=ctx
+        )
+
+    @staticmethod
+    def _junction_request(
+        topology: str, family_key: str, profile: str, connected_ports=None, context: dict | None = None
+    ) -> HVACTypeMatchRequest:
+        ctx = dict(context or {})
+        ctx.setdefault("connected_ports", list(connected_ports or []))
+        ctx.setdefault("topology", topology or "")
+        return HVACTypeMatchRequest(
+            category="junction", topology=topology or "", family=family_key or "", profile=profile or "", context=ctx
+        )
+
+    @classmethod
+    def select_segment_type(cls, library_id: str, profile: str, curved: bool = False, context: dict | None = None):
+        """Fresh automatic segment-type selection (non-sticky)."""
+        request = cls._segment_request(profile, curved, context)
+        return cls._get_registry().select_type(library_id, request)
+
+    @classmethod
+    def resolve_segment_type(
+        cls, library_id: str, current_type_id: str, profile: str, curved: bool = False, context: dict | None = None
+    ):
+        """Sticky segment-type resolution used by normal network sync."""
+        request = cls._segment_request(profile, curved, context)
+        return cls._get_registry().resolve_sticky_type(library_id, current_type_id, request)
+
+    @classmethod
+    def select_junction_type(
+        cls, library_id: str, topology: str, family_key: str, profile: str, connected_ports=None, context: dict | None = None
+    ):
+        """Fresh automatic junction-type selection (non-sticky)."""
+        request = cls._junction_request(topology, family_key, profile, connected_ports, context)
+        return cls._get_registry().select_type(library_id, request)
+
+    @classmethod
+    def resolve_junction_type(
+        cls,
+        library_id: str,
+        current_type_id: str,
+        topology: str,
+        family_key: str,
+        profile: str,
+        connected_ports=None,
+        context: dict | None = None,
+    ):
+        """Sticky junction-type resolution used by normal network sync."""
+        request = cls._junction_request(topology, family_key, profile, connected_ports, context)
+        return cls._get_registry().resolve_sticky_type(library_id, current_type_id, request)
+
+    @classmethod
+    def default_segment_type_id(cls, library_id: str, profile: str, curved: bool = False) -> str:
+        """
+        Deprecated compatibility wrapper: prefer select_segment_type(), which
+        returns full HVACTypeSelection diagnostics instead of a bare id.
+        """
+        selection = cls.select_segment_type(library_id, profile, curved=curved)
+        return selection.type_def.id if selection.type_def else ""
+
+    @classmethod
+    def match_profile_from_ports(cls, connected_ports) -> str:
+        """
+        Derive a junction match profile from its connected ports'
+        (already-known) duct profiles:
+            all ports share one known profile -> that profile
+            multiple distinct known profiles  -> "Mixed"
+            no known profiles                 -> "" (unknown)
+        """
+        profiles = set()
+        for port in connected_ports or []:
+            profile = str((port.get("profile", "") if isinstance(port, dict) else getattr(port, "profile", "")) or "")
+            if profile:
+                profiles.add(profile)
+
+        if not profiles:
+            return ""
+        if len(profiles) == 1:
+            return next(iter(profiles))
+        return "Mixed"
 
     @classmethod
     def all_junction_type_defs(cls, library_id: str | None = None, family: str | None = None) -> list:

@@ -309,8 +309,6 @@ class DuctJunction:
             
         if getattr(obj, "Topology", "") != str(topology):
             obj.Topology = str(topology)
-            # If topology changes, set TypeId to default for the topology
-            obj.TypeId = hvaclib.HVACLibraryService.default_topology_type_id(obj.Topology)
             changed = True
 
         try:
@@ -320,21 +318,15 @@ class DuctJunction:
 
         if family and getattr(obj, "Family", "") != str(family):
             obj.Family = str(family)
-            # If family changes, set TypeId to default for the topology
-            obj.TypeId = hvaclib.HVACLibraryService.default_topology_type_id(obj.Topology)
             changed = True
-        
+
         if library_id and getattr(obj, "LibraryId", "") != str(library_id):
             obj.LibraryId = str(library_id)
             changed = True
 
         if type_id and getattr(obj, "TypeId", "") != str(type_id):
-            _library = getattr(obj, "LibraryId", "")
-            _family = getattr(obj, "Family", "")
-            valid_type_ids = hvaclib.HVACLibraryService.all_junction_type_defs(library_id=_library, family=_family)
-            if type_id in valid_type_ids:
-                obj.TypeId = str(type_id)
-                changed = True
+            obj.TypeId = str(type_id)
+            changed = True
 
         if connected_edge_keys is not None:
             edge_keys = [str(k) for k in connected_edge_keys]

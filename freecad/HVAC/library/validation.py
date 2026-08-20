@@ -108,8 +108,18 @@ def resolve_params(type_def, obj=None, supplied=None):
     return params
 
 
-def validate_context(type_def, context):
-    """Apply structural constraints declared by the type descriptor."""
+def context_violations(type_def, context):
+    """
+    Return a list of human-readable constraint violations for the given
+    context against a type descriptor's constraints/topology/profile
+    restrictions. An empty list means the context is fully compatible.
+
+    This is the shared compatibility rule set used both by validate_context()
+    (raises on the first violation, for geometry execution) and by the
+    library registry's matches_type()/select_type() (boolean/ranking use,
+    for automatic type selection) -- see freecad/HVAC/library/Library.py.
+    """
+    violations = []
     constraints = dict(getattr(type_def, "constraints", {}) or {})
     category = str(getattr(type_def, "category", "") or "")
     profiles = set(getattr(type_def, "profiles", []) or [])
@@ -119,19 +129,19 @@ def validate_context(type_def, context):
         degree = len(ports)
 
         if "degree" in constraints and degree != int(constraints["degree"]):
-            raise ValueError(
+            violations.append(
                 "Type '{}' requires degree {}; got {}".format(
                     type_def.id, constraints["degree"], degree
                 )
             )
         if "degree_min" in constraints and degree < int(constraints["degree_min"]):
-            raise ValueError(
+            violations.append(
                 "Type '{}' requires degree >= {}; got {}".format(
                     type_def.id, constraints["degree_min"], degree
                 )
             )
         if "degree_max" in constraints and degree > int(constraints["degree_max"]):
-            raise ValueError(
+            violations.append(
                 "Type '{}' requires degree <= {}; got {}".format(
                     type_def.id, constraints["degree_max"], degree
                 )
@@ -145,7 +155,7 @@ def validate_context(type_def, context):
             and actual_topology
             and expected_topology != actual_topology
         ):
-            raise ValueError(
+            violations.append(
                 "Type '{}' requires topology '{}'; got '{}'".format(
                     type_def.id, expected_topology, actual_topology
                 )
@@ -159,7 +169,7 @@ def validate_context(type_def, context):
             for index, port in enumerate(ports):
                 profile = str(port.get("profile", "") or "")
                 if profile and profile not in profiles:
-                    raise ValueError(
+                    violations.append(
                         "Type '{}' does not support profile '{}' on port {}".format(
                             type_def.id, profile, index
                         )
@@ -168,6 +178,20 @@ def validate_context(type_def, context):
     elif category == "segment" and profiles and "Generic" not in profiles:
         profile = str(context.get("profile", "") or "")
         if profile and profile not in profiles:
-            raise ValueError(
+            violations.append(
                 "Type '{}' does not support segment profile '{}'".format(type_def.id, profile)
             )
+
+    return violations
+
+
+def validate_context(type_def, context):
+    """Apply structural constraints declared by the type descriptor."""
+    violations = context_violations(type_def, context)
+    if violations:
+        raise ValueError(violations[0])
+
+
+def is_context_valid(type_def, context):
+    """Boolean form of context_violations(), for registry matching use."""
+    return not context_violations(type_def, context)

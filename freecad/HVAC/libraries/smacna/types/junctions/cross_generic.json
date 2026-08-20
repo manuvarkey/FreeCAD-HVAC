@@ -5,6 +5,10 @@
   "topology": "cross",
   "family": ["cross.cross", "cross.cross.3d", "cross.double_wye", "cross.double_wye.3d", "cross.generic"],
   "profiles": ["Circular", "Rectangular", "Oval"],
+  "selection": {
+    "kind": "model",
+    "priority": 50
+  },
   "constraints": {
     "degree": 4
   },

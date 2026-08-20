@@ -100,6 +100,147 @@ See `samples/README.md` for the three geometry backends (`partscript`,
 FCStd-template loader via `HVACLibraryAPI.shape_from_fcstd`) and how to
 choose between them.
 
+## Type selection (automatic matching)
+
+`freecad/HVAC/core/NetworkParser.py` classifies *what* a network item is
+(topology, family, connected-port profiles). It never picks a TypeId. That
+job belongs to `HVACLibraryRegistry` (see `freecad/HVAC/library/Library.py`),
+which matches a `HVACTypeMatchRequest` (category/topology/family/profile,
+derived by `DuctNetwork` sync from the parser's output) against every
+type-def a library declares, and picks one. `DuctNetwork` sync then writes
+the resulting `LibraryId`/`TypeId` onto the segment/junction object;
+`execute()` only ever does an exact `resolve_type(library_id, type_id)`
+lookup -- it never classifies or matches anything itself.
+
+A type-def opts into this by declaring what it can represent:
+
+- `family`: the classifier's dotted family keys it supports (see
+  `classify_junction_family` /
+  [`TOPOLOGY_CLASSIFICATION.md`](../core/TOPOLOGY_CLASSIFICATION.md) for
+  junctions; `"straight_segment"`/`"curved_segment"` for segments).
+- `profiles`: the cross-section profiles it supports, or the `"Generic"`
+  wildcard (see below).
+- `selection`: matching metadata, new in this system:
+
+  ```json
+  "selection": {
+    "kind": "model",
+    "priority": 50
+  }
+  ```
+
+  - `kind`: `"model"` (a real, geometry-producing type) or `"placeholder"`
+    (an invisible marker/fallback -- see `*_marker.json`). Descriptors
+    without a `selection` block default to `kind: "model"`, `priority: 0`,
+    so existing type-defs keep loading unchanged.
+  - `priority`: tiebreaker used only when more than one type is otherwise
+    equally specific for the same request (see "Ranking" below). It plays
+    no role once a type is already selected -- see "Sticky selection".
+
+### `"Generic"` profile wildcard
+
+`profiles: ["Generic"]` (or an empty `profiles` list, which existing
+validation already treats the same way) makes a type profile-independent --
+it matches any requested profile, but always ranks below a type that
+matches the exact requested profile. This is the same wildcard semantics
+`freecad/HVAC/library/validation.py` already used for structural validation;
+matching reuses it rather than introducing a second, conflicting wildcard
+system.
+
+### Explicit family aliases
+
+A type-def lists every classifier family key it supports explicitly --
+matching never walks the family up or down the dotted hierarchy to find a
+looser match (that would risk silently selecting the wrong fitting). If a
+type should also match the non-coplanar variant of a family, say so:
+
+```json
+"family": ["branch.tee", "branch.tee.3d"]
+```
+
+(The one exception: a *currently selected* type's family may be a
+descendant of the requested family, so a manually-picked, more specific
+type stays valid even though the classifier can never literally produce
+anything more specific -- see "Sticky selection".)
+
+### How automatic matching works (`select_type`)
+
+For a request (category, topology, family, profile), matching tries, in
+order:
+
+1. `kind: "model"`, exact profile match
+2. `kind: "model"`, `"Generic"`-profile match
+3. `kind: "placeholder"`, exact profile match
+4. `kind: "placeholder"`, `"Generic"`-profile match
+
+Within a tier, every candidate is checked against the request's structural
+context (topology, degree/constraints, connected-port profiles) using the
+same rules as `freecad/HVAC/library/validation.py`'s `context_violations()`
+-- a candidate that fails degree/topology/profile constraints is dropped
+before ranking, so `matches_type()` and `select_type()` can never disagree
+about whether a given type is eligible for a request.
+
+**Ranking** picks the highest `selection.priority` within the first
+non-empty, constraint-passing tier. If two or more candidates in that tier
+tie at the highest priority, that's a genuine authoring ambiguity: it's
+never resolved by JSON file/directory load order. In normal (non-strict)
+use, an ambiguous tier is logged as a warning and matching falls through to
+the next (broader) tier, eventually a placeholder, rather than silently
+guessing; strict/testing callers can pass `strict=True` to get
+`status="ambiguous"` back instead.
+
+Priority only decides *which* type wins a fresh automatic selection -- see
+"Sticky selection" for why it never disturbs an already-valid choice.
+
+### Sticky selection
+
+Normal network sync (`DuctNetwork.syncSegments`/`syncJunctions`) doesn't
+call `select_type()` on every object on every sync. It first asks
+`resolve_sticky_type(library_id, current_type_id, request)`:
+
+- if the object's current `TypeId` resolves to a real (`kind: "model"`)
+  type in its current `LibraryId`, and that type is still compatible with
+  the latest classifier output -> **keep it**, no matter its
+  `selection.priority` relative to other candidates.
+- otherwise -> run `select_type()`.
+
+This is why a manually-picked, lower-priority fitting (e.g. a long-radius
+elbow instead of the library's default short-radius elbow) survives every
+subsequent sync as long as it stays geometrically valid, and is only
+replaced when the classification genuinely changes underneath it (topology,
+family, profile, or a structural constraint like degree/port-profile no
+longer holds).
+
+**Placeholders are never sticky.** If the current `TypeId` resolves to
+`kind: "placeholder"`, sync always re-runs `select_type()` -- so a marker
+automatically upgrades to a real model the moment one becomes eligible
+(more specific classification, a newly-available connected-port profile, a
+reloaded library, ...).
+
+An explicit **"reset to network defaults"** (`resetObjectsToNetworkDefaults`)
+intentionally bypasses stickiness and always calls `select_type()` fresh
+against the network's default library, since the user is asking to discard
+manual choices, not just repair invalid ones.
+
+### Adding a new type that's automatically selectable
+
+A third-party/user library needs nothing beyond a descriptor JSON (declaring
+`category`/`topology`/`family`/`profiles`/`selection`) and a geometry
+implementation -- no change to `Network.py`, `Junction.py`, or any other
+core module. Give it:
+
+- the exact classifier `family` key(s) it should match,
+- the `profiles` it supports (or `"Generic"`),
+- a `selection.priority` higher than any broader/generic type it should be
+  preferred over, if it overlaps with one.
+
+Descriptors intentionally reachable only by *manual* selection (e.g. a
+degree-1 terminal's specific function -- diffuser vs. AHU connection vs.
+louver -- which the classifier cannot infer from geometry alone) don't need
+a priority audit: they simply won't appear in any automatic-selection tier
+whose family key the classifier can produce, and rely on "Sticky selection"
+to stay selected once a user picks one.
+
 ## Naming convention
 
 ### Segments
