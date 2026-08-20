@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Native PartScript loader for text-based parametric HVAC models."""
+"""
+The "partscript" geometry backend: loads a plain Python file (a PartScript)
+and calls its generate(context) function to build a shape in code, as an
+alternative to the static BREP/STEP backend. execute_partscript() is the
+entry point, called from Library.py's build_geometry -- it loads/caches the
+script module, then checks it honours the expected contract (API version,
+generate()/validate() signatures, a real non-empty Part.Shape back) before
+handing its result back to the caller.
+"""
 
 import hashlib
 import importlib.util
@@ -20,11 +28,18 @@ _PARTSCRIPT_API_VERSION = 1
 
 
 def _module_signature(path):
+    """Cheap "has this file changed?" fingerprint -- modified time + size, no hashing the contents."""
     stat = os.stat(path)
     return stat.st_mtime_ns, stat.st_size
 
 
 def _load_module(script_path):
+    """
+    Import a PartScript as a Python module, reusing the cached one if the
+    file hasn't changed since last time (checked via _module_signature) --
+    so editing a PartScript on disk and re-syncing picks up the change
+    without restarting FreeCAD.
+    """
     path = os.path.realpath(script_path)
     if not os.path.isfile(path):
         raise PartScriptSchemaError("PartScript file not found: '{}'".format(path))
@@ -58,8 +73,10 @@ def clear_cache():
 
 
 def execute_partscript(script_path, context):
+    """Load a PartScript and run it, enforcing its contract (see module docstring) at every step."""
     module = _load_module(script_path)
 
+    # Step 1: the script must declare the API version it was written for.
     version = int(getattr(module, "HVAC_PARTSCRIPT_API", _PARTSCRIPT_API_VERSION))
     if version != _PARTSCRIPT_API_VERSION:
         raise PartScriptSchemaError(
@@ -68,12 +85,15 @@ def execute_partscript(script_path, context):
             )
         )
 
+    # Step 2: an optional validate(context) gets first refusal -- it can
+    # raise its own, more specific error before generate() ever runs.
     validator = getattr(module, "validate", None)
     if validator is not None:
         if not callable(validator):
             raise PartScriptSchemaError("PartScript validate must be callable")
         validator(context)
 
+    # Step 3: generate(context) is required and must build the shape.
     generator = getattr(module, "generate", None)
     if not callable(generator):
         raise PartScriptSchemaError(
@@ -88,6 +108,7 @@ def execute_partscript(script_path, context):
             "PartScript '{}' must return Part.Shape or dict".format(script_path)
         )
 
+    # Step 4: the result must contain a real, non-empty shape.
     shape = result.get("shape")
     if shape is None or not hasattr(shape, "isNull"):
         raise PartScriptSchemaError(

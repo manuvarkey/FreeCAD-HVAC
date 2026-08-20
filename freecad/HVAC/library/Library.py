@@ -23,6 +23,22 @@
 
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
+"""
+The library layer: loads type-defs (JSON files describing a segment/junction
+type) from disk, decides which type-def best matches a request from
+NetworkParser/DuctNetwork sync, and dispatches to the right geometry backend
+to build a type's actual shape.
+
+Three main pieces:
+  - HVACTypeDef and friends: the in-memory shape of one loaded type-def.
+  - HVACLibrary: one loaded library's types, plus the matching/selection
+    logic that picks the best type for a given topology/family/profile.
+  - HVACLibraryRegistry: owns every loaded HVACLibrary, and is the single
+    entry point core code calls into (loading, selection, geometry/loss
+    dispatch) -- see freecad/HVAC/utils/hvaclib.py's HVACLibraryService for
+    how the rest of the addon reaches this registry.
+"""
+
 import importlib
 import json
 import os
@@ -36,6 +52,7 @@ from . import validation
 
 @dataclass
 class HVACPropertyDef:
+    """One user-facing property a type-def declares (name, FreeCAD property type, default, ...)."""
     name: str
     prop_type: str
     group: str = "HVAC"
@@ -48,6 +65,7 @@ class HVACPropertyDef:
 
 @dataclass
 class HVACGeometryDef:
+    """Which geometry backend a type-def uses and where to find it (PartScript file / static descriptor)."""
     backend: str = ""
     file: str = ""
     descriptor: str = ""
@@ -81,6 +99,7 @@ class HVACSelectionDef:
 
 @dataclass
 class HVACTypeDef:
+    """One loaded type-def -- the in-memory form of a library type's JSON file."""
     id: str
     label: str
     category: str
@@ -165,6 +184,10 @@ def _family_key_related(a, b):
 
 @dataclass
 class HVACLibrary:
+    """
+    One loaded library: its types, plus the indexes and matching logic used
+    to pick the best type for a given topology/family/profile request.
+    """
     id: str
     label: str
     root_path: str
@@ -220,6 +243,13 @@ class HVACLibrary:
     # ------------------------------------------------------------------
 
     def _rebuild_match_index(self):
+        """
+        Build two lookup tables (real "model" types, and "placeholder"
+        fallback types), keyed by (category, topology, family, profile) so
+        select_type() can jump straight to the candidates for a request
+        instead of scanning every type. A type with no declared profiles is
+        indexed under "Generic" (matches any profile).
+        """
         self._model_match_index = {}
         self._placeholder_match_index = {}
 
@@ -370,6 +400,12 @@ class HVACLibrary:
 
 
 class HVACLibraryRegistry:
+    """
+    Owns every loaded HVACLibrary and is the single entry point the rest of
+    the addon calls into: loading libraries from disk, type selection, and
+    dispatching to a type's geometry/loss backend.
+    """
+
     def __init__(self):
         self._libraries = {}
         self._active_library_id = None
@@ -502,6 +538,13 @@ class HVACLibraryRegistry:
         return prepared
 
     def build_geometry(self, library_id: str, type_def: HVACTypeDef, context: dict):
+        """
+        Build a type's shape by dispatching to whichever of the three
+        supported geometry backends it declares: "partscript" (a Python
+        script under the library), "static" (a pre-built BREP/STEP file
+        plus a placement descriptor), or -- if neither is set -- the legacy
+        generator_module/generator_function pair.
+        """
         context = self._prepare_geometry_context(type_def, context)
         geometry = getattr(type_def, "geometry", None)
         backend = str(getattr(geometry, "backend", "") or "").lower()
@@ -564,6 +607,7 @@ class HVACLibraryRegistry:
             self._search_paths.append(path)
 
     def ensure_loaded(self):
+        """Load libraries once, on first use -- a no-op on every call after the first."""
         if self._loaded:
             return
 
@@ -577,6 +621,7 @@ class HVACLibraryRegistry:
         self._loaded = True
 
     def scan_paths(self):
+        """Forget every previously-loaded library and scan all search paths again from scratch."""
         self._libraries = {}
         self._active_library_id = None
 
@@ -584,6 +629,7 @@ class HVACLibraryRegistry:
             self.scan_path(root)
 
     def scan_path(self, root_path):
+        """Treat every subfolder of root_path as one candidate library and try to load it."""
         if not root_path or not os.path.isdir(root_path):
             return
 
@@ -596,6 +642,7 @@ class HVACLibraryRegistry:
                 if lib is not None:
                     self.register_library(lib)
             except Exception as e:
+                # One bad library shouldn't block the others from loading.
                 FreeCAD.Console.PrintWarning(
                     "HVAC - Failed to load library from '{}': {}\n".format(lib_dir, e)
                 )
@@ -605,6 +652,7 @@ class HVACLibraryRegistry:
         self.ensure_loaded()
 
     def load_library_from_folder(self, lib_dir):
+        """Load one library from a folder: its library.json manifest, then every type-def under type_roots."""
         manifest_path = os.path.join(lib_dir, "library.json")
         if not os.path.isfile(manifest_path):
             return None
@@ -631,6 +679,7 @@ class HVACLibraryRegistry:
         return library
 
     def _load_type_defs_from_tree(self, root_dir, library):
+        """Recursively load every *.json type-def file under root_dir into library."""
         if not os.path.isdir(root_dir):
             return
 
@@ -643,6 +692,7 @@ class HVACLibraryRegistry:
                 library.add_type(type_def)
 
     def _load_type_def_file(self, filepath):
+        """Parse one type-def JSON file into an HVACTypeDef -- a plain field-by-field mapping."""
         with open(filepath, "r", encoding="utf-8") as f:
             raw = json.load(f)
 

@@ -93,6 +93,7 @@ def _split_param_target(target):
 
 
 def _apply_params(doc, params):
+    """Write each param value onto its target VarSet property, then recompute the template document."""
     for target, value in (params or {}).items():
         varset_name, prop_attr = _split_param_target(target)
         matches = doc.getObjectsByLabel(varset_name)
@@ -120,6 +121,7 @@ def _apply_params(doc, params):
 
 
 def _get_result_shape(doc, result_name):
+    """Fetch a standalone copy of the template's result object's Shape, after checking it recomputed cleanly."""
     matches = doc.getObjectsByLabel(result_name)
     if not matches or not hasattr(matches[0], "Shape"):
         raise TemplateSchemaError(
@@ -140,6 +142,7 @@ def _get_result_shape(doc, result_name):
 
 
 def _port_names(port_names, degree):
+    """The template's port-reference object names -- the caller's override, or the Port0..Port{N-1} default."""
     names = list(port_names or [])
     if names:
         return names
@@ -164,6 +167,7 @@ def _real_ports_from_context(context):
 
 
 def _get_template_ports(doc, port_names):
+    """Look up each named port-reference object in the template document."""
     objs = []
     for name in port_names:
         matches = doc.getObjectsByLabel(name)
@@ -177,6 +181,7 @@ def _get_template_ports(doc, port_names):
 
 def build_shape_from_template(fcstd_path, context, params=None, result_object="Result",
                                port_names=None, tol_mm=0.5, tol_deg=0.5):
+    """Entry point for the FCStd-template backend -- see the module docstring for the authoring convention."""
     # openDocument()/closeDocument() both reassign FreeCAD.ActiveDocument as
     # a side effect (and leave it None once the template is closed, if it
     # was the last/active one) -- other code (e.g. hvaclib.makeLineKey) reads

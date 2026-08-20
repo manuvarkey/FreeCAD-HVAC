@@ -273,6 +273,7 @@ class HVACLibraryAPI:
     # ------------------------------------------------------------------
     @staticmethod
     def center_from_context(context):
+        """The junction's center point, or (if not given) the average of its connected ports' positions."""
         cp = context.get("center_point", None)
         if cp is not None:
             return HVACLibraryAPI.vec(cp)
@@ -758,6 +759,7 @@ class HVACLibraryAPI:
 
     @staticmethod
     def copy_port(port, position=None, direction=None, profile_x_axis=None):
+        """Copy a port dict, optionally overriding position/direction/profile_x_axis (everything else unchanged)."""
         out = dict(port)
         if position is not None:
             out["position"] = HVACLibraryAPI.vec(position)
@@ -769,6 +771,13 @@ class HVACLibraryAPI:
     
     @staticmethod
     def build_trim_rec_from_port_lengths(port_lengths):
+        """
+        Build the connection_lengths a generator returns from a list of
+        (port, trim_length) pairs -- how far each connected segment is
+        trimmed back from its own endpoint to make room for this fitting.
+        Ports with no real edge_key/segment_end (e.g. a synthetic port) are
+        silently skipped.
+        """
         out = []
         for port, length in port_lengths:
             edge_key = str(port.get("edge_key", "") or "")
@@ -785,6 +794,7 @@ class HVACLibraryAPI:
         return out
     
     def build_trim_rec_from_context_uniform(context, length_value):
+        """Same as build_trim_rec_from_port_lengths, but trims every connected port by the same length_value."""
         ports = list(context.get("connected_ports", []) or [])
         return HVACLibraryAPI.build_trim_rec_from_port_lengths([(p, length_value) for p in ports])
 
@@ -794,6 +804,7 @@ class HVACLibraryAPI:
     # ------------------------------------------------------------------
     @staticmethod
     def make_profile_frame(direction, preferred_x=None, origin=None):
+        """Build a (placement, x_axis, y_axis, z_axis) frame with z along direction, for drawing a cross-section."""
         return hvaclib.make_profile_frame(direction, preferred_x, origin)
 
     # ------------------------------------------------------------------
@@ -801,6 +812,7 @@ class HVACLibraryAPI:
     # ------------------------------------------------------------------
     @staticmethod
     def make_line_edge(p0, p1):
+        """A straight Part.Edge between two points."""
         v0 = HVACLibraryAPI.vec(p0)
         v1 = HVACLibraryAPI.vec(p1)
 
@@ -811,6 +823,7 @@ class HVACLibraryAPI:
 
     @staticmethod
     def make_wire_from_edges(edges):
+        """Join a list of edges into one Part.Wire, skipping any None entries."""
         edge_list = [e for e in (edges or []) if e is not None]
 
         if not edge_list:
@@ -825,6 +838,7 @@ class HVACLibraryAPI:
     
     @staticmethod
     def make_rectangular_wire(center, x_axis, y_axis, width, height):
+        """A rectangular section wire, centered on `center` and aligned to x_axis/y_axis."""
         c = HVACLibraryAPI.vec(center)
         x = HVACLibraryAPI.unit(x_axis) * (float(width) * 0.5)
         y = HVACLibraryAPI.unit(y_axis) * (float(height) * 0.5)
@@ -843,6 +857,7 @@ class HVACLibraryAPI:
 
     @staticmethod
     def make_circular_wire(center, normal, diameter):
+        """A circular section wire, centered on `center`, lying in the plane perpendicular to `normal`."""
         c = HVACLibraryAPI.vec(center)
         n = HVACLibraryAPI.unit(normal)
         r = float(diameter) * 0.5
@@ -909,6 +924,7 @@ class HVACLibraryAPI:
 
     @staticmethod
     def make_section_wire(profile, section_params, center, direction, profile_x_axis=None):
+        """Build a section wire (circular/rectangular/oval, by `profile`) at `center`, facing `direction`."""
         profile = str(profile or "")
         params = dict(section_params or {})
         center = HVACLibraryAPI.vec(center)
@@ -939,16 +955,18 @@ class HVACLibraryAPI:
         
     @staticmethod
     def make_section_wire_from_port(port):
+        """make_section_wire, reading profile/center/direction/section_params straight from a port dict."""
         profile = HVACLibraryAPI.port_profile(port)
         center = HVACLibraryAPI.port_position(port)
         direction = HVACLibraryAPI.port_direction(port)
         preferred_x = HVACLibraryAPI.port_profile_x_axis(port)
         section_params = HVACLibraryAPI.port_section_params(port)
-        
+
         return HVACLibraryAPI.make_section_wire(profile, section_params, center, direction, profile_x_axis=preferred_x)
-            
+
     @staticmethod
     def make_section_face(profile, section_params, center, direction, profile_x_axis=None):
+        """Same as make_section_wire, but returns a flat face instead of just the wire outline."""
         wire = HVACLibraryAPI.make_section_wire(
             profile=profile,
             section_params=section_params,
@@ -960,6 +978,7 @@ class HVACLibraryAPI:
     
     @staticmethod
     def make_section_face_from_port(port):
+        """make_section_face, reading profile/center/direction/section_params straight from a port dict."""
         profile = HVACLibraryAPI.port_profile(port)
         center = HVACLibraryAPI.port_position(port)
         direction = HVACLibraryAPI.port_direction(port)
@@ -973,6 +992,7 @@ class HVACLibraryAPI:
     # ------------------------------------------------------------------
     @staticmethod
     def make_straight_shape(start_point, end_point, profile, section_params, profile_x_axis=None):
+        """A straight duct solid: the cross-section at start_point, extruded to end_point."""
         p1 = HVACLibraryAPI.vec(start_point)
         p2 = HVACLibraryAPI.vec(end_point)
         direction = p2 - p1
@@ -987,7 +1007,6 @@ class HVACLibraryAPI:
             direction=direction,
             profile_x_axis=profile_x_axis,
         )
-        # _, _, _, z_axis = HVACLibraryAPI.make_profile_frame(direction, profile_x_axis, p1)
         shape = face.extrude(HVACLibraryAPI.unit(direction) * length)
 
         try:
@@ -1000,6 +1019,7 @@ class HVACLibraryAPI:
     # ------------------------------------------------------------------
     @staticmethod
     def make_curved_shape(start_point, end_point, profile, section_params, path, profile_x_axis=None, direction = None):
+        """A duct solid swept along `path`: the cross-section at start_point, swept to end_point."""
         p1 = HVACLibraryAPI.vec(start_point)
         p2 = HVACLibraryAPI.vec(end_point)
         if direction is None:
@@ -1031,6 +1051,7 @@ class HVACLibraryAPI:
             
     @staticmethod
     def make_pipe_shell(spine_wire, profile_wires, make_solid=True, is_frenet=False):
+        """Sweep one or more profile wires along spine_wire (thin wrapper over Part.BRepOffsetAPI.MakePipeShell)."""
         shell = Part.BRepOffsetAPI.MakePipeShell(spine_wire)
         for pw in profile_wires:
             shell.add(pw)
@@ -1042,14 +1063,17 @@ class HVACLibraryAPI:
         
     @staticmethod
     def make_loft(profile_wires, solid=True, ruled=True):
+        """Loft a solid/shell through a sequence of profile wires (thin wrapper over Part.makeLoft)."""
         return Part.makeLoft(profile_wires, bool(solid), bool(ruled))
 
     @staticmethod
     def line_wire(p1, p2):
+        """A single-edge wire, a straight line from p1 to p2."""
         return Part.Wire([Part.makeLine(HVACLibraryAPI.vec(p1), HVACLibraryAPI.vec(p2))])
 
     @staticmethod
     def arc_wire(p1, pm, p2):
+        """A single-edge wire, a circular arc through p1 -> pm -> p2."""
         edge = Part.Arc(
             HVACLibraryAPI.vec(p1),
             HVACLibraryAPI.vec(pm),
@@ -1059,6 +1083,7 @@ class HVACLibraryAPI:
 
     @staticmethod
     def fuse_shapes(shapes):
+        """Fuse a list of shapes into one solid, dropping any None entries and cleaning up the seams afterward."""
         valid = [s for s in (shapes or []) if s is not None]
         if not valid:
             raise ValueError("No shapes to fuse")
@@ -1076,6 +1101,7 @@ class HVACLibraryAPI:
     @staticmethod
     def shape_from_fcstd(fcstd_path, context, params=None, result_object="Result",
                           port_names=None, tol_mm=0.5, tol_deg=0.5):
+        """Build a shape from an FCStd template file (a parametric sketch-driven model) -- see template_shapes.py."""
         from . import template_shapes
         return template_shapes.build_shape_from_template(
             fcstd_path, context, params, result_object, port_names, tol_mm, tol_deg
@@ -1083,5 +1109,6 @@ class HVACLibraryAPI:
 
     @staticmethod
     def resolve_library_file(context, relative_path):
+        """Resolve a path relative to the current type-def's own library folder (e.g. a data file it ships with)."""
         registry = hvaclib.HVACLibraryService.get_hvac_library_registry()
         return registry.resolve_library_file(context["library_id"], relative_path)

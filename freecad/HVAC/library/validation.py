@@ -1,5 +1,11 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Parameter and context validation for HVAC library items."""
+"""
+Parameter and context validation for HVAC library items: checks a type-def's
+own property values (normalize_property_value/validate_value/resolve_params)
+and whether a type-def is even a valid fit for the current network context
+(context_violations and friends), a compact JSON-Schema-like rule set rather
+than a full validation library.
+"""
 
 import math
 
@@ -128,6 +134,7 @@ def context_violations(type_def, context):
         ports = list(context.get("connected_ports", []) or [])
         degree = len(ports)
 
+        # Degree: how many ducts connect here.
         if "degree" in constraints and degree != int(constraints["degree"]):
             violations.append(
                 "Type '{}' requires degree {}; got {}".format(
@@ -147,6 +154,7 @@ def context_violations(type_def, context):
                 )
             )
 
+        # Topology: through/branch/cross/multiport/end, as classified by NetworkParser.
         expected_topology = str(getattr(type_def, "topology", "") or "")
         actual_topology = str(context.get("topology", "") or "")
         if (
@@ -161,10 +169,11 @@ def context_violations(type_def, context):
                 )
             )
 
-        # "Generic" is a wildcard used by profile-agnostic placeholder types
-        # (e.g. topology marker fittings), which must accept any connected
-        # duct profile rather than being restricted to a literal "Generic"
-        # port profile.
+        # Profile: does every connected port's duct shape (Circular/
+        # Rectangular/Oval) match what this type supports? "Generic" is a
+        # wildcard used by profile-agnostic placeholder types (e.g. topology
+        # marker fittings), which must accept any connected duct profile
+        # rather than being restricted to a literal "Generic" port profile.
         if profiles and "Generic" not in profiles:
             for index, port in enumerate(ports):
                 profile = str(port.get("profile", "") or "")

@@ -1,5 +1,18 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""BREP/STEP static geometry backend driven by a JSON descriptor."""
+"""
+The "static" geometry backend: builds a type's shape from a pre-made
+BREP/STEP file instead of generating one in code. A JSON descriptor
+alongside that file says how to place it (which point on the file's own
+shape lines up with which connected port) and, optionally, which of its
+faces are the trim planes / connection points a junction needs to report.
+
+build_static_geometry() is the entry point (called from Library.py's
+build_geometry). In short, it: loads the descriptor, reads the shape file,
+works out the one transform that moves the shape from its own local
+placement to the real, connected position/direction, applies it, sanity-
+checks the result against what the descriptor promised, and returns any
+extra outputs the descriptor declares (connection lengths, trim planes).
+"""
 
 import json
 import math
@@ -18,6 +31,7 @@ class StaticDescriptorError(StaticGeometryError):
 
 
 def _load_descriptor(descriptor_path):
+    """Read and sanity-check the JSON descriptor file next to the shape file."""
     if not os.path.isfile(descriptor_path):
         raise StaticDescriptorError("Static descriptor not found: '{}'".format(descriptor_path))
     with open(descriptor_path, "r", encoding="utf-8") as handle:
@@ -32,6 +46,7 @@ def _load_descriptor(descriptor_path):
 
 
 def _source_path(descriptor_path, source):
+    """Resolve the descriptor's source.file to an absolute path, and refuse to leave its own directory."""
     base = os.path.dirname(os.path.realpath(descriptor_path))
     path = os.path.realpath(os.path.join(base, source["file"]))
     if os.path.commonpath([base, path]) != base:
@@ -40,6 +55,7 @@ def _source_path(descriptor_path, source):
 
 
 def _read_shape(descriptor_path, source):
+    """Load the shape file (STEP or BREP) the descriptor points to."""
     path = _source_path(descriptor_path, source)
     if not os.path.isfile(path):
         raise StaticDescriptorError("Static geometry file not found: '{}'".format(path))
@@ -62,6 +78,14 @@ def _read_shape(descriptor_path, source):
 
 
 def _runtime_ports(context, api):
+    """
+    The real, connected ports to line the static shape up against.
+
+    A junction's context already has these (connected_ports, from the
+    network's own topology analysis). A segment's context doesn't -- it
+    only has a start/end point -- so build the equivalent two-port list
+    from that instead.
+    """
     if "connected_ports" in context:
         return list(context.get("connected_ports", []) or [])
 
@@ -92,6 +116,7 @@ def _runtime_ports(context, api):
 
 
 def _context_origin(context, api, runtime_ports, mode, anchor_index):
+    """Look up one reference point from the context, by the descriptor's requested origin_context mode."""
     if mode == "center_point":
         if context.get("center_point") is None:
             raise StaticDescriptorError("placement.origin_context='center_point' requires center_point")
@@ -106,6 +131,18 @@ def _context_origin(context, api, runtime_ports, mode, anchor_index):
 
 
 def _build_transform(desc, context, api, runtime_ports):
+    """
+    Work out the one transform that carries the shape from its own local
+    placement to its real, connected position/direction in the model.
+
+    One port in the descriptor is picked as the "anchor" (placement.
+    runtime_port). We build two matching coordinate frames: the shape's own
+    local frame at that port (as authored, from the descriptor), and the
+    real frame at the same port (from the actual connected duct). The
+    transform that turns one into the other is real_frame * local_frame^-1
+    -- applying it moves every point as if it were expressed in the local
+    frame and re-expressed in the real one.
+    """
     placement = dict(desc.get("placement", {}) or {})
     anchor_index = int(placement.get("runtime_port", 0))
     if anchor_index < 0 or anchor_index >= len(runtime_ports):
@@ -139,6 +176,7 @@ def _build_transform(desc, context, api, runtime_ports):
 
 
 def _descriptor_port_map(desc, runtime_ports):
+    """Match each port the descriptor declares to its real runtime port, by descriptor port id."""
     mapping = {}
     for list_index, port_desc in enumerate(list(desc.get("ports", []) or [])):
         port_id = str(port_desc.get("id", "P{}".format(list_index + 1)))
@@ -152,12 +190,20 @@ def _descriptor_port_map(desc, runtime_ports):
 
 
 def _port_mismatch(message, strict):
+    """Report one validation failure: a hard error in strict mode, a console warning otherwise."""
     if strict:
         raise StaticGeometryError(message)
     FreeCAD.Console.PrintWarning("HVAC - {}\n".format(message))
 
 
 def _validate_ports(desc, transform, api, runtime_ports):
+    """
+    Sanity-check that the descriptor's own claims about each port (its
+    direction, profile, section size) still roughly match the real
+    connected port, after applying the transform. Catches an author's
+    placement/port mistakes early instead of silently building a
+    misconnected shape.
+    """
     validation = dict(desc.get("validation", {}) or {})
     strict = bool(validation.get("strict", True))
     angle_tol = float(validation.get("angle_tolerance_deg", 0.5))
@@ -215,6 +261,7 @@ def _validate_ports(desc, transform, api, runtime_ports):
 
 
 def _build_connection_lengths(desc, api, runtime_ports):
+    """Turn the descriptor's outputs.connection_lengths into the (port, length) records DuctJunction expects."""
     outputs = dict(desc.get("outputs", {}) or {})
     records = outputs.get("connection_lengths", []) or []
     if isinstance(records, dict):
@@ -235,6 +282,7 @@ def _build_connection_lengths(desc, api, runtime_ports):
 
 
 def _transform_plane(plane, transform, api):
+    """Carry a trim plane (position + normal), authored in the shape's local frame, into world coordinates."""
     plane = dict(plane or {})
     position = api.vec(plane.get("position", [0.0, 0.0, 0.0]))
     normal = api.unit(plane.get("normal", [0.0, 0.0, 1.0]))
@@ -247,17 +295,22 @@ def _transform_plane(plane, transform, api):
 
 
 def build_static_geometry(descriptor_path, context):
+    """Entry point for the static backend -- see the module docstring for the overall approach."""
     api = context["hvac_api"]
     desc = _load_descriptor(descriptor_path)
     runtime_ports = _runtime_ports(context, api)
     if not runtime_ports:
         raise StaticGeometryError("Static geometry requires at least one runtime port")
 
+    # Load the shape as authored, work out and apply the one transform that
+    # carries it into its real position, then check the result makes sense.
     shape = _read_shape(descriptor_path, desc["source"])
     transform = _build_transform(desc, context, api, runtime_ports)
     _validate_ports(desc, transform, api, runtime_ports)
     shape.transformShape(transform.toMatrix(), True, False)
 
+    # Any extra outputs (connection lengths, trim planes, ...) the
+    # descriptor declares get carried through in the same real-world frame.
     outputs = dict(desc.get("outputs", {}) or {})
     result = {"shape": shape}
 
