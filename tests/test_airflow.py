@@ -398,6 +398,41 @@ def test_static_regain_higher_regain_factor_gives_smaller_duct():
     assert d_high_r < d_low_r
 
 
+def test_circular_static_regain_fitting_loss_pa_round_trip_balances():
+    # With a nonzero fitting_loss_pa, the balance equation becomes
+    # regain == friction + fitting_loss_pa -- check the returned size
+    # actually satisfies that (not just the plain friction-only version).
+    flow = 0.3
+    upstream_vp = airflow.velocity_pressure(DENSITY, ROUND_TRIP_UPSTREAM_V)
+    fitting_loss_pa = 2.0
+    d, balanced = airflow.circular_diameter_for_static_regain(
+        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY,
+        fitting_loss_pa=fitting_loss_pa,
+    )
+    assert balanced is True
+    regain, friction, _v = _regain_balance(
+        airflow.circular_area(d), airflow.hydraulic_diameter_circular(d),
+        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH
+    )
+    assert regain == pytest.approx(friction + fitting_loss_pa, rel=1e-3)
+
+
+def test_circular_static_regain_fitting_loss_pa_gives_bigger_duct():
+    # More to overcome (friction + fitting loss, instead of just friction)
+    # needs more regain, which only comes from slowing down further --
+    # i.e. a bigger duct than the plain friction-only balance.
+    flow = 0.3
+    upstream_vp = airflow.velocity_pressure(DENSITY, ROUND_TRIP_UPSTREAM_V)
+    d_no_loss, _balanced = airflow.circular_diameter_for_static_regain(
+        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY
+    )
+    d_with_loss, _balanced = airflow.circular_diameter_for_static_regain(
+        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY,
+        fitting_loss_pa=2.0,
+    )
+    assert d_with_loss > d_no_loss
+
+
 @pytest.mark.parametrize("mode,kwargs", [
     ("aspect_ratio", {"aspect_ratio": 2.0}),
     ("fixed_height", {"fixed_dim_m": 0.3}),

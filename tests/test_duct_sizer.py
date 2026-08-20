@@ -22,7 +22,41 @@ from network_fixtures import (
 )
 
 from freecad.HVAC.core import airflow
+from freecad.HVAC.core import DuctSizer as duct_sizer_mod
 from freecad.HVAC.core.DuctSizer import DuctSizer
+
+
+class _NoLossTypeDef:
+    pass
+
+
+class _NoLossRegistry:
+    """
+    Registry stub: every junction resolves to a real (non-None) type, but
+    its loss function always reports exactly 0.0 -- so StaticRegain's
+    fitting-loss estimate is 0.0 everywhere (i.e. sizing behaves exactly
+    like a plain regain-vs-friction solve), rather than falling back to
+    K_DEFAULT the way an unresolved type would. This is the default for
+    every test in this file (most of them are about other things --
+    velocity propagation, overrides, error handling -- not fitting loss);
+    tests that specifically exercise fitting-loss-aware sizing override
+    this with their own monkeypatch.
+    """
+
+    def resolve_type(self, library_id, type_id):
+        return _NoLossTypeDef()
+
+    def call_loss(self, library_id, type_def, context):
+        return 0.0
+
+
+@pytest.fixture(autouse=True)
+def _no_fitting_loss_registry(monkeypatch):
+    monkeypatch.setattr(
+        duct_sizer_mod.hvaclib.HVACLibraryService,
+        "get_hvac_library_registry",
+        staticmethod(lambda: _NoLossRegistry()),
+    )
 
 
 def _two_node_tree(profile, diameter_mm=0.0, width_mm=0.0, height_mm=0.0,
@@ -556,3 +590,172 @@ def test_static_regain_balanced_flag_false_and_warning_when_floor_clamped():
     # regain -- it's trivially "balanced" (not applicable) regardless.
     seg_a_result = next(s for s in result.segments if s.key == "A")
     assert seg_a_result.regain_balanced is True
+
+
+# ----------------------------------------------------------------------------
+# Static regain: junction fitting-loss iteration
+# ----------------------------------------------------------------------------
+
+def test_static_regain_accounts_for_junction_fitting_loss_from_proposed_sizes(monkeypatch):
+    # A tee with a nonzero fitting-loss coefficient: the downstream branch's
+    # regain must now offset both its own friction AND the tee's own
+    # takeoff loss, so it comes out sized bigger (slower) than with no
+    # fitting loss at all.
+    fitting_k = 0.1
+
+    class _FixedKTypeDef:
+        pass
+
+    class _FixedKRegistry:
+        def resolve_type(self, library_id, type_id):
+            return _FixedKTypeDef() if type_id == "branch_tee_generic" else None
+
+        def call_loss(self, library_id, type_def, context):
+            return fitting_k
+
+    monkeypatch.setattr(
+        duct_sizer_mod.hvaclib.HVACLibraryService,
+        "get_hvac_library_registry",
+        staticmethod(lambda: _FixedKRegistry()),
+    )
+
+    net, segment_map, _ = base_tree(
+        segB_len=1000.0,
+        net_extra_props=_sizing_props(method="StaticRegain", target_velocity=5.0,
+                                       min_velocity=4.0, regain_factor=0.75, rounding_mm=0.0),
+    )
+    result = DuctSizer(net).solve()
+    seg_b_result = next(s for s in result.segments if s.key == "B")
+
+    # Self-consistency: the final size must (closely) satisfy the balance
+    # equation using the fitting loss computed from its OWN final velocity
+    # -- i.e. the iteration actually converged, not just ran once.
+    upstream_vp = airflow.velocity_pressure(AIR_DENSITY, 5.0)  # segment A: ConstantVelocity at TargetVelocity
+    fitting_loss_pa = fitting_k * airflow.velocity_pressure(AIR_DENSITY, seg_b_result.velocity_ms)
+    expected_d_m, balanced = airflow.circular_diameter_for_static_regain(
+        airflow.lps_to_m3s(50.0), upstream_vp, 0.75, 1.0,
+        airflow.mm_to_m(DEFAULT_ROUGHNESS_MM), AIR_VISCOSITY, AIR_DENSITY, 4.0,
+        fitting_loss_pa=fitting_loss_pa,
+    )
+    assert balanced is True
+    assert seg_b_result.new_diameter_mm == pytest.approx(expected_d_m * 1000.0, abs=1.0)
+
+    # Bigger than the equivalent solve with no fitting loss at all.
+    d_no_loss_m, _balanced = airflow.circular_diameter_for_static_regain(
+        airflow.lps_to_m3s(50.0), upstream_vp, 0.75, 1.0,
+        airflow.mm_to_m(DEFAULT_ROUGHNESS_MM), AIR_VISCOSITY, AIR_DENSITY, 4.0,
+    )
+    assert seg_b_result.new_diameter_mm > d_no_loss_m * 1000.0
+
+
+def test_static_regain_falls_back_to_k_default_for_unresolved_junction_type(monkeypatch):
+    # Mirrors AirflowSolver.py: a real fitting (degree >= 2) whose type
+    # can't even be resolved still gets the generic K_DEFAULT fallback,
+    # rather than being treated as zero loss.
+    from freecad.HVAC.core.AirflowSolver import K_DEFAULT
+
+    class _UnresolvedRegistry:
+        def resolve_type(self, library_id, type_id):
+            return None
+
+        def call_loss(self, library_id, type_def, context):
+            return None
+
+    monkeypatch.setattr(
+        duct_sizer_mod.hvaclib.HVACLibraryService,
+        "get_hvac_library_registry",
+        staticmethod(lambda: _UnresolvedRegistry()),
+    )
+
+    net, segment_map, _ = base_tree(
+        segB_len=1000.0,
+        net_extra_props=_sizing_props(method="StaticRegain", target_velocity=5.0,
+                                       min_velocity=4.0, regain_factor=0.75, rounding_mm=0.0),
+    )
+    result = DuctSizer(net).solve()
+    seg_b_result = next(s for s in result.segments if s.key == "B")
+
+    upstream_vp = airflow.velocity_pressure(AIR_DENSITY, 5.0)
+    fitting_loss_pa = K_DEFAULT * airflow.velocity_pressure(AIR_DENSITY, seg_b_result.velocity_ms)
+    expected_d_m, _balanced = airflow.circular_diameter_for_static_regain(
+        airflow.lps_to_m3s(50.0), upstream_vp, 0.75, 1.0,
+        airflow.mm_to_m(DEFAULT_ROUGHNESS_MM), AIR_VISCOSITY, AIR_DENSITY, 4.0,
+        fitting_loss_pa=fitting_loss_pa,
+    )
+    assert seg_b_result.new_diameter_mm == pytest.approx(expected_d_m * 1000.0, abs=1.0)
+
+
+def _three_node_chain(segB_len=1000.0, net_extra_props=None):
+    """J1 (balancing terminal) --A(5000mm)--> J2 (degree-2, e.g. an elbow) --B(segB_len)--> J3 (leaf, 50 L/s)."""
+    node_ports = {
+        1: [("A", "start")],
+        2: [("A", "end"), ("B", "start")],
+        3: [("B", "end")],
+    }
+    edge_endpoints = {"A": (1, 2), "B": (2, 3)}
+    parser = FakeParser(node_ports, edge_endpoints)
+    segment_map = {
+        "A": make_segment("A", 200.0, 5000.0),
+        "B": make_segment("B", 150.0, segB_len),
+    }
+    junction_map = {
+        "N1": make_junction("J1", design_flow=0.0, type_id="end_terminal_marker"),
+        "N2": make_junction("J2", design_flow=0.0, type_id="through_elbow_generic"),
+        "N3": make_junction("J3", design_flow=50.0, type_id="end_terminal_marker"),
+    }
+    net = make_net(parser, segment_map, junction_map, **(net_extra_props or {}))
+    return net, segment_map, junction_map
+
+
+def test_static_regain_ignores_fitting_loss_at_inline_degree_two_node(monkeypatch):
+    # A degree-2 node (e.g. an elbow) is not a branch -- there's no sibling
+    # to balance against, so its own fitting loss must NOT be folded into
+    # segment B's regain target, even if the registry reports a large K.
+    class _BigKTypeDef:
+        pass
+
+    class _BigKRegistry:
+        def resolve_type(self, library_id, type_id):
+            return _BigKTypeDef()
+
+        def call_loss(self, library_id, type_def, context):
+            return 5.0  # deliberately large -- would clamp/inflate sizing if it were included
+
+    monkeypatch.setattr(
+        duct_sizer_mod.hvaclib.HVACLibraryService,
+        "get_hvac_library_registry",
+        staticmethod(lambda: _BigKRegistry()),
+    )
+
+    net, segment_map, _ = _three_node_chain(
+        segB_len=1000.0,
+        net_extra_props=_sizing_props(method="StaticRegain", target_velocity=5.0,
+                                       min_velocity=4.0, regain_factor=0.75, rounding_mm=0.0),
+    )
+    result = DuctSizer(net).solve()
+    seg_b_result = next(s for s in result.segments if s.key == "B")
+
+    upstream_vp = airflow.velocity_pressure(AIR_DENSITY, 5.0)
+    expected_d_m, balanced = airflow.circular_diameter_for_static_regain(
+        airflow.lps_to_m3s(50.0), upstream_vp, 0.75, 1.0,
+        airflow.mm_to_m(DEFAULT_ROUGHNESS_MM), AIR_VISCOSITY, AIR_DENSITY, 4.0,
+    )
+    assert balanced is True
+    assert seg_b_result.new_diameter_mm == pytest.approx(expected_d_m * 1000.0)
+
+
+def test_sizes_converged_helper():
+    prev = {"A": (100.0, 0.0, 0.0)}
+    assert duct_sizer_mod._sizes_converged(prev, {"A": (100.4, 0.0, 0.0)}, tolerance_mm=0.5) is True
+    assert duct_sizer_mod._sizes_converged(prev, {"A": (101.0, 0.0, 0.0)}, tolerance_mm=0.5) is False
+    assert duct_sizer_mod._sizes_converged(prev, {"B": (100.0, 0.0, 0.0)}, tolerance_mm=0.5) is False
+
+
+def test_section_params_from_result_helper():
+    circ = duct_sizer_mod.SegmentSizeResult(key="A", obj=None, profile="Circular", new_diameter_mm=150.0)
+    assert duct_sizer_mod._section_params_from_result(circ) == {"Diameter": 150.0}
+
+    rect = duct_sizer_mod.SegmentSizeResult(
+        key="B", obj=None, profile="Rectangular", new_width_mm=300.0, new_height_mm=200.0
+    )
+    assert duct_sizer_mod._section_params_from_result(rect) == {"Width": 300.0, "Height": 200.0}

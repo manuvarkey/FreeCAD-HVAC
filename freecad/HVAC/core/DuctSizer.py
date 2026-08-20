@@ -47,17 +47,33 @@ writes the proposed Diameter/Width/Height onto the real objects -- the Size
 Ducts command shows the preview first and lets the user confirm before
 calling apply().
 
-TODO: StaticRegain doesn't yet account for junction fitting/dynamic losses,
-only straight-duct friction -- see the TODO in airflow.py's "Duct sizing:
-static regain" section for what fixing this would take.
+StaticRegain also needs to weigh each section's regain against the fitting/
+dynamic loss of the junction it takes off from (e.g. a tee's branch loss),
+not just its own straight-duct friction -- otherwise it's balancing against
+less than the section actually has to overcome. That loss depends on the
+very duct sizes being solved for, so it's resolved by iterating: size the
+component once (first pass has no fitting-loss estimate yet, same as a
+plain regain-only solve), estimate every junction's loss from those
+proposed sizes (reusing the same per-type loss_module/loss_function
+AirflowSolver.py calls, via a provisional connected_ports context built
+from the proposed sizes instead of the segments' live properties), re-size
+using that estimate, and repeat until sizes settle -- see
+_solveComponentStaticRegain.
 """
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 from ..utils import hvaclib
 from . import airflow
+from .AirflowSolver import K_DEFAULT
 from .FlowNetwork import solve_flow_components
+
+
+# Fixed-point iteration cap for StaticRegain's fitting-loss estimate (see
+# _solveComponentStaticRegain) -- sizes normally settle in 2-3 passes; this
+# is a safety bound, not a tuned expectation.
+_STATIC_REGAIN_MAX_ITERATIONS = 5
 
 
 _RECT_MODE_MAP = {
@@ -81,6 +97,7 @@ class SegmentSizeResult:
     new_width_mm: float = 0.0
     new_height_mm: float = 0.0
     velocity_ms: float = 0.0
+    reynolds: float = 0.0
     friction_rate_pa_per_m: float = 0.0
     regain_balanced: bool = True  # only meaningful for SizingMethod=StaticRegain; see module docstring
     changed: bool = False
@@ -100,6 +117,24 @@ def _round_up(value_mm, increment_mm):
     return math.ceil(value_mm / increment_mm - 1e-9) * increment_mm
 
 
+def _section_params_from_result(sres):
+    """A port-style section_params dict (mm) for this segment's proposed size, from its SegmentSizeResult."""
+    if sres.profile == "Circular":
+        return {"Diameter": sres.new_diameter_mm}
+    return {"Width": sres.new_width_mm, "Height": sres.new_height_mm}
+
+
+def _sizes_converged(prev_sizes, sizes, tolerance_mm):
+    """True if every segment's (diameter, width, height) moved by no more than tolerance_mm since the last pass."""
+    if set(prev_sizes) != set(sizes):
+        return False
+    for tag, new_dims in sizes.items():
+        old_dims = prev_sizes[tag]
+        if any(abs(a - b) > tolerance_mm for a, b in zip(old_dims, new_dims)):
+            return False
+    return True
+
+
 class DuctSizer:
     """Computes proposed duct dimensions for a DuctNetwork's segments (preview-only; see apply())."""
 
@@ -110,7 +145,7 @@ class DuctSizer:
         net = self.net_obj
         # Same flow-distribution step AirflowSolver uses: which segments carry
         # how much flow, and how they group into independently-solvable trees.
-        _, _junction_map, segment_map, components, warnings = solve_flow_components(net)
+        parser, junction_map, segment_map, components, warnings = solve_flow_components(net)
 
         result = DuctSizingResult(warnings=list(warnings))
 
@@ -142,8 +177,8 @@ class DuctSizer:
         for comp in components:
             if method == "StaticRegain":
                 self._solveComponentStaticRegain(
-                    comp, segment_map, result, mode, aspect_ratio, target_velocity, rounding_mm,
-                    viscosity, density, default_roughness_mm, default_width_mm, default_height_mm,
+                    parser, comp, segment_map, junction_map, result, mode, aspect_ratio, target_velocity,
+                    rounding_mm, viscosity, density, default_roughness_mm, default_width_mm, default_height_mm,
                     regain_factor, min_velocity,
                 )
                 continue
@@ -163,23 +198,75 @@ class DuctSizer:
 
         return result
 
-    def _solveComponentStaticRegain(self, comp, segment_map, result, mode, aspect_ratio,
+    def _solveComponentStaticRegain(self, parser, comp, segment_map, junction_map, result, mode, aspect_ratio,
                                      target_velocity, rounding_mm, viscosity, density,
                                      default_roughness_mm, default_width_mm, default_height_mm,
                                      regain_factor, min_velocity):
         """
-        Size every segment in this component in order, walking outward from
-        the balancing terminal (comp.root_node_id). comp.order always visits
-        a node after its parent, so by the time a segment is sized, its
-        upstream segment's velocity is already known.
+        Size every segment in this component, iterating to account for each
+        takeoff junction's own fitting/dynamic loss (see the module
+        docstring for why). Pass 1 has no fitting-loss estimate yet (0 Pa
+        everywhere, i.e. a plain regain-vs-friction solve); each pass after
+        that estimates every junction's loss from the previous pass's
+        proposed sizes and re-sizes against it. Stops once sizes settle to
+        within a rounding step (or _STATIC_REGAIN_MAX_ITERATIONS passes, in
+        which case a warning is added and the last pass's sizes are used --
+        this is a fixed-point iteration, not a guaranteed-convergent solve).
+        """
+        size_tolerance_mm = max(rounding_mm, 0.5)
+        fitting_loss_by_edge = {}
+        seg_results_by_edge = {}
+        pass_warnings = []
+        prev_sizes = None
+
+        for _ in range(_STATIC_REGAIN_MAX_ITERATIONS):
+            seg_results_by_edge, pass_warnings = self._sizeComponentStaticRegainPass(
+                comp, segment_map, mode, aspect_ratio, target_velocity, rounding_mm,
+                viscosity, density, default_roughness_mm, default_width_mm, default_height_mm,
+                regain_factor, min_velocity, fitting_loss_by_edge,
+            )
+            sizes = {
+                tag: (r.new_diameter_mm, r.new_width_mm, r.new_height_mm)
+                for tag, r in seg_results_by_edge.items()
+            }
+            if prev_sizes is not None and _sizes_converged(prev_sizes, sizes, size_tolerance_mm):
+                break
+            prev_sizes = sizes
+            fitting_loss_by_edge = self._junctionFittingLossPa(
+                parser, comp, junction_map, seg_results_by_edge, density, viscosity
+            )
+        else:
+            pass_warnings.append(
+                "Static regain sizing with junction fitting losses did not settle after {} passes; "
+                "sizes shown are from the last pass.".format(_STATIC_REGAIN_MAX_ITERATIONS)
+            )
+
+        result.segments.extend(seg_results_by_edge.values())
+        result.warnings.extend(pass_warnings)
+
+    def _sizeComponentStaticRegainPass(self, comp, segment_map, mode, aspect_ratio,
+                                        target_velocity, rounding_mm, viscosity, density,
+                                        default_roughness_mm, default_width_mm, default_height_mm,
+                                        regain_factor, min_velocity, fitting_loss_by_edge):
+        """
+        One static-regain sizing pass, walking outward from the balancing
+        terminal (comp.root_node_id). comp.order always visits a node after
+        its parent, so by the time a segment is sized, its upstream
+        segment's velocity is already known.
 
         The segment(s) coming straight off the source have no upstream
         section to regain from, so they're just sized at the network's
-        TargetVelocity (standard starting point). Every other segment is
-        sized by the regain-balance equation against its own parent's
-        already-solved velocity.
+        TargetVelocity (standard starting point) -- fitting_loss_by_edge
+        doesn't apply to them either. Every other segment is sized by the
+        regain-balance equation against its own parent's already-solved
+        velocity, plus fitting_loss_by_edge's estimate (if any yet) of the
+        loss at the junction it takes off from.
+
+        Returns ({edge_tag: SegmentSizeResult}, [warning, ...]).
         """
         velocity_by_node = {}  # each node's resolved velocity, filled in as we go
+        seg_results_by_edge = {}
+        warnings = []
 
         for node_id in comp.order[1:]:
             edge_ref = comp.parent_edge[node_id]
@@ -191,9 +278,11 @@ class DuctSizer:
                 # First segment off the source: no upstream velocity to regain from.
                 effective_method = "ConstantVelocity"
                 upstream_vp = 0.0  # unused by _size_segment for ConstantVelocity
+                fitting_loss_pa = 0.0
             else:
                 effective_method = "StaticRegain"
                 upstream_vp = airflow.velocity_pressure(density, velocity_by_node[parent_id])
+                fitting_loss_pa = fitting_loss_by_edge.get(edge_ref.tag, 0.0)
 
             try:
                 sres = self._size_segment(
@@ -203,23 +292,127 @@ class DuctSizer:
                     default_width_mm, default_height_mm,
                     upstream_velocity_pressure_pa=upstream_vp,
                     regain_factor=regain_factor, min_velocity=min_velocity,
+                    fitting_loss_pa=fitting_loss_pa,
                 )
-                result.segments.append(sres)
+                seg_results_by_edge[edge_ref.tag] = sres
                 velocity_by_node[node_id] = sres.velocity_ms
                 if not sres.regain_balanced:
-                    result.warnings.append(
+                    warnings.append(
                         "{}: static regain could not be balanced for this section (clamped to the "
                         "minimum/maximum velocity bracket) -- a balancing damper may be needed "
                         "here.".format(seg_obj.Label)
                     )
             except ValueError as exc:
-                result.warnings.append("{}: {}".format(seg_obj.Label, exc))
+                warnings.append("{}: {}".format(seg_obj.Label, exc))
                 # Can't resolve this section's own velocity -- seed anything
                 # downstream of it with a sensible fallback (the upstream
                 # velocity, or the network's TargetVelocity at the source) so
                 # the rest of this sub-tree still gets an (less accurate)
                 # answer instead of cascading into more failures.
                 velocity_by_node[node_id] = velocity_by_node.get(parent_id, target_velocity)
+
+        return seg_results_by_edge, warnings
+
+    def _junctionFittingLossPa(self, parser, comp, junction_map, seg_results_by_edge, density, viscosity):
+        """
+        Estimate every junction's fitting/dynamic loss (Pa), the same way
+        AirflowSolver.py's Phase E does -- calling each junction's own
+        loss_module/loss_function (or the generic K_DEFAULT fallback) --
+        but from THIS PASS'S PROPOSED sizes (seg_results_by_edge) instead of
+        each segment's live FreeCAD property, since the real size hasn't
+        been written back yet during sizing.
+
+        Returns {edge_tag: fitting_loss_pa}, restricted to two things:
+
+        - Only real BRANCH junctions (degree >= 3). Classic static regain
+          balances pressure between sibling branches off a common trunk; an
+          inline degree-2 fitting (an elbow, a transition, ...) has no
+          sibling to balance against, so its own loss is left out of the
+          regain target, same as it always has been -- only its own
+          straight-duct friction counts there.
+        - Only a branch junction's own outlet/takeoff legs. A downstream
+          terminal device's own loss (e.g. a diffuser's neck loss) is
+          excluded too: regain balances pressure between successive duct
+          sections, not against a dead-end device with nothing further
+          downstream to balance.
+        """
+        reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
+        fitting_loss_by_edge = {}
+
+        def provisional_velocity(edge_key):
+            sres = seg_results_by_edge.get(edge_key)
+            return sres.velocity_ms if sres is not None else 0.0
+
+        for node_id in comp.comp_nodes:
+            if comp.graph.degree[node_id] < 3:
+                continue
+
+            junction_obj = junction_map[parser.node_key(node_id)]
+            ja = comp.analysis_by_node[node_id]
+
+            library_id = getattr(junction_obj, "LibraryId", "")
+            type_id = getattr(junction_obj, "TypeId", "")
+            type_def = reg.resolve_type(library_id, type_id) if library_id and type_id else None
+
+            properties = {}
+            if type_def is not None:
+                for pdef in getattr(type_def, "properties", []) or []:
+                    if hasattr(junction_obj, pdef.name):
+                        properties[pdef.name] = getattr(junction_obj, pdef.name)
+                    else:
+                        properties[pdef.name] = getattr(pdef, "default", None)
+
+            connected_ports_ctx = []
+            for port in ja.connected_ports:
+                port_dict = asdict(port)
+                sres = seg_results_by_edge.get(port.edge_key)
+                if sres is not None:
+                    port_dict["velocity_ms"] = sres.velocity_ms
+                    port_dict["reynolds"] = sres.reynolds
+                    port_dict["flow_rate_lps"] = sres.flow_lps
+                    port_dict["section_params"] = _section_params_from_result(sres)
+                connected_ports_ctx.append(port_dict)
+
+            context = {
+                "obj": junction_obj,
+                "center_point": ja.point,
+                "properties": properties,
+                "connected_ports": connected_ports_ctx,
+                "family": getattr(junction_obj, "Family", ""),
+                "type_id": type_id,
+                "library_id": library_id,
+                "air_density": density,
+                "air_kinematic_viscosity": viscosity,
+            }
+
+            k_result = reg.call_loss(library_id, type_def, context) if type_def is not None else None
+
+            if isinstance(k_result, dict):
+                for edge_key, k in k_result.items():
+                    if k is None:
+                        continue
+                    v = provisional_velocity(edge_key)
+                    fitting_loss_by_edge[edge_key] = (
+                        fitting_loss_by_edge.get(edge_key, 0.0) + float(k) * airflow.velocity_pressure(density, v)
+                    )
+                continue
+
+            # A real fitting (degree >= 2) always has some physical loss --
+            # K_DEFAULT fills in when the type has no loss formula of its
+            # own, same as AirflowSolver.py (a per-junction warning isn't
+            # repeated here; AirflowSolver already reports it when the
+            # applied sizes are later calculated).
+            k_uniform = K_DEFAULT if k_result is None else float(k_result)
+
+            for port in ja.connected_ports:
+                if port.flow_into_junction:
+                    continue  # inlet port -- fitting loss is attributed at outlet ports only
+                v = provisional_velocity(port.edge_key)
+                fitting_loss_by_edge[port.edge_key] = (
+                    fitting_loss_by_edge.get(port.edge_key, 0.0) + k_uniform * airflow.velocity_pressure(density, v)
+                )
+
+        return fitting_loss_by_edge
 
     def apply(self, result):
         """Write every changed proposed size onto its real segment object."""
@@ -244,7 +437,8 @@ class DuctSizer:
                        target_velocity, target_friction_rate, rounding_mm,
                        viscosity, density, default_roughness_mm,
                        default_width_mm, default_height_mm,
-                       upstream_velocity_pressure_pa=0.0, regain_factor=0.75, min_velocity=2.5):
+                       upstream_velocity_pressure_pa=0.0, regain_factor=0.75, min_velocity=2.5,
+                       fitting_loss_pa=0.0):
         # Step 1: read the segment's current size and profile (used for the
         # "before" side of the result, and as a fallback for fixed dimensions).
         profile = str(getattr(seg_obj, "Profile", "") or "")
@@ -322,7 +516,7 @@ class DuctSizer:
             elif method == "StaticRegain":
                 diameter_m, regain_balanced = airflow.circular_diameter_for_static_regain(
                     flow_m3s, upstream_velocity_pressure_pa, regain_factor, length_m,
-                    roughness_m, viscosity, density, min_velocity
+                    roughness_m, viscosity, density, min_velocity, fitting_loss_pa=fitting_loss_pa,
                 )
             else:
                 diameter_m = airflow.circular_diameter_for_friction_rate(
@@ -352,7 +546,7 @@ class DuctSizer:
                 width_m, height_m, regain_balanced = dims_regain(
                     flow_m3s, upstream_velocity_pressure_pa, regain_factor, length_m,
                     roughness_m, viscosity, density, min_velocity,
-                    mode, aspect_ratio=aspect_ratio, fixed_dim_m=fixed_dim_m
+                    mode, aspect_ratio=aspect_ratio, fixed_dim_m=fixed_dim_m, fitting_loss_pa=fitting_loss_pa,
                 )
             else:
                 width_m, height_m = dims_friction(
@@ -394,6 +588,6 @@ class DuctSizer:
 
         return SegmentSizeResult(
             new_diameter_mm=new_diameter_mm, new_width_mm=new_width_mm, new_height_mm=new_height_mm,
-            velocity_ms=velocity_ms, friction_rate_pa_per_m=friction_rate_pa_per_m,
+            velocity_ms=velocity_ms, reynolds=reynolds, friction_rate_pa_per_m=friction_rate_pa_per_m,
             regain_balanced=regain_balanced, changed=changed, **base_result
         )
