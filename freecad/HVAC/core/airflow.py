@@ -452,6 +452,19 @@ def oval_dims_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
 # slower. A balance point faster than the floor is unconstrained -- the
 # floor is a minimum velocity, not a maximum -- so it's simply returned as a
 # normal balanced solution.
+#
+# TODO: _regain_minus_friction only weighs regain against this section's own
+# straight-duct friction -- it does not include the fitting/dynamic loss of
+# the junction the section leaves (e.g. a tee's branch loss, an elbow),
+# unlike AirflowSolver.py's real pressure solve, which adds fitting_loss_pa
+# via the library's pluggable loss_module/loss_function (call_loss()).
+# Fixing this needs iterative sizing in core.DuctSizer: size once, build a
+# provisional connected_ports context from the *proposed* sizes and call the
+# same call_loss() machinery to get each junction's K (it only needs a
+# ports/velocity context, not built geometry, so this doesn't require
+# constructing real junction shapes), fold that loss into the friction term
+# here, and re-solve until sizes converge. Only StaticRegain is affected --
+# ConstantVelocity/ConstantFrictionRate size each segment independently.
 # ----------------------------------------------------------------------------
 
 def _regain_minus_friction(area_and_dh_fn, scale, flow_m3_s, upstream_velocity_pressure_pa,

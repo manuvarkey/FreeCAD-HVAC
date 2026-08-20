@@ -45,6 +45,10 @@ returns proposed sizes (a preview). DuctSizer.apply(result) is a separate,
 explicit step that writes the proposed Diameter/Width/Height onto the real
 segment objects -- callers (the Size Ducts command/UI) are expected to show
 the preview and let the user confirm before applying.
+
+TODO: StaticRegain does not yet account for junction fitting/dynamic losses
+(only straight-duct friction) -- see the TODO in airflow.py's "Duct sizing:
+static regain" section for what fixing this (iterative sizing) would need.
 """
 
 import math
