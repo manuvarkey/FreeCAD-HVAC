@@ -97,7 +97,28 @@ rather than improvising.
   under active restructuring, so avoid speculative abstractions or
   refactors bundled into unrelated changes.
 
-## 4. Rule stability
+## 4. Code comments
+
+This project comments more than the general default minimal style: the
+goal is for someone reading a module for the first time to follow what's
+happening without having to reverse-engineer it from the code alone.
+
+- Write comments in plain, simple English — avoid dense, jargon-heavy
+  prose. Explain it the way you'd say it out loud to a colleague, not the
+  way you'd write a spec.
+- Keep comments concise: 1-2 lines is normally enough for a given point.
+- Beyond function/class docstrings, add short inline comments marking the
+  logical steps of a non-trivial multi-step function (e.g. "Step 1: ...",
+  "Step 2: ...") so its process flow can be followed without tracing the
+  code line by line.
+- Still explain the *why* behind non-obvious decisions (hidden constraints,
+  invariants, workarounds) — simplify the wording, don't drop the
+  substance.
+- This is a repo-wide style. When substantially editing a module, bring its
+  comments in line with this style rather than leaving old dense/cryptic
+  ones sitting next to new ones.
+
+## 5. Rule stability
 
 Do not modify this file, or otherwise change the rules above, without
 explicit instruction to do so. Encountering a case these rules don't cover
