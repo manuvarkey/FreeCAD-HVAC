@@ -33,6 +33,48 @@
       "group": "Dimensions",
       "description": "Trim length for the branch port",
       "default": 100.0
+    },
+    {
+      "name": "Thickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Sheet metal thickness",
+      "default": 0.8
+    },
+    {
+      "name": "FlangeHeight",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Flange height",
+      "default": 25.0
+    },
+    {
+      "name": "FlangeThickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Flange thickness",
+      "default": 1.0
+    },
+    {
+      "name": "ShowFlangeA",
+      "prop_type": "App::PropertyBool",
+      "group": "Options",
+      "description": "Include the flange at run port A",
+      "default": true
+    },
+    {
+      "name": "ShowFlangeB",
+      "prop_type": "App::PropertyBool",
+      "group": "Options",
+      "description": "Include the flange at run port B",
+      "default": true
+    },
+    {
+      "name": "ShowFlangeBranch",
+      "prop_type": "App::PropertyBool",
+      "group": "Options",
+      "description": "Include the flange at the branch port",
+      "default": true
     }
   ],
   "generator": {

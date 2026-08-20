@@ -583,7 +583,18 @@ def _find_run_pair(api, ports, angle_tol_deg=10.0):
     return best
 
 
-def _make_leg_to_center(api, port, center, trim_length, inner_inset=None):
+def _make_leg_to_center(api, port, center, trim_length, thickness, inner_inset=None):
+    """
+    Build one hollow leg of a wye/manifold fitting: a solid loft from the
+    duct-facing outer port to a near-center inner port (`outer_shape`), plus
+    the same loft rebuilt from thickness-inset ports (`void_shape`) -- the
+    caller fuses all legs' outer_shapes and void_shapes separately, then
+    cuts once, so the wall thickness is consistent everywhere the legs
+    overlap near the center (matches build_elbow/build_transition/build_tee).
+
+    Returns (outer_shape, void_shape, outer_port) -- outer_port is handed
+    back so the caller can place a flange at the duct-facing end.
+    """
     u = api.port_direction(port)
     outer_pos = api.port_position(port) + (u * (float(trim_length)))
     outer_port = api.copy_port(port, position=outer_pos)
@@ -591,12 +602,16 @@ def _make_leg_to_center(api, port, center, trim_length, inner_inset=None):
     if inner_inset is None:
         inner_inset = max(0.05 * _section_size_hint(api, port), 1.0)
     inner_port = _make_center_merge_port(api, port, center, inner_inset)
-    
+
     outer_wire = api.make_section_wire_from_port(outer_port)
     inner_wire = api.make_section_wire_from_port(inner_port)
-    shape = api.make_loft([outer_wire, inner_wire], solid=True, ruled=True)
-    
-    return shape
+    outer_shape = api.make_loft([outer_wire, inner_wire], solid=True, ruled=True)
+
+    hollow_outer_wire = api.make_section_wire_from_port(_inset_port(api, outer_port, thickness))
+    hollow_inner_wire = api.make_section_wire_from_port(_inset_port(api, inner_port, thickness))
+    void_shape = api.make_loft([hollow_outer_wire, hollow_inner_wire], solid=True, ruled=True)
+
+    return outer_shape, void_shape, outer_port
 
 
 # --------------------------------------------------------------------------
@@ -670,7 +685,7 @@ def build_tee(context):
     section_b = api.make_section_wire_from_port(port_b)
     section_mid = api.make_section_wire_from_port(port_mid)
     leg_main = api.make_loft([section_a, section_mid, section_b])
-    
+
     # Branch leg
     pos_branch = center_branch + api.port_direction(branch) * branch_trim
     pos_mid_branch = center_branch
@@ -681,8 +696,44 @@ def build_tee(context):
     branch_leg = api.make_loft([section_branch, section_mid_branch])
 
     # Fuse shapes
-    shape = api.fuse_shapes([leg_main, branch_leg])
-    
+    outer_shape = api.fuse_shapes([leg_main, branch_leg])
+
+    # Hollow sheet-metal wall: rebuild both legs from thickness-inset ports
+    # and cut their fused union from the outer fused union once (rather than
+    # per-leg), matching the fidelity used for build_elbow/build_transition.
+    thickness = float(props.get("Thickness", 0.8) or 0.8)
+    inner_section_a = api.make_section_wire_from_port(_inset_port(api, port_a, thickness))
+    inner_section_b = api.make_section_wire_from_port(_inset_port(api, port_b, thickness))
+    inner_section_mid = api.make_section_wire_from_port(_inset_port(api, port_mid, thickness))
+    inner_leg_main = api.make_loft([inner_section_a, inner_section_mid, inner_section_b])
+
+    inner_section_branch = api.make_section_wire_from_port(_inset_port(api, port_branch, thickness))
+    inner_section_mid_branch = api.make_section_wire_from_port(_inset_port(api, port_mid_branch, thickness))
+    inner_branch_leg = api.make_loft([inner_section_branch, inner_section_mid_branch])
+
+    inner_shape = api.fuse_shapes([inner_leg_main, inner_branch_leg])
+
+    parts = [outer_shape.cut(inner_shape)]
+
+    # Flanges at the 3 duct-facing ends, extruded inward into the fitting's
+    # own body -- same convention as build_elbow/build_transition.
+    flange_height = float(props.get("FlangeHeight", 25.0) or 25.0)
+    flange_thickness = float(props.get("FlangeThickness", 1.0) or 1.0)
+    show_flange_a = bool(props.get("ShowFlangeA", True))
+    show_flange_b = bool(props.get("ShowFlangeB", True))
+    show_flange_branch = bool(props.get("ShowFlangeBranch", True))
+
+    if show_flange_a and flange_height > 0.0 and flange_thickness > 0.0:
+        parts.append(_make_flange(api, port_a, api.port_direction(port_a) * -1.0, flange_thickness, flange_height))
+    if show_flange_b and flange_height > 0.0 and flange_thickness > 0.0:
+        parts.append(_make_flange(api, port_b, api.port_direction(port_b) * -1.0, flange_thickness, flange_height))
+    if show_flange_branch and flange_height > 0.0 and flange_thickness > 0.0:
+        parts.append(
+            _make_flange(api, port_branch, api.port_direction(port_branch) * -1.0, flange_thickness, flange_height)
+        )
+
+    shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
+
     return {
         "shape": shape,
         "connection_lengths": api.build_trim_rec_from_port_lengths(
@@ -729,12 +780,38 @@ def build_wye(context):
     a_trim_sug = _safe_trim(props.get("TrimLengthA", 0.0), 0.5 * a_size_hint)
     b_trim_sug = _safe_trim(props.get("TrimLengthB", 0.0), 0.5 * b_size_hint)
     c_trim_sug = _safe_trim(props.get("TrimLengthC", 0.0), 0.5 * c_size_hint)
-    
-    leg_a = _make_leg_to_center(api, port_a, center, a_trim_sug)
-    leg_b = _make_leg_to_center(api, port_b, center, b_trim_sug)
-    leg_c = _make_leg_to_center(api, port_c, center, c_trim_sug)
 
-    shape = api.fuse_shapes([leg_a, leg_b, leg_c])
+    thickness = float(props.get("Thickness", 0.8) or 0.8)
+    leg_a, void_a, outer_port_a = _make_leg_to_center(api, port_a, center, a_trim_sug, thickness)
+    leg_b, void_b, outer_port_b = _make_leg_to_center(api, port_b, center, b_trim_sug, thickness)
+    leg_c, void_c, outer_port_c = _make_leg_to_center(api, port_c, center, c_trim_sug, thickness)
+
+    outer_shape = api.fuse_shapes([leg_a, leg_b, leg_c])
+    inner_shape = api.fuse_shapes([void_a, void_b, void_c])
+    parts = [outer_shape.cut(inner_shape)]
+
+    # Flanges at the 3 duct-facing ends, extruded inward into the fitting's
+    # own body -- same convention as build_elbow/build_transition.
+    flange_height = float(props.get("FlangeHeight", 25.0) or 25.0)
+    flange_thickness = float(props.get("FlangeThickness", 1.0) or 1.0)
+    show_flange_a = bool(props.get("ShowFlangeA", True))
+    show_flange_b = bool(props.get("ShowFlangeB", True))
+    show_flange_c = bool(props.get("ShowFlangeC", True))
+
+    if show_flange_a and flange_height > 0.0 and flange_thickness > 0.0:
+        parts.append(
+            _make_flange(api, outer_port_a, api.port_direction(outer_port_a) * -1.0, flange_thickness, flange_height)
+        )
+    if show_flange_b and flange_height > 0.0 and flange_thickness > 0.0:
+        parts.append(
+            _make_flange(api, outer_port_b, api.port_direction(outer_port_b) * -1.0, flange_thickness, flange_height)
+        )
+    if show_flange_c and flange_height > 0.0 and flange_thickness > 0.0:
+        parts.append(
+            _make_flange(api, outer_port_c, api.port_direction(outer_port_c) * -1.0, flange_thickness, flange_height)
+        )
+
+    shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
     return {
         "shape": shape,
@@ -775,6 +852,12 @@ def build_manifold(context):
         TrimLength1, TrimLength2, ..., TrimLengthN
     and/or
         TrimLengthA, TrimLengthB, ... for the first 26 ports
+    and/or a uniform TrimLength fallback.
+
+    Legs are hollow (Thickness) with an optional flange collar at each
+    duct-facing end (FlangeHeight/FlangeThickness), individually toggled by
+    the same ShowFlange1/.../ShowFlangeA/... convention (falling back to a
+    uniform ShowFlange, then True).
 
     Notes:
     - This is a simple "all legs meet at a center" manifold.
@@ -803,17 +886,25 @@ def build_manifold(context):
         center = center + p
     center = center / float(n_ports)
 
-    legs = []
+    thickness = float(props.get("Thickness", 0.8) or 0.8)
+    flange_height = float(props.get("FlangeHeight", 25.0) or 25.0)
+    flange_thickness = float(props.get("FlangeThickness", 1.0) or 1.0)
+
+    outer_legs = []
+    void_legs = []
+    flange_parts = []
     trim_records = []
 
     for idx, port in enumerate(ports):
         size_hint = _section_size_hint(api, port)
 
-        # Support both numeric and alphabetic trim keys
-        #   TrimLength1, TrimLength2, ...
-        #   TrimLengthA, TrimLengthB, ...
+        # Support both numeric and alphabetic trim/flange keys
+        #   TrimLength1, TrimLength2, ...  /  ShowFlange1, ShowFlange2, ...
+        #   TrimLengthA, TrimLengthB, ...  /  ShowFlangeA, ShowFlangeB, ...
         trim_key_num = f"TrimLength{idx + 1}"
         trim_key_alpha = f"TrimLength{chr(ord('A') + idx)}" if idx < 26 else None
+        show_flange_key_num = f"ShowFlange{idx + 1}"
+        show_flange_key_alpha = f"ShowFlange{chr(ord('A') + idx)}" if idx < 26 else None
 
         raw_trim = props.get(trim_key_num, None)
         if raw_trim is None and trim_key_alpha is not None:
@@ -822,14 +913,34 @@ def build_manifold(context):
                 raw_trim = props.get("TrimLength", None)
         if raw_trim is None:
             raw_trim = 0.0
-        
+
         trim_sug = _safe_trim(raw_trim, 0.5 * size_hint)
 
-        leg = _make_leg_to_center(api, port, center, trim_sug)
-        legs.append(leg)
+        outer_leg, void_leg, outer_port = _make_leg_to_center(api, port, center, trim_sug, thickness)
+        outer_legs.append(outer_leg)
+        void_legs.append(void_leg)
         trim_records.append((port, trim_sug))
 
-    shape = api.fuse_shapes(legs)
+        show_flange = props.get(show_flange_key_num, None)
+        if show_flange is None and show_flange_key_alpha is not None:
+            show_flange = props.get(show_flange_key_alpha, None)
+        if show_flange is None:
+            show_flange = props.get("ShowFlange", None)
+        if show_flange is None:
+            show_flange = True
+        if bool(show_flange) and flange_height > 0.0 and flange_thickness > 0.0:
+            flange_parts.append(
+                _make_flange(api, outer_port, api.port_direction(outer_port) * -1.0, flange_thickness, flange_height)
+            )
+
+    # Hollow sheet-metal wall: fuse all legs' outer shapes and, separately,
+    # all legs' thickness-inset void shapes, then cut once -- matches the
+    # fidelity used for build_elbow/build_transition/build_tee/build_wye.
+    outer_shape = api.fuse_shapes(outer_legs)
+    void_shape = api.fuse_shapes(void_legs)
+    parts = [outer_shape.cut(void_shape)] + flange_parts
+
+    shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
     return {
         "shape": shape,
