@@ -162,3 +162,19 @@ When adding a new junction type, pick the real topology first (it must match
 the classifier's vocabulary, not just read naturally), then decide whether
 it needs its own `family` token or genuinely applies across the whole
 topology.
+
+### Model file naming
+
+A type's model file(s) under `models/` must be named after the type-def
+`id`, not invented independently -- `models/<id>.py` for a PartScript,
+`models/<id>.FCStd` for an FCStd-template, `models/<id>.json`/`models/<id>.step`
+for a static descriptor + its source geometry. This applies regardless of
+geometry backend: `smacna/types/segments/circular_straight.json` pairs with
+`smacna/models/circular_straight.py`, `smacna/types/segments/rectangular_straight.json`
+pairs with `smacna/models/rectangular_straight.FCStd`, and
+`samples/types/junctions/end_diffuser_static.json` pairs with
+`samples/models/static_diffuser.json`/`.step` (a static descriptor may point
+at a differently-named source file, but the descriptor JSON itself should
+still follow the type id where practical). When a library reuses one model
+file across several type-defs (e.g. one PartScript parametrized by
+`profile`), name the file after the shared generic id, not any one caller.

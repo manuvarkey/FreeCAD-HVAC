@@ -83,7 +83,7 @@
   ],
   "geometry": {
     "backend": "partscript",
-    "file": "models/rectangular_elbow.py"
+    "file": "models/through_elbow_rectangular.py"
   },
   "loss": {
     "module": "junction_losses",
