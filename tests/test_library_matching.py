@@ -583,3 +583,76 @@ def test_bundled_manual_end_diffuser_selection_stays_sticky():
     selection = reg.resolve_sticky_type("smacna", "end_diffuser_generic", request)
     assert selection.status == "retained"
     assert selection.type_def.id == "end_diffuser_generic"
+
+
+# ----------------------------------------------------------------------
+# Mixed-profile branch/cross/multiport fall back to the broad Generic-
+# profile model (not the invisible marker) -- branch_generic (builtin_basic)
+# / branch_wye_generic (smacna) / cross_generic / multiport_generic all
+# advertise "Generic" alongside their concrete profiles, mirroring how
+# through_generic already covers "through". This matters because a
+# placeholder selection here would silently drop to AirflowSolver's generic
+# K_DEFAULT fallback instead of a real, type-specific loss coefficient.
+# ----------------------------------------------------------------------
+
+def _mixed_ports(n, extra_profile="Rectangular"):
+    return _ports(n - 1, "Circular") + [{"profile": extra_profile}]
+
+
+def test_bundled_builtin_basic_mixed_profile_branch_uses_generic_model_not_marker():
+    reg = _load_bundled_registry()
+    request = _junction_request("branch", "branch.tee", "Mixed", _mixed_ports(3))
+    selection = reg.select_type("builtin_basic", request, strict=True)
+    assert selection.status == "generic_profile"
+    assert selection.type_def.id == "branch_generic"
+
+
+def test_bundled_builtin_basic_mixed_profile_cross_uses_generic_model_not_marker():
+    reg = _load_bundled_registry()
+    request = _junction_request("cross", "cross.cross", "Mixed", _mixed_ports(4))
+    selection = reg.select_type("builtin_basic", request, strict=True)
+    assert selection.status == "generic_profile"
+    assert selection.type_def.id == "cross_generic"
+
+
+def test_bundled_builtin_basic_mixed_profile_multiport_uses_generic_model_not_marker():
+    reg = _load_bundled_registry()
+    request = _junction_request("multiport", "multiport.multiport", "Mixed", _mixed_ports(6))
+    selection = reg.select_type("builtin_basic", request, strict=True)
+    assert selection.status == "generic_profile"
+    assert selection.type_def.id == "multiport_generic"
+
+
+def test_bundled_smacna_mixed_profile_branch_uses_generic_model_not_marker():
+    reg = _load_bundled_registry()
+    request = _junction_request("branch", "branch.wye", "Mixed", _mixed_ports(3))
+    selection = reg.select_type("smacna", request, strict=True)
+    assert selection.status == "generic_profile"
+    assert selection.type_def.id == "branch_wye_generic"
+
+
+def test_bundled_smacna_mixed_profile_cross_uses_generic_model_not_marker():
+    reg = _load_bundled_registry()
+    request = _junction_request("cross", "cross.cross", "Mixed", _mixed_ports(4))
+    selection = reg.select_type("smacna", request, strict=True)
+    assert selection.status == "generic_profile"
+    assert selection.type_def.id == "cross_generic"
+
+
+def test_bundled_smacna_mixed_profile_multiport_uses_generic_model_not_marker():
+    reg = _load_bundled_registry()
+    request = _junction_request("multiport", "multiport.multiport", "Mixed", _mixed_ports(6))
+    selection = reg.select_type("smacna", request, strict=True)
+    assert selection.status == "generic_profile"
+    assert selection.type_def.id == "multiport_generic"
+
+
+def test_bundled_mixed_profile_fix_does_not_disturb_exact_profile_ranking():
+    # The specific tee model must still win over the now-Generic-profile-
+    # capable broad model for a real, single-profile Circular tee.
+    reg = _load_bundled_registry()
+    request = _junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular"))
+    for lib_id, expected in (("builtin_basic", "branch_tee_generic"), ("smacna", "branch_tee_generic")):
+        selection = reg.select_type(lib_id, request, strict=True)
+        assert selection.status == "exact"
+        assert selection.type_def.id == expected

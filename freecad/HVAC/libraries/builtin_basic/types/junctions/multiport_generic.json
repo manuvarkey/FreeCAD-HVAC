@@ -4,7 +4,7 @@
   "category": "junction",
   "topology": "multiport",
   "family": ["multiport.multiport", "multiport.multiport.3d"],
-  "profiles": ["Circular", "Rectangular", "Oval"],
+  "profiles": ["Circular", "Rectangular", "Oval", "Generic"],
   "selection": {
     "kind": "model",
     "priority": 50
