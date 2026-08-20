@@ -22,15 +22,13 @@
 ################################################################################
 
 """
-Pure-Python engineering helpers for duct airflow and pressure-drop
-calculation (Darcy-Weisbach friction loss with the explicit Altshul-Tsal
-friction factor approximation).
+Airflow and duct-sizing formulas: friction loss, velocity, and duct sizing
+by target velocity, friction rate, or static regain. Plain math, no FreeCAD
+objects -- this module doesn't know what a "segment" or "network" is.
 
-This module has no dependency on FreeCAD and works exclusively in strict SI
-units (metres, cubic metres/second, kilograms/cubic metre, square
-metres/second, Pascals) so it can be unit-tested in isolation. Unit
-conversions from the addon's user-facing units (mm, L/s) happen only at the
-call site in the solver.
+Everything here uses plain SI units (metres, m3/s, kg/m3, Pa), so it can be
+unit-tested on its own. The addon's usual units (mm, L/s) are converted at
+the call site, in the solver modules (AirflowSolver.py, DuctSizer.py).
 """
 
 import math
@@ -94,7 +92,8 @@ def oval_area(width_m, height_m):
         raise ValueError("oval section requires width_m >= height_m")
     r = h / 2.0
     straight = w - h
-    # Rectangle formed by the straight sides + full circle formed by the two end caps
+    # An oval is a rectangle (the straight middle part) plus a full circle
+    # (the two rounded end caps, which together make one circle).
     return straight * h + math.pi * (r ** 2)
 
 
@@ -241,13 +240,12 @@ def rect_dims_for_velocity(flow_m3_s, velocity_m_s, mode, aspect_ratio=None, fix
 def oval_dims_for_velocity(flow_m3_s, velocity_m_s, mode, aspect_ratio=None, fixed_dim_m=None):
     """
     Flat-oval duct (width_m, height_m) that gives exactly the target
-    velocity. Unlike a rectangle, oval area = (width-height)*height +
-    pi*(height/2)^2 isn't a simple product, so each mode has its own
-    closed-form inverse (derived from that area formula; all three exist in
-    closed form, no iteration needed):
-      aspect_ratio r=width/height (r>=1): area = height^2*(r-1+pi/4)
-      fixed height h:  width = h + area/h - pi*h/4
-      fixed width w:   height = smaller root of (1-pi/4)*h^2 - w*h + area = 0
+    velocity.
+
+    An oval's area isn't a plain width*height product like a rectangle's,
+    so each mode below rearranges the oval area formula differently to
+    solve for its own free dimension. All three have an exact formula --
+    no bisection needed.
     """
     if velocity_m_s <= 0.0:
         raise ValueError("velocity_m_s must be positive")
@@ -256,18 +254,22 @@ def oval_dims_for_velocity(flow_m3_s, velocity_m_s, mode, aspect_ratio=None, fix
     if mode == "aspect_ratio":
         if not aspect_ratio or aspect_ratio < 1.0:
             raise ValueError("aspect_ratio must be >= 1.0 for an oval (width >= height)")
+        # width = aspect_ratio * height, so area becomes a function of height alone.
         height = math.sqrt(area / (aspect_ratio - 1.0 + math.pi / 4.0))
         return aspect_ratio * height, height
     if mode == "fixed_height":
         if not fixed_dim_m or fixed_dim_m <= 0.0:
             raise ValueError("fixed_dim_m must be positive")
         height = fixed_dim_m
+        # Height is fixed, so the area formula rearranges directly to width.
         width = height + area / height - math.pi * height / 4.0
         return width, height
     if mode == "fixed_width":
         if not fixed_dim_m or fixed_dim_m <= 0.0:
             raise ValueError("fixed_dim_m must be positive")
         width = fixed_dim_m
+        # Width is fixed, so the area formula is quadratic in height --
+        # solve it with the quadratic formula (the smaller, valid root).
         discriminant = width ** 2 - 4.0 * _OVAL_SHAPE_FACTOR * area
         if discriminant < 0.0:
             raise ValueError("No valid oval height for the given width and flow/velocity")
@@ -279,12 +281,11 @@ def oval_dims_for_velocity(flow_m3_s, velocity_m_s, mode, aspect_ratio=None, fix
 # ----------------------------------------------------------------------------
 # Duct sizing: constant friction rate (bisection)
 #
-# The Darcy-Weisbach friction rate is an implicit function of duct size (size
-# affects area, hydraulic diameter, Reynolds number, and relative roughness
-# all at once), so unlike the constant-velocity case there is no closed-form
-# inverse. Solved instead by bisecting on a single free "scale" parameter --
-# friction rate decreases monotonically as duct size increases for a fixed
-# flow rate, so the bracket is well-posed.
+# Friction rate depends on duct size in a tangled way (size changes area,
+# hydraulic diameter, Reynolds number, and roughness ratio all at once), so
+# there's no simple formula to invert like there is for constant velocity.
+# Instead we bisect: for a fixed flow rate, a bigger duct always has a lower
+# friction rate, so we can narrow in on the size that hits the target rate.
 # ----------------------------------------------------------------------------
 
 def _friction_rate_pa_per_m(area_m2, hydraulic_diameter_m, flow_m3_s,
@@ -299,14 +300,13 @@ def _solve_scale_for_friction_rate(area_and_dh_fn, flow_m3_s, target_rate_pa_per
                                     roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
                                     lo=0.01, hi=5.0, iterations=60):
     """
-    Bisect a single scale parameter (e.g. diameter, or one duct dimension)
-    so that _friction_rate_pa_per_m(*area_and_dh_fn(scale), ...) equals
-    target_rate_pa_per_m. area_and_dh_fn(scale) -> (area_m2, hydraulic_diameter_m).
+    Find the duct size that hits the target friction rate (bisection).
 
-    Clamps to [lo, hi] if the target can't be reached within that bracket
-    (e.g. an unrealistically high/low friction rate target) rather than
-    raising -- callers can compare the result's actual resulting rate against
-    the target if they need to detect this.
+    area_and_dh_fn(scale) -> (area_m2, hydraulic_diameter_m) for a trial
+    size. If the target rate can't be reached inside [lo, hi] (e.g. an
+    unrealistic target), clamps to whichever end is closest instead of
+    raising -- callers can re-check the actual rate at the returned size if
+    they need to know whether it was clamped.
     """
     def rate_at(scale):
         area_m2, dh_m = area_and_dh_fn(scale)
@@ -314,16 +314,17 @@ def _solve_scale_for_friction_rate(area_and_dh_fn, flow_m3_s, target_rate_pa_per
                                         kinematic_viscosity_m2_s, air_density_kg_m3)
 
     if rate_at(lo) <= target_rate_pa_per_m:
-        return lo
+        return lo  # even the smallest allowed duct is already at/under the target rate
     if rate_at(hi) > target_rate_pa_per_m:
-        return hi
+        return hi  # even the largest allowed duct still exceeds the target rate
 
+    # Narrow the bracket until it converges on the crossing point.
     for _ in range(iterations):
         mid = (lo + hi) / 2.0
         if rate_at(mid) > target_rate_pa_per_m:
-            lo = mid
+            lo = mid  # still too much friction -> try a bigger duct
         else:
-            hi = mid
+            hi = mid  # under target -> a smaller duct would still work
     return (lo + hi) / 2.0
 
 
@@ -435,41 +436,42 @@ def oval_dims_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
 # ----------------------------------------------------------------------------
 # Duct sizing: static regain (bisection)
 #
-# Sizes each duct section so the static-pressure regain from slowing down
-# through that section -- regain_factor * (upstream velocity pressure - this
-# section's velocity pressure) -- exactly offsets this section's own friction
-# loss. Unlike constant velocity/friction rate, this needs the UPSTREAM
-# section's already-solved velocity pressure as an input, so sections must be
-# sized in order from the source outward (see core.DuctSizer).
+# Idea: when air slows down going into a bigger duct, some of its velocity
+# pressure turns back into static pressure -- this is "regain". Static
+# regain sizing picks each section's size so that regain exactly cancels out
+# that section's own friction loss. Done at every branch, this keeps static
+# pressure roughly constant across the network instead of it dropping more
+# and more the further downstream you go.
 #
-# Static regain has a well-known failure mode on small/low-velocity branches:
-# regain can't offset any reasonable friction loss without an impractically
-# large (slow) duct. Every function here takes a min_velocity_m_s floor and
-# never proposes anything slower than that -- the search brackets scale
-# (diameter/dimension) up to the floor's own size as a ceiling, so if even
-# that ceiling's regain can't offset its friction, the ceiling is returned
-# outright (clamped, unbalanced) instead of extrapolating to something even
-# slower. A balance point faster than the floor is unconstrained -- the
-# floor is a minimum velocity, not a maximum -- so it's simply returned as a
-# normal balanced solution.
+# This needs the UPSTREAM section's velocity already known, so sections must
+# be sized in order, from the fan/source outward (see core.DuctSizer).
 #
-# TODO: _regain_minus_friction only weighs regain against this section's own
-# straight-duct friction -- it does not include the fitting/dynamic loss of
-# the junction the section leaves (e.g. a tee's branch loss, an elbow),
-# unlike AirflowSolver.py's real pressure solve, which adds fitting_loss_pa
-# via the library's pluggable loss_module/loss_function (call_loss()).
-# Fixing this needs iterative sizing in core.DuctSizer: size once, build a
-# provisional connected_ports context from the *proposed* sizes and call the
-# same call_loss() machinery to get each junction's K (it only needs a
-# ports/velocity context, not built geometry, so this doesn't require
-# constructing real junction shapes), fold that loss into the friction term
-# here, and re-solve until sizes converge. Only StaticRegain is affected --
-# ConstantVelocity/ConstantFrictionRate size each segment independently.
+# Problem case: a small or short branch can have more regain available than
+# it needs, even at a very slow (oversized) duct. min_velocity_m_s stops
+# sizing from chasing an impractically large duct to use up all that regain
+# -- it's a floor on velocity (a ceiling on duct size). If friction still
+# beats regain even at that ceiling, we clamp there and report the section
+# as "not balanced" (it may need a balancing damper instead).
+#
+# TODO: the balance below only counts this section's own straight-duct
+# friction -- not the fitting loss of the junction it leaves (e.g. a tee or
+# elbow). AirflowSolver.py's real pressure solve does include that, via the
+# library's loss_module/loss_function. Adding it here needs iterative
+# sizing: size once, estimate each junction's loss from the proposed sizes
+# (the loss functions only need port/velocity data, not built geometry),
+# add that into the friction term, and re-solve until sizes settle. Only
+# StaticRegain is affected -- the other two methods size each segment on
+# its own.
 # ----------------------------------------------------------------------------
 
 def _regain_minus_friction(area_and_dh_fn, scale, flow_m3_s, upstream_velocity_pressure_pa,
                             regain_factor, length_m, roughness_m, kinematic_viscosity_m2_s,
                             air_density_kg_m3):
+    """
+    Regain minus friction for a trial duct size. Zero means balanced;
+    positive means this size has more regain than it needs (could be
+    smaller); negative means friction still exceeds regain (needs bigger).
+    """
     area_m2, dh_m = area_and_dh_fn(scale)
     velocity_m_s = velocity_from_flow(flow_m3_s, area_m2)
     vp = velocity_pressure(air_density_kg_m3, velocity_m_s)
@@ -484,27 +486,25 @@ def _solve_scale_for_static_regain(area_and_dh_fn, flow_m3_s, upstream_velocity_
                                     regain_factor, length_m, roughness_m, kinematic_viscosity_m2_s,
                                     air_density_kg_m3, hi, lo=None, iterations=60):
     """
-    Bisect a single scale parameter (e.g. diameter, or one duct dimension) so
-    that regain_minus_friction(scale) == 0. That difference increases
-    monotonically with scale (a bigger duct means both less friction and,
-    since it's slower, more regain), so the bracket is well-posed.
+    Find the duct size where regain exactly cancels friction (bisection).
+    Bigger duct -> less friction and more regain, so this difference only
+    ever grows as size grows, making the bracket well-posed.
 
-    hi is a ceiling on scale -- the size at the minimum allowed velocity (see
-    the module note above), optionally tightened further by the caller for
-    its own geometric constraint (e.g. an oval's width >= height). lo
-    defaults to a small fraction of hi (an effectively unbounded velocity);
-    callers only pass their own lo when there's a real geometric lower bound
-    on scale (e.g. an oval's height <= width).
+    hi is the largest size allowed -- the size at the minimum allowed
+    velocity (see the module note above), optionally tightened further by
+    the caller for its own geometry rule (e.g. an oval's width >= height).
+    lo defaults to a tiny size (an effectively unbounded velocity); callers
+    only pass their own lo for a real geometric lower bound (e.g. an oval's
+    height <= width).
 
-    Returns (scale, balanced). balanced is False when the equation could not
-    actually be satisfied within [lo, hi] -- clamped to hi (friction still
-    exceeds regain even at the slowest/largest allowed size -- the classic
-    static-regain failure mode on small/long/rough runs, where regain can't
-    offset friction without an impractically large duct) or, in the
-    (unlikely) case regain already exceeds friction even at the tiny lo
-    bound, clamped to lo. Callers should treat balanced=False as "this
-    section did not actually regain-balance; a balancing damper may still be
-    needed here", not as an error -- a size is still returned either way.
+    Returns (scale, balanced):
+      - balanced=True: found a size where regain == friction.
+      - balanced=False: no such size exists inside [lo, hi], so the result
+        is clamped to hi (friction still beats regain even at the biggest
+        allowed duct -- the classic static-regain failure case) or, rarely,
+        to lo (regain already beats friction even at the tiny lo bound).
+        Treat this as "may need a balancing damper here", not an error --
+        a size is still returned either way.
     """
     if lo is None:
         lo = hi * 1e-4
@@ -518,16 +518,17 @@ def _solve_scale_for_static_regain(area_and_dh_fn, flow_m3_s, upstream_velocity_
         )
 
     if balance(hi) < 0.0:
-        return hi, False
+        return hi, False  # friction still wins even at the biggest allowed duct
     if balance(lo) >= 0.0:
-        return lo, False
+        return lo, False  # regain already wins even at the tiny lower bound
 
+    # Narrow the bracket until it converges on the crossing point.
     for _ in range(iterations):
         mid = (lo + hi) / 2.0
         if balance(mid) < 0.0:
-            lo = mid
+            lo = mid  # still under-balanced -> try a bigger duct
         else:
-            hi = mid
+            hi = mid  # already over-balanced -> a smaller duct would still work
     return (lo + hi) / 2.0, True
 
 
@@ -628,6 +629,9 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
         def area_and_dh(width_m):
             return oval_area(width_m, height), hydraulic_diameter_oval(width_m, height)
 
+        # Two upper limits on width apply at once: the min_velocity ceiling
+        # (floor_w) and the oval rule width >= height -- take the larger so
+        # the bracket never excludes a width that's valid but below floor_w.
         width, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
             length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
@@ -644,6 +648,9 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
         def area_and_dh(height_m):
             return oval_area(width, height_m), hydraulic_diameter_oval(width, height_m)
 
+        # Two upper limits on height apply at once: the min_velocity ceiling
+        # (floor_h) and the oval rule height <= width -- take whichever is
+        # tighter (smaller) so neither rule gets violated.
         height, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
             length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,

@@ -22,30 +22,31 @@
 ################################################################################
 
 """
-Whole-network flow-distribution solve, shared by AirflowSolver (pressure/loss
-calculation) and DuctSizer (dimension calculation) -- both need exactly the
-same "how much air moves through each segment" answer before doing anything
-size- or pressure-specific with it.
+Works out how much air flows through every segment. Both AirflowSolver
+(pressure/loss) and DuctSizer (duct dimensions) need this same answer
+before they can do their own, separate calculation, so it's solved once
+here and shared.
 
-Assumes each connected sub-network of the duct network is a tree: exactly one
-terminal (degree-1 junction) is left with no Design Flow Rate (the balancing
-terminal, e.g. the AHU/fan connection); every other terminal carries a
-user-specified design flow rate (e.g. a diffuser/grille). Flow magnitudes are
-solved by mass conservation from the leaves toward the balancing terminal,
-using the existing per-port flow_into_junction data (derived from base
-geometry direction) to know each segment's fixed physical flow direction.
+How it works: each connected sub-network must be a tree (no loops). Exactly
+one open end (terminal) is left with no Design Flow Rate -- that's the
+balancing terminal (e.g. the fan/AHU connection), and its flow is whatever
+makes everything else balance. Every other terminal has a user-set design
+flow rate (e.g. a diffuser). Starting from the terminals and working inward
+towards the balancing terminal, each segment's flow is just conservation of
+mass: flow out of a junction equals flow into it. A segment's own fixed
+flow direction is read from its ports (flow_into_junction, already derived
+from the base geometry's direction).
 
-Loops (non-tree sub-networks) are rejected with a clear error rather than
-solved.
+A sub-network that isn't a tree (has a loop) is reported as an error rather
+than solved.
 
-Topology (connectivity, degree, BFS ordering) is answered directly from
-parser.analysis_graph -- the same networkx Graph NetworkParser already
-builds and maintains -- rather than re-deriving an equivalent structure here.
-Each edge on that graph carries a "key" attribute holding the real EdgeRef,
-so callers can go from a graph traversal straight back to the segment it
-represents. Two segments between the same pair of junctions never occurs in
-a valid duct network, so a plain (non-multi) Graph unambiguously represents
-every edge.
+Topology (connectivity, degree, BFS order) is read straight from
+parser.analysis_graph, the same graph NetworkParser already builds --
+nothing is rebuilt here. Each edge on that graph carries a "key" attribute
+holding the real EdgeRef, so a graph traversal can always be traced back to
+the actual segment it represents. Two segments never run directly between
+the same pair of junctions in a valid network, so a plain graph (not a
+multigraph) is enough to represent every edge unambiguously.
 """
 
 from dataclasses import dataclass, field
@@ -116,6 +117,8 @@ def solve_flow_components(net_obj):
 # ----------------------------------------------------------------------------
 
 def _solve_component_flow(parser, comp_nodes, graph, segment_map, junction_map):
+    # Step 1: a tree with N nodes always has exactly N-1 edges -- if this
+    # sub-network has more edges than that, it must contain a loop.
     comp_edges = {edge_ref for _u, _v, edge_ref in graph.edges(data="key")}
     n_nodes = len(comp_nodes)
     n_edges = len(comp_edges)
@@ -127,7 +130,7 @@ def _solve_component_flow(parser, comp_nodes, graph, segment_map, junction_map):
             )
         )
 
-    # Resolve FreeCAD objects and per-node port analysis up front.
+    # Step 2: resolve every node's FreeCAD junction object and port data up front.
     analysis_by_node = {}
     port_lookup = {}
     for node_id in comp_nodes:
@@ -152,7 +155,8 @@ def _solve_component_flow(parser, comp_nodes, graph, segment_map, junction_map):
                 "calculating.".format(edge_ref.tag)
             )
 
-    # Terminals and the balancing (unspecified) terminal.
+    # Step 3: find every open end (terminal), and check exactly one of them
+    # is the balancing terminal (no Design Flow Rate set).
     terminal_ids = [n for n in comp_nodes if graph.degree[n] == 1]
     if len(terminal_ids) < 2:
         any_label = junction_map[parser.node_key(next(iter(comp_nodes)))].Label
@@ -187,9 +191,9 @@ def _solve_component_flow(parser, comp_nodes, graph, segment_map, junction_map):
 
     root_node_id, root_obj = unspecified[0]
 
-    # BFS from the balancing terminal to get a rooted-tree traversal order,
-    # directly off the (already tree-sized) graph -- no separate structure
-    # to build; each traversal edge's real EdgeRef is just its "key" attribute.
+    # Step 4: walk the tree breadth-first from the balancing terminal, so we
+    # know each node's parent and which edge connects them. This also fixes
+    # the order flow gets solved in, in the next step.
     parent_node = {}
     parent_edge = {}
     order = [root_node_id]
@@ -198,16 +202,22 @@ def _solve_component_flow(parser, comp_nodes, graph, segment_map, junction_map):
         parent_edge[v] = graph[u][v]["key"]
         order.append(v)
 
-    # Flow-magnitude accumulation, leaves -> root.
+    # Step 5: solve each segment's flow, working from the leaves back to the
+    # root (reversed BFS order) so a junction's other edges are always
+    # already solved by the time we need them for the one going to its
+    # parent.
     edge_flow_lps = {}
     for node_id in reversed(order[1:]):
         edge = parent_edge[node_id]
 
         if graph.degree[node_id] == 1:
+            # A leaf's own edge simply carries its design flow rate.
             junction_obj = junction_map[parser.node_key(node_id)]
             edge_flow_lps[edge] = abs(float(getattr(junction_obj, "DesignFlowRate", 0.0) or 0.0))
             continue
 
+        # Add up the flow on every OTHER edge at this junction (already
+        # solved), split into what's flowing in vs. out.
         known_in = 0.0
         known_out = 0.0
         for _u, _v, edge_ref in graph.edges(node_id, data="key"):
@@ -220,6 +230,9 @@ def _solve_component_flow(parser, comp_nodes, graph, segment_map, junction_map):
             else:
                 known_out += mag
 
+        # Mass conservation: total in == total out, so whatever's missing on
+        # the "parent" edge must make up the difference. Which side it's
+        # missing from depends on which way that edge itself points.
         p_port = port_lookup[(node_id, edge.tag)]
         if p_port.flow_into_junction:
             p_mag = known_out - known_in

@@ -22,33 +22,34 @@
 ################################################################################
 
 """
-Whole-network duct sizing: given the same design-flow-rate boundary
-conditions and flow distribution as AirflowSolver (see FlowNetwork.py),
-compute duct dimensions instead of pressure drop -- solving for size from a
-target constant velocity, constant friction rate, or static regain, per the
-active DuctNetwork's SizingMethod.
+Works out proposed duct sizes for a whole network. Uses the same flow
+distribution as AirflowSolver (see FlowNetwork.py), but instead of computing
+pressure drop for an existing size, it computes the size itself -- from a
+target constant velocity, constant friction rate, or static regain, chosen
+by the active DuctNetwork's SizingMethod.
 
-ConstantVelocity and ConstantFrictionRate size each segment independently
-(order doesn't matter). StaticRegain does not: each section's target depends
-on its already-solved parent section's velocity, so sections are sized in
-sequence from the balancing terminal (the source) outward, seeded by the
-network's TargetVelocity, reusing FlowComponent.order/parent_edge (the same
-rooted-tree walk AirflowSolver uses for pressure propagation).
+ConstantVelocity and ConstantFrictionRate size each segment on its own, in
+any order. StaticRegain can't: each section's size depends on its parent
+section's already-solved velocity, so segments are sized one at a time,
+walking the tree from the source outward (see FlowComponent.order/
+parent_edge -- the same walk AirflowSolver uses to propagate pressure). The
+first section(s) off the source have no upstream velocity to work from, so
+they're seeded with the network's TargetVelocity instead.
 
-A segment's own Velocity/RectangularSizingMode/TargetAspectRatio overrides
-(see _size_segment) still apply during a StaticRegain solve -- a Velocity-
-overridden segment is sized by constant velocity as usual, and its resulting
-velocity simply becomes the seed for whatever is downstream of it.
+A segment's own Velocity/RectangularSizingMode/TargetAspectRatio override
+(see _size_segment) still applies during a StaticRegain solve -- an
+overridden segment is just sized at that fixed velocity, and its result
+becomes the seed for whatever comes after it.
 
-DuctSizer.solve() never mutates any segment object; it only computes and
-returns proposed sizes (a preview). DuctSizer.apply(result) is a separate,
-explicit step that writes the proposed Diameter/Width/Height onto the real
-segment objects -- callers (the Size Ducts command/UI) are expected to show
-the preview and let the user confirm before applying.
+Nothing here touches the real segment objects: solve() only computes and
+returns proposed sizes (a preview). apply(result) is a separate step that
+writes the proposed Diameter/Width/Height onto the real objects -- the Size
+Ducts command shows the preview first and lets the user confirm before
+calling apply().
 
-TODO: StaticRegain does not yet account for junction fitting/dynamic losses
-(only straight-duct friction) -- see the TODO in airflow.py's "Duct sizing:
-static regain" section for what fixing this (iterative sizing) would need.
+TODO: StaticRegain doesn't yet account for junction fitting/dynamic losses,
+only straight-duct friction -- see the TODO in airflow.py's "Duct sizing:
+static regain" section for what fixing this would take.
 """
 
 import math
@@ -68,6 +69,7 @@ _RECT_MODE_MAP = {
 
 @dataclass
 class SegmentSizeResult:
+    """Proposed new size for one segment, plus its old size for comparison."""
     key: str
     obj: object
     profile: str
@@ -86,6 +88,7 @@ class SegmentSizeResult:
 
 @dataclass
 class DuctSizingResult:
+    """Whole-network sizing result: one SegmentSizeResult per segment, plus any warnings."""
     segments: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
 
@@ -105,10 +108,13 @@ class DuctSizer:
 
     def solve(self):
         net = self.net_obj
+        # Same flow-distribution step AirflowSolver uses: which segments carry
+        # how much flow, and how they group into independently-solvable trees.
         _, _junction_map, segment_map, components, warnings = solve_flow_components(net)
 
         result = DuctSizingResult(warnings=list(warnings))
 
+        # Read the network's sizing settings once, up front.
         method = str(getattr(net, "SizingMethod", "ConstantVelocity") or "ConstantVelocity")
         mode = _RECT_MODE_MAP.get(
             str(getattr(net, "RectangularSizingMode", "FixedAspectRatio") or "FixedAspectRatio"),
@@ -130,6 +136,9 @@ class DuctSizer:
         default_width_mm = float(getattr(net, "DefaultWidth", 0.0) or 0.0)
         default_height_mm = float(getattr(net, "DefaultHeight", 0.0) or 0.0)
 
+        # Each component is an independently-solvable tree. StaticRegain needs
+        # its own ordered walk (see _solveComponentStaticRegain); the other
+        # two methods just size every segment in the component directly.
         for comp in components:
             if method == "StaticRegain":
                 self._solveComponentStaticRegain(
@@ -159,19 +168,18 @@ class DuctSizer:
                                      default_roughness_mm, default_width_mm, default_height_mm,
                                      regain_factor, min_velocity):
         """
-        Size every segment in this component in order from the balancing
-        terminal (comp.root_node_id) outward, using comp.order (a BFS walk
-        that always visits a node after its parent) so each segment's own
-        upstream velocity is already resolved by the time it's needed.
+        Size every segment in this component in order, walking outward from
+        the balancing terminal (comp.root_node_id). comp.order always visits
+        a node after its parent, so by the time a segment is sized, its
+        upstream segment's velocity is already known.
 
-        The section(s) leaving the source directly (parent == root) have no
-        upstream section to regain from, so -- standard practice -- they are
-        sized directly at the network's TargetVelocity (a chosen starting
-        velocity) via constant-velocity sizing. Every other section is sized
-        by the regain-balance equation against its own parent's already-
-        resolved velocity.
+        The segment(s) coming straight off the source have no upstream
+        section to regain from, so they're just sized at the network's
+        TargetVelocity (standard starting point). Every other segment is
+        sized by the regain-balance equation against its own parent's
+        already-solved velocity.
         """
-        velocity_by_node = {}
+        velocity_by_node = {}  # each node's resolved velocity, filled in as we go
 
         for node_id in comp.order[1:]:
             edge_ref = comp.parent_edge[node_id]
@@ -180,6 +188,7 @@ class DuctSizer:
             flow_lps = comp.edge_flow_lps[edge_ref]
 
             if parent_id == comp.root_node_id:
+                # First segment off the source: no upstream velocity to regain from.
                 effective_method = "ConstantVelocity"
                 upstream_vp = 0.0  # unused by _size_segment for ConstantVelocity
             else:
@@ -236,6 +245,8 @@ class DuctSizer:
                        viscosity, density, default_roughness_mm,
                        default_width_mm, default_height_mm,
                        upstream_velocity_pressure_pa=0.0, regain_factor=0.75, min_velocity=2.5):
+        # Step 1: read the segment's current size and profile (used for the
+        # "before" side of the result, and as a fallback for fixed dimensions).
         profile = str(getattr(seg_obj, "Profile", "") or "")
         section_params = hvaclib.get_segment_section_params(seg_obj)
         old_diameter_mm = float(section_params.get("Diameter", 0.0) or 0.0)
@@ -262,6 +273,8 @@ class DuctSizer:
         roughness_mm = float(getattr(seg_obj, "Roughness", 0.0) or 0.0) or default_roughness_mm
         roughness_m = airflow.mm_to_m(roughness_mm)
 
+        # Step 2: apply this segment's own overrides, if any, on top of the
+        # network-wide method/mode/aspect-ratio passed in.
         # A segment's own Velocity, if set, overrides both the network's SizingMethod
         # and TargetVelocity for this segment only -- e.g. deliberately running one
         # riser faster/slower than the rest of the system.
@@ -280,6 +293,9 @@ class DuctSizer:
         if seg_aspect_ratio > 0.0:
             aspect_ratio = seg_aspect_ratio
 
+        # Step 3: for a rectangular/oval duct sized with one dimension held
+        # fixed, work out what that fixed dimension actually is (its current
+        # value, falling back to the network default).
         fixed_dim_m = None
         if profile in ("Rectangular", "Oval") and mode in ("fixed_height", "fixed_width"):
             if mode == "fixed_height":
@@ -298,6 +314,8 @@ class DuctSizer:
 
         regain_balanced = True  # only ever set False by the StaticRegain branches below
 
+        # Step 4: solve the actual size, using whichever airflow.py formula
+        # matches this segment's profile and sizing method.
         if profile == "Circular":
             if method == "ConstantVelocity":
                 diameter_m = airflow.circular_diameter_for_velocity(flow_m3s, target_velocity)
@@ -358,6 +376,9 @@ class DuctSizer:
             area_m2 = area_fn(airflow.mm_to_m(new_width_mm), airflow.mm_to_m(new_height_mm))
             dh_m = dh_fn(airflow.mm_to_m(new_width_mm), airflow.mm_to_m(new_height_mm))
 
+        # Step 5: report the actual velocity/friction rate at the final
+        # (rounded) size -- these can drift slightly from the sizing target
+        # once rounding is applied, so recompute them from the real size.
         velocity_ms = airflow.velocity_from_flow(flow_m3s, area_m2)
         reynolds = airflow.reynolds_number(velocity_ms, dh_m, viscosity)
         friction_factor = airflow.friction_factor_altshul_tsal(reynolds, roughness_m / dh_m)

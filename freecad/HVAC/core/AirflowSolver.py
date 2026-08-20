@@ -22,17 +22,19 @@
 ################################################################################
 
 """
-Whole-network airflow and pressure-drop solver.
+Works out airflow and pressure drop for a whole network.
 
-Flow distribution (which sub-networks are solvable trees, and how much air
-moves through each segment) is solved by FlowNetwork.solve_flow_components;
-see that module for the balancing-terminal/conservation model. This module
-takes it from there: given a segment's own duct size, compute its velocity/
-Reynolds number/friction loss (Darcy-Weisbach with the Altshul-Tsal friction
-factor), compute each junction's fitting/dynamic loss (pluggable via the
-library's loss_module/loss_function, falling back to a generic coefficient),
-and propagate static pressure outward from the balancing terminal (0 Pa
-reference).
+FlowNetwork.solve_flow_components does the first part: splits the network
+into independently-solvable trees and works out how much air moves through
+each segment (see that module for the balancing-terminal/conservation
+model). This module takes it from there, per segment/junction:
+  1. From a segment's own duct size and flow, work out its velocity,
+     Reynolds number, and straight-duct friction loss (Darcy-Weisbach).
+  2. At each junction, work out its fitting/dynamic loss -- each library
+     type can supply its own loss formula (loss_module/loss_function); if
+     it doesn't, a generic fallback coefficient is used instead.
+  3. Add both losses up and propagate static pressure outward from the
+     balancing terminal (which is fixed at 0 Pa as the reference point).
 """
 
 from dataclasses import asdict, dataclass, field
@@ -48,6 +50,7 @@ K_DEFAULT = 0.3
 
 @dataclass
 class SegmentResult:
+    """One segment's solved flow, velocity, and pressure loss."""
     key: str
     obj: object
     flow_lps: float = 0.0
@@ -61,6 +64,7 @@ class SegmentResult:
 
 @dataclass
 class JunctionResult:
+    """One junction's solved total flow and static pressure."""
     key: str
     obj: object
     total_flow_lps: float = 0.0
@@ -71,6 +75,7 @@ class JunctionResult:
 
 @dataclass
 class ComponentResult:
+    """Solved results for one independently-solvable tree (one balancing terminal)."""
     reference_terminal_key: str
     segments: list = field(default_factory=list)
     junctions: list = field(default_factory=list)
@@ -80,6 +85,7 @@ class ComponentResult:
 
 @dataclass
 class AirflowSolveResult:
+    """Whole-network result: one ComponentResult per tree, plus any warnings."""
     components: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
 
@@ -115,13 +121,17 @@ class AirflowSolver:
         port_lookup = comp.port_lookup
         analysis_by_node = comp.analysis_by_node
 
-        # Phase D: per-segment sizing (flow, velocity, Reynolds, friction loss).
+        # Phase D: size every segment on its own (flow, velocity, Reynolds,
+        # straight-duct friction loss) -- see _size_segment below.
         seg_result = {}
         for edge_ref in comp.comp_edges:
             seg_obj = segment_map[edge_ref.tag]
             seg_result[edge_ref.tag] = self._size_segment(net, seg_obj, edge_flow_lps[edge_ref])
 
-        # Phase E: fitting/dynamic loss via pluggable per-type loss functions.
+        # Phase E: work out each junction's fitting/dynamic loss and add it
+        # onto the segment(s) leaving that junction. Each library type can
+        # supply its own loss formula (K, a loss coefficient); if it can't,
+        # we fall back to a generic default.
         junction_warning = {}
         reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
         air_density = float(getattr(net, "AirDensity", 1.204) or 1.204)
@@ -139,6 +149,9 @@ class AirflowSolver:
             type_id = getattr(junction_obj, "TypeId", "")
             type_def = reg.resolve_type(library_id, type_id) if library_id and type_id else None
 
+            # Build the same kind of "properties" dict a geometry backend
+            # would see, so the loss formula can use the junction's own
+            # settings (e.g. an elbow's radius).
             properties = {}
             if type_def is not None:
                 for pdef in getattr(type_def, "properties", []) or []:
@@ -147,6 +160,8 @@ class AirflowSolver:
                     else:
                         properties[pdef.name] = getattr(pdef, "default", None)
 
+            # Attach each connected port's already-solved flow/velocity/Reynolds
+            # (from Phase D) so the loss formula has real numbers to work with.
             connected_ports_ctx = []
             for port in ja.connected_ports:
                 port_dict = asdict(port)
@@ -168,15 +183,13 @@ class AirflowSolver:
                 "air_kinematic_viscosity": air_viscosity,
             }
 
-            # A loss function may return:
-            #  - dict {edge_key: K}: per-port coefficients, each already referenced to
-            #    that port's own velocity. Needed for converging (merging) junctions,
-            #    where each inlet leg has a physically distinct coefficient -- there is
-            #    no single "the" outlet to attribute a uniform K to.
-            #  - float: a single coefficient applied uniformly to every outlet port
-            #    (legacy/simple contract, still used by the generic cross/multiport
-            #    placeholders).
-            #  - None: no data available; fall back to a uniform K_DEFAULT on outlet ports.
+            # A loss function's result can take three shapes:
+            #  - dict {edge_key: K}: one coefficient per port, for junctions
+            #    where each inlet leg genuinely has its own loss (a merging
+            #    junction has no single "the" outlet to put one K on).
+            #  - float: one coefficient applied to every outlet port alike
+            #    (the simple/common case).
+            #  - None: no formula available -- fall back to K_DEFAULT below.
             k_result = reg.call_loss(library_id, type_def, context) if type_def is not None else None
 
             if isinstance(k_result, dict):
@@ -187,26 +200,24 @@ class AirflowSolver:
                     sres = seg_result.get(edge_key)
                     if sres is None:
                         continue
-                    # += , not = : a segment can be attributed loss from BOTH ends
-                    # independently -- its upstream fitting (an outlet port there)
-                    # and its downstream terminal device, e.g. a diffuser (an inlet
-                    # port there, handled by this same dict branch). Each junction
-                    # in this loop is visited exactly once, so this never double-
-                    # counts a single contribution -- it only ever sums genuinely
-                    # distinct ones.
+                    # += (not =): a segment can pick up loss from both ends --
+                    # its upstream fitting here, and separately its downstream
+                    # terminal device (e.g. a diffuser) when that junction is
+                    # visited later in this same loop. Since each junction is
+                    # only visited once, this never double-counts either one.
                     sres.fitting_loss_pa += float(k) * airflow.velocity_pressure(air_density, sres.velocity_ms)
                 continue
 
             if k_result is None:
                 if degree == 1:
-                    # Most terminals are intentionally non-physical placeholders
-                    # (e.g. the default end_terminal_marker) with no real device
-                    # modeled -- silently contributing no loss is the expected
-                    # default here, not a missing-data problem worth a fallback
-                    # coefficient or a warning (unlike a real degree>=2 fitting,
-                    # which always has SOME physical loss).
+                    # Most open ends are placeholder markers with no real
+                    # device modeled (e.g. the default end_terminal_marker),
+                    # so "no loss" is the expected, normal case here -- not
+                    # a missing-data problem worth a warning.
                     junction_warning[node_id] = ""
                     continue
+                # A real fitting (degree >= 2) always has some physical loss,
+                # so missing data here is worth flagging.
                 k_uniform = K_DEFAULT
                 warning = "No fitting-loss data for type '{}'; using generic default K={}.".format(
                     type_id or "(none)", K_DEFAULT
@@ -223,14 +234,19 @@ class AirflowSolver:
                 sres = seg_result.get(port.edge_key)
                 if sres is None:
                     continue
-                # += : see the dict-branch above -- a segment's downstream terminal
-                # device may independently contribute via that branch.
+                # += : see the dict-branch note above -- this segment's own
+                # downstream terminal device may add more loss independently.
                 sres.fitting_loss_pa += k_uniform * airflow.velocity_pressure(air_density, sres.velocity_ms)
 
+        # Straight friction (Phase D) + fitting loss (just computed) = each segment's total.
         for sres in seg_result.values():
             sres.total_loss_pa = sres.friction_loss_pa + sres.fitting_loss_pa
 
-        # Phase F: pressure propagation, root -> leaves (0 Pa reference at the balancing terminal).
+        # Phase F: walk outward from the balancing terminal (fixed at 0 Pa)
+        # and add up each segment's loss to get every node's static pressure.
+        # Pressure drops in the direction of flow: if flow enters the junction
+        # here (this port is an inlet), the junction is downstream of its
+        # parent, so subtract the loss; otherwise it's upstream, so add it.
         static_pressure = {comp.root_node_id: 0.0}
         for node_id in comp.order[1:]:
             parent = comp.parent_node[node_id]
@@ -245,14 +261,16 @@ class AirflowSolver:
                 downstream_pressure = static_pressure[parent]
             seg_result[edge.tag].cumulative_pressure_pa = downstream_pressure
 
-        # Phase G: assemble results and write back to FreeCAD properties. Everything
-        # up to this point only touches local Python structures, so a failure in any
-        # earlier phase never leaves a partial write on a junction/segment object.
+        # Phase G: assemble results and write them back onto the FreeCAD
+        # objects. Everything above only touched local Python data, so a
+        # failure in any earlier phase never leaves a half-written object.
         junction_results = {}
         for node_id in comp.comp_nodes:
             junction_obj = junction_map[parser.node_key(node_id)]
             degree = graph.degree[node_id]
 
+            # Add up flow in both directions across this junction's edges,
+            # and note whether any edge actually points outward (a source).
             total_in = 0.0
             total_out = 0.0
             has_outlet_port = False
@@ -266,11 +284,11 @@ class AirflowSolver:
                     has_outlet_port = True
 
             if degree == 1:
-                # Exactly one edge, so their sum is that edge's own flow
-                # magnitude (regardless of which of total_in/total_out it
-                # landed in); is_source is direction-based, not magnitude-
-                # based, so it stays correct even for a (degenerate) zero-flow
-                # source rather than depending on total_out being nonzero.
+                # An open end has only one edge, so total_in/total_out is
+                # really the same single flow value split across the two --
+                # add them to get it back, regardless of which one it landed
+                # in. is_source only checks direction (not magnitude), so it
+                # stays correct even at a source with zero flow.
                 total_flow = total_in + total_out
                 is_source = has_outlet_port
             else:
@@ -314,10 +332,16 @@ class AirflowSolver:
         )
 
     # ------------------------------------------------------------------
-    # Per-segment sizing
+    # Per-segment flow/friction calculation
+    #
+    # Despite the name, this doesn't choose a duct size (see DuctSizer.py
+    # for that) -- it reads the segment's EXISTING size and works out its
+    # velocity, Reynolds number, and friction loss for that size.
     # ------------------------------------------------------------------
 
     def _size_segment(self, net, seg_obj, flow_lps):
+        # Step 1: read the segment's current size and work out its
+        # cross-section area and hydraulic diameter.
         profile = str(getattr(seg_obj, "Profile", "") or "")
         section_params = hvaclib.get_segment_section_params(seg_obj)
 
@@ -352,8 +376,10 @@ class AirflowSolver:
         key = getattr(seg_obj, "SegmentKey", "") or seg_obj.Name
 
         if flow_lps <= 1e-9:
+            # No flow through this segment -- nothing to compute.
             return SegmentResult(key=key, obj=seg_obj, flow_lps=0.0)
 
+        # Step 2: velocity, then Reynolds number and friction factor from it.
         velocity_ms = airflow.velocity_from_flow(airflow.lps_to_m3s(flow_lps), area_m2)
 
         roughness_mm = float(getattr(seg_obj, "Roughness", 0.0) or 0.0)
@@ -368,6 +394,7 @@ class AirflowSolver:
         relative_roughness = roughness_m / dh_m
         friction_factor = airflow.friction_factor_altshul_tsal(reynolds, relative_roughness)
 
+        # Step 3: straight-duct friction loss over the segment's real length.
         length_m = airflow.mm_to_m(float(getattr(seg_obj, "EffectiveLength", 0.0) or 0.0))
         friction_loss_pa = airflow.darcy_weisbach_pressure_loss(
             friction_factor, length_m, dh_m, density, velocity_ms
