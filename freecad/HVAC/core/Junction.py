@@ -96,19 +96,24 @@ class DuctJunction:
 
             params = reg.resolve_params(type_def, obj=obj)
 
-            connected_ports = []
             raw_analysis = getattr(obj, "AnalysisJson", "") or "{}"
             try:
                 analysis = json.loads(raw_analysis)
-                connected_ports = list(analysis.get("connected_ports", []) or [])
             except Exception:
-                connected_ports = []
-            
+                analysis = {}
+
             context = {
                 "obj": obj,
                 "center_point": center_point,
                 "params": params,
-                "connected_ports": connected_ports,
+                "connected_ports": list(analysis.get("connected_ports", []) or []),
+                # Full node topology analysis (collinear_pairs,
+                # orthogonal_pairs, edge_angles, edge_eccentricities,
+                # is_coplanar, ...) -- see JunctionAnalysis in
+                # NetworkParser.py. Geometry backends should read
+                # relationships from here rather than re-deriving them from
+                # port positions/directions.
+                "analysis": analysis,
                 "family": getattr(obj, "Family", ""),
                 "topology": getattr(obj, "Topology", ""),
                 "type_id": type_id,

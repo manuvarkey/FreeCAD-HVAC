@@ -555,32 +555,28 @@ def _make_center_merge_port(api, port, center, inset):
     return api.copy_port(port, position=p)
     
     
-def _find_run_pair(api, ports, angle_tol_deg=10.0):
+def _find_run_pair(context, ports):
     """
     Return indices (i, j, k) where i,j are the near-collinear run pair
     and k is the remaining branch port.
+
+    The run pair is read from the node's own topology analysis
+    (`collinear_pairs`, see JunctionAnalysis in NetworkParser.py) rather
+    than re-derived from port directions here -- build_tee is only ever
+    dispatched for a "tee"/"lateral_tee" family, which the classifier only
+    assigns when it already found exactly one such pair.
     """
     if len(ports) != 3:
         raise ValueError("Requires exactly 3 ports")
 
-    best = None
-    best_err = None
-
-    for i in range(3):
-        for j in range(i + 1, 3):
-            u1 = api.port_direction(ports[i])
-            u2 = api.port_direction(ports[j])
-            theta = math.degrees(api.angle_between(u1, u2))
-            err = abs(theta - 180.0)
-            if best_err is None or err < best_err:
-                k = [x for x in range(3) if x not in (i, j)][0]
-                best = (i, j, k)
-                best_err = err
-
-    if best is None or best_err > angle_tol_deg:
+    analysis = context.get("analysis", {}) or {}
+    pairs = analysis.get("collinear_pairs", []) or []
+    if len(pairs) != 1:
         raise ValueError("Could not identify run pair")
 
-    return best
+    i, j = int(pairs[0]["a"]), int(pairs[0]["b"])
+    k = [x for x in range(3) if x not in (i, j)][0]
+    return i, j, k
 
 
 def _make_leg_to_center(api, port, center, trim_length, thickness, inner_inset=None):
@@ -627,7 +623,7 @@ def build_tee(context):
     if len(ports) != 3:
         raise ValueError("Tee requires exactly 3 ports")
 
-    run_a_idx, run_b_idx, branch_idx = _find_run_pair(api, ports, angle_tol_deg=10.0)
+    run_a_idx, run_b_idx, branch_idx = _find_run_pair(context, ports)
 
     run_a = ports[run_a_idx]
     run_b = ports[run_b_idx]
