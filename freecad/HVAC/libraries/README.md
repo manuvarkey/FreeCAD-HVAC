@@ -66,7 +66,7 @@ Common fields, both segments and junctions:
 | `id` | stable identifier within the library; see naming convention below |
 | `label` | display name |
 | `category` | `"segment"` or `"junction"` |
-| `family` | list of dotted family strings the parser's classifier matches against (segments: e.g. `["straight_segment"]`; junctions: e.g. `["through.bend", "through.bend_90"]` -- see `classify_junction_family`) |
+| `family` | list of dotted family strings the parser's classifier matches against (segments: e.g. `["straight_segment"]`; junctions: e.g. `["through.bend", "through.bend_90"]` -- see `classify_junction_family`, documented in [`freecad/HVAC/core/TOPOLOGY_CLASSIFICATION.md`](../core/TOPOLOGY_CLASSIFICATION.md)) |
 | `profiles` | allowed cross-section profiles, e.g. `["Circular"]`, `["Rectangular"]` |
 | `constraints` | e.g. `{"degree": 1}` restricting how many ports a junction may have |
 | `properties` | list of property defs (below) |
@@ -118,6 +118,13 @@ connectivity-graph role the parser's classifier assigns, and is one of:
 - `cross` -- a 4-way crossing/double-wye
 - `multiport` -- more than 4 ports meeting at one node
 - `end` -- degree-1 (a terminal: diffuser, grille, louver, fan/AHU connection, ...)
+
+For exactly how `topology` and `family` are derived from node geometry
+(the degree/collinearity/eccentricity/coplanarity rules behind
+`classify_node_topology` and `classify_junction_family`, and how the two
+combine into the dotted `family` key matched against a type-def's `family`
+list), see
+[`freecad/HVAC/core/TOPOLOGY_CLASSIFICATION.md`](../core/TOPOLOGY_CLASSIFICATION.md).
 
 After the topology, two further tokens narrow it down:
 
