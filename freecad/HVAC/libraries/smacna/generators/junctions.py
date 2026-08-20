@@ -47,6 +47,36 @@ def _safe_trim(value, fallback_value):
         return v
     return float(fallback_value)
 
+
+def _inset_port(api, port, thickness):
+    """
+    Copy of `port` with its cross-section shrunk by 2*thickness (uniformly,
+    on every side) -- position/direction/profile are unchanged, only
+    section_params shrinks. Used to build the inner-bore wire/wall of a
+    hollow sheet-metal fitting alongside its outer-wall counterpart.
+    """
+    profile = api.port_profile(port)
+    params = api.port_section_params(port)
+    thickness = float(thickness)
+
+    if profile == "Circular":
+        diameter = float(params.get("Diameter", 0.0) or 0.0) - 2.0 * thickness
+        if diameter <= 0.0:
+            raise ValueError("Thickness is too large for port Diameter")
+        new_params = dict(params, Diameter=diameter)
+    elif profile in ("Rectangular", "Oval"):
+        width = float(params.get("Width", 0.0) or 0.0) - 2.0 * thickness
+        height = float(params.get("Height", 0.0) or 0.0) - 2.0 * thickness
+        if width <= 0.0 or height <= 0.0:
+            raise ValueError("Thickness is too large for port Width/Height")
+        new_params = dict(params, Width=width, Height=height)
+    else:
+        raise ValueError("Unsupported profile '{}' for hollow wall".format(profile))
+
+    out = api.copy_port(port)
+    out["section_params"] = new_params
+    return out
+
 # --------------------------------------------------------------------------
 # Marker geometry
 # --------------------------------------------------------------------------
@@ -244,18 +274,20 @@ def build_elbow(context):
     if radius < size_hint / 2:
         radius = 0.6 * size_hint
 
+    thickness = float(props.get("Thickness", 0.8) or 0.8)
+
     # Symmetric elbow trim distance measured from the virtual corner
     trim = radius / math.tan(theta / 2.0)
     c1, c2 = api.closest_points_on_lines(p0, -u0, p1, -u1)
-    
+
     # Tangency points on the two offset segment centerlines
     s0 = c1 + (u0 * trim)
     s1 = c2 + (u1 * trim)
-    
+
     # Calculate trim distances from the tangency points to the original ports
     trim0 = max(0.0, (s0 - p0).dot(u0))
     trim1 = max(0.0, (s1 - p1).dot(u1))
-    
+
     # Find arc center and point on arc using bisector
     arc_center = api.arc_center_from_points_tangents_radius(s0, s1, u0, u1, radius)
     bisector = u0 + u1
@@ -263,18 +295,31 @@ def build_elbow(context):
         raise ValueError("Elbow bisector is undefined")
     bisector.normalize()
     mid_point = arc_center - bisector * float(radius)
-    
+
     # Generate arc wire
     arc_edge = Part.Arc(s0, mid_point, s1).toShape()
     path_wire = Part.Wire([arc_edge])
-    
+
     # Generate a sweep between ports
     sweep_port_0 = api.copy_port(ports[0], position=s0)
     sweep_port_1 = api.copy_port(ports[1], position=s1)
-    wire_1 = api.make_section_wire_from_port(sweep_port_0)
-    wire_2 = api.make_section_wire_from_port(sweep_port_1)
-    shape = api.make_pipe_shell(path_wire, [wire_1, wire_2])
-    
+    outer_wire_1 = api.make_section_wire_from_port(sweep_port_0)
+    outer_wire_2 = api.make_section_wire_from_port(sweep_port_1)
+    outer_shape = api.make_pipe_shell(path_wire, [outer_wire_1, outer_wire_2])
+
+    # Hollow sheet-metal wall: sweep a second, uniformly-inset profile along
+    # the *same* centerline arc and cut it from the outer sweep. This is a
+    # schematic constant-cross-section-inset approximation (not a true
+    # constant-thickness offset surface -- the wall thins slightly through
+    # the bend), matching the fidelity already used elsewhere in this module.
+    inner_sweep_port_0 = _inset_port(api, sweep_port_0, thickness)
+    inner_sweep_port_1 = _inset_port(api, sweep_port_1, thickness)
+    inner_wire_1 = api.make_section_wire_from_port(inner_sweep_port_0)
+    inner_wire_2 = api.make_section_wire_from_port(inner_sweep_port_1)
+    inner_shape = api.make_pipe_shell(path_wire, [inner_wire_1, inner_wire_2])
+
+    shape = outer_shape.cut(inner_shape)
+
     return {
         "shape": shape,
         "connection_lengths": api.build_trim_rec_from_port_lengths(

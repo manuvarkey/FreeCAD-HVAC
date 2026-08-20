@@ -183,7 +183,8 @@ class DuctSegment:
         self._addProperty(obj, "App::PropertyString", "TypeId", "HVAC", "Selected segment type id")
         self._addProperty(obj, "App::PropertyString", "Profile", "HVAC", "Segment profile")
         self._addProperty(obj, "App::PropertyString", "AnalysisJson", "HVAC", "Serialized segment analysis")
-        
+        self._addProperty(obj, "App::PropertyStringList", "TypeSchemaPropertyNames", "HVAC", "Internal: property names added by the last-applied type schema (for stale cleanup)")
+
         self._addProperty(obj, "App::PropertyEnumeration", "Attachment", "Placement", "Section attachment relative to route")
         self._addProperty(obj, "App::PropertyVector", "Offset", "Placement", "Global user offset")
         self._addProperty(obj, "App::PropertyVector", "ProfileXAxis", "Placement", "Preferred local X axis for section/profile orientation; zero vector = auto")
@@ -274,12 +275,13 @@ class DuctSegment:
             "Family",
             "Profile",
             "AnalysisJson",
+            "TypeSchemaPropertyNames",
         ):
             try:
                 obj.setEditorMode(prop, 1)
             except Exception:
                 pass
-                
+
     def applyOwnerDefaults(self, obj, owner):
         if owner is None:
             return
@@ -319,12 +321,32 @@ class DuctSegment:
         type_def = reg.resolve_type(lib_id, type_id)
         if type_def is None:
             return False
-    
+
         changed = False
-    
-        active_prop_names = set()
+
+        # Diameter/Width/Height are permanent core dimensional properties
+        # (see setProperties) shared across every segment type regardless of
+        # whether the active type's schema declares them -- never candidates
+        # for removal below; their own visibility is instead handled by the
+        # editor-mode loop at the end of this method.
+        core_dimension_names = {"Diameter", "Width", "Height"}
+
+        active_prop_names = {pdef.name for pdef in (getattr(type_def, "properties", []) or [])}
+        new_names = [n for n in active_prop_names if n not in core_dimension_names]
+
+        # Remove properties left over from a *previously* selected type that
+        # the newly-selected type doesn't declare, so the property editor
+        # doesn't accumulate stale fields across model switches.
+        old_names = list(getattr(obj, "TypeSchemaPropertyNames", []) or [])
+        for name in set(old_names) - set(new_names):
+            if name in obj.PropertiesList:
+                try:
+                    obj.removeProperty(name)
+                    changed = True
+                except Exception:
+                    pass
+
         for pdef in getattr(type_def, "properties", []) or []:
-            active_prop_names.add(pdef.name)
             prop_added = False
     
             if pdef.name not in obj.PropertiesList:
@@ -347,17 +369,24 @@ class DuctSegment:
                         pass
     
             try:
-                obj.setEditorMode(pdef.name, 0)
+                obj.setEditorMode(pdef.name, int(getattr(pdef, "editor_mode", 0) or 0))
             except Exception:
                 pass
-    
+
         for prop in ("Diameter", "Width", "Height"):
             if prop in obj.PropertiesList:
                 try:
                     obj.setEditorMode(prop, 0 if prop in active_prop_names else 1)
                 except Exception:
                     pass
-    
+
+        if list(getattr(obj, "TypeSchemaPropertyNames", []) or []) != new_names:
+            try:
+                obj.TypeSchemaPropertyNames = new_names
+                changed = True
+            except Exception:
+                pass
+
         return changed
     
     def resolveSourceEdge(self):

@@ -57,6 +57,9 @@ class FakeVector:
     def __mul__(self, scalar):
         return FakeVector(self.x * scalar, self.y * scalar, self.z * scalar)
 
+    def __neg__(self):
+        return FakeVector(-self.x, -self.y, -self.z)
+
     def __eq__(self, other):
         return isinstance(other, FakeVector) and (self.x, self.y, self.z) == (other.x, other.y, other.z)
 

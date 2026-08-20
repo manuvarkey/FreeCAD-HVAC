@@ -22,6 +22,13 @@
       "group": "Dimensions",
       "description": "Transition body length",
       "default": 300.0
+    },
+    {
+      "name": "Thickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Sheet metal thickness (used when classified as a bend)",
+      "default": 0.8
     }
   ],
   "generator": {

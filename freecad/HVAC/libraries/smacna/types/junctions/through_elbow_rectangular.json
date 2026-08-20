@@ -1,0 +1,92 @@
+{
+  "id": "through_elbow_rectangular",
+  "label": "Elbow - Rectangular",
+  "category": "junction",
+  "topology": "through",
+  "family": ["through.bend", "through.bend.3d", "through.bend_90", "through.bend_90.3d"],
+  "profiles": ["Rectangular"],
+  "constraints": {
+    "degree": 2
+  },
+  "properties": [
+    {
+      "name": "d_h_axis_02",
+      "prop_type": "App::PropertyLength",
+      "group": "Side 2",
+      "description": "Horizontal offset of the outlet axis from the inlet axis (read-only -- as-connected)",
+      "default": 0.0,
+      "required": false,
+      "editor_mode": 1
+    },
+    {
+      "name": "d_v_axis_02",
+      "prop_type": "App::PropertyLength",
+      "group": "Side 2",
+      "description": "Vertical offset of the outlet axis from the inlet axis (read-only -- as-connected)",
+      "default": 0.0,
+      "required": false,
+      "editor_mode": 1
+    },
+    {
+      "name": "angle",
+      "prop_type": "App::PropertyAngle",
+      "group": "Bend geometry",
+      "description": "Bend (deflection) angle, e.g. 30/45/60/90 deg (read-only -- as-connected)",
+      "default": 0.0,
+      "required": false,
+      "editor_mode": 1
+    },
+    {
+      "name": "r_axis",
+      "prop_type": "App::PropertyLength",
+      "group": "Bend geometry",
+      "description": "Axis/centreline radius of the bend",
+      "default": 300.0
+    },
+    {
+      "name": "thickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Construction",
+      "description": "Sheet metal thickness",
+      "default": 0.8
+    },
+    {
+      "name": "flange_height",
+      "prop_type": "App::PropertyLength",
+      "group": "Flanges",
+      "description": "Flange projection/depth",
+      "default": 25.0,
+      "required": false
+    },
+    {
+      "name": "flange_thickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Flanges",
+      "description": "Flange material thickness",
+      "default": 1.0,
+      "required": false
+    },
+    {
+      "name": "ShowFlange1",
+      "prop_type": "App::PropertyBool",
+      "group": "Flanges",
+      "description": "Include the flange at side 1 (inlet)",
+      "default": true
+    },
+    {
+      "name": "ShowFlange2",
+      "prop_type": "App::PropertyBool",
+      "group": "Flanges",
+      "description": "Include the flange at side 2 (outlet)",
+      "default": true
+    }
+  ],
+  "geometry": {
+    "backend": "partscript",
+    "file": "models/rectangular_elbow.py"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_elbow_generic"
+  }
+}

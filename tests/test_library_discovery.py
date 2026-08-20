@@ -51,6 +51,27 @@ def test_oval_straight_has_no_flange_properties():
     assert not any(n.startswith("Flange") or n.startswith("ShowFlange") for n in names)
 
 
+def test_through_elbow_rectangular_uses_partscript_backend_and_reactive_properties():
+    reg = _load_registry()
+    type_def = reg._libraries["smacna"].get_type("through_elbow_rectangular")
+    assert type_def is not None
+    assert type_def.profiles == ["Rectangular"]
+    assert type_def.geometry.backend == "partscript"
+    assert os.path.isfile(os.path.join(reg._libraries["smacna"].root_path, type_def.geometry.file))
+
+    by_name = {p.name: p for p in type_def.properties}
+    reactive_names = {"d_h_axis_02", "d_v_axis_02", "angle"}
+    input_names = {"r_axis", "thickness", "flange_height", "flange_thickness", "ShowFlange1", "ShowFlange2"}
+    assert reactive_names | input_names == set(by_name.keys())
+
+    for name in reactive_names:
+        assert by_name[name].editor_mode == 1, name
+    for name in input_names:
+        assert by_name[name].editor_mode == 0, name
+
+    assert not any(n.startswith("insulation") for n in by_name)
+
+
 def test_samples_library_holds_the_fcstd_and_static_diffuser_samples():
     reg = _load_registry()
     samples = reg._libraries["samples"]

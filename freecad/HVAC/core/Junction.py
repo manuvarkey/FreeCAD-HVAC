@@ -118,6 +118,7 @@ class DuctJunction:
             result = reg.build_geometry(library_id, type_def, context)
             shape = result.get("shape", None)
             lengths = result.get("connection_lengths", [])
+            computed = result.get("computed_properties", {}) or {}
 
             if shape is not None:
                 obj.Shape = shape
@@ -125,6 +126,19 @@ class DuctJunction:
             lengths_json = json.dumps(lengths)
             if getattr(obj, "ConnectionLengthsJson", "") != lengths_json:
                 obj.ConnectionLengthsJson = lengths_json
+
+            # Reactive, read-only "as-built" properties a geometry backend
+            # may report alongside its shape (e.g. the elbow's actual angle/
+            # offset as dictated by whatever is really connected) -- see
+            # through_elbow_rectangular.json's editor_mode=1 properties.
+            for name, value in computed.items():
+                if name not in obj.PropertiesList:
+                    continue
+                try:
+                    if getattr(obj, name, None) != value:
+                        setattr(obj, name, value)
+                except Exception:
+                    pass
 
         except Exception as e:
             FreeCAD.Console.PrintWarning(
@@ -146,6 +160,7 @@ class DuctJunction:
         self._addProperty(obj, "App::PropertyStringList", "ConnectedEdgeKeys", "HVAC", "Connected segment keys")
         self._addProperty(obj, "App::PropertyString", "ConnectionLengthsJson", "HVAC", "Per-edge connection lengths")
         self._addProperty(obj, "App::PropertyString", "AnalysisJson", "HVAC", "Serialized topology analysis")
+        self._addProperty(obj, "App::PropertyStringList", "TypeSchemaPropertyNames", "HVAC", "Internal: property names added by the last-applied type schema (for stale cleanup)")
 
         self._addProperty(obj, "App::PropertyFloat", "DesignFlowRate", "Airflow", "User-specified design flow rate for this terminal (L/s). Leave blank/0 on exactly one terminal per sub-network to solve it as the balancing terminal.")
         self._addProperty(obj, "App::PropertyFloat", "CalcTotalFlowRate", "Airflow", "Computed total flow through this junction (L/s)")
@@ -181,6 +196,7 @@ class DuctJunction:
             "ConnectedEdgeKeys",
             "ConnectionLengthsJson",
             "AnalysisJson",
+            "TypeSchemaPropertyNames",
         ):
             try:
                 obj.setEditorMode(prop, 1)
@@ -198,21 +214,36 @@ class DuctJunction:
         type_def = reg.resolve_type(lib_id, type_id)
         if type_def is None:
             return False
-    
+
         changed = False
+        new_names = [pdef.name for pdef in getattr(type_def, "properties", []) or []]
+
+        # Remove properties left over from a *previously* selected type (e.g.
+        # switching TypeId from through_elbow_rectangular to through_generic)
+        # that the newly-selected type doesn't declare, so the property
+        # editor doesn't accumulate stale fields across model switches.
+        old_names = list(getattr(obj, "TypeSchemaPropertyNames", []) or [])
+        for name in set(old_names) - set(new_names):
+            if name in obj.PropertiesList:
+                try:
+                    obj.removeProperty(name)
+                    changed = True
+                except Exception:
+                    pass
+
         for pdef in getattr(type_def, "properties", []) or []:
             prop_added = False
-    
+
             if pdef.name not in obj.PropertiesList:
                 obj.addProperty(pdef.prop_type, pdef.name, pdef.group, pdef.description)
                 changed = True
                 prop_added = True
-    
+
             try:
                 current = getattr(obj, pdef.name)
             except Exception:
                 current = None
-    
+
             if getattr(pdef, "default", None) is not None:
                 should_apply_default = prop_added or current in (None, "")
                 if should_apply_default:
@@ -221,12 +252,19 @@ class DuctJunction:
                         changed = True
                     except Exception:
                         pass
-    
+
             try:
-                obj.setEditorMode(pdef.name, 0)
+                obj.setEditorMode(pdef.name, int(getattr(pdef, "editor_mode", 0) or 0))
             except Exception:
                 pass
-    
+
+        if list(getattr(obj, "TypeSchemaPropertyNames", []) or []) != new_names:
+            try:
+                obj.TypeSchemaPropertyNames = new_names
+                changed = True
+            except Exception:
+                pass
+
         return changed
 
     def updateMetadata(
