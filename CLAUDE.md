@@ -4,6 +4,10 @@ These rules govern how code is written and tested in this repository. They
 are deliberately narrow — do not expand their scope beyond what is written
 here.
 
+For an overall picture of how the pieces fit together and execute (layers,
+end-to-end sync/execute flow, type-selection subsystem), see
+[`ARCHITECTURE.md`](ARCHITECTURE.md) before making structural changes.
+
 ## 1. Unit test policy
 
 Unit tests are required for data-structure generation/maintenance modules
