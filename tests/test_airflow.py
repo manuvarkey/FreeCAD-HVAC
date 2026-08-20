@@ -314,11 +314,11 @@ REGAIN_FACTOR = 0.75
 MIN_VELOCITY = 3.0
 
 # Chosen (and verified numerically) so the regain-vs-friction crossing point
-# falls strictly between the minimum-velocity floor and the 5m bracket
-# ceiling -- i.e. this scenario is NOT floor-clamped, so the round-trip
-# balance equation is the thing actually being exercised.
-ROUND_TRIP_UPSTREAM_V = 4.0
-ROUND_TRIP_LENGTH = 30.0
+# falls strictly between zero and the minimum-velocity-floor ceiling -- i.e.
+# this scenario is NOT floor-clamped, so the round-trip balance equation is
+# the thing actually being exercised.
+ROUND_TRIP_UPSTREAM_V = 5.0
+ROUND_TRIP_LENGTH = 10.0
 
 
 def _regain_balance(area_m2, dh_m, flow_m3_s, upstream_vp_pa, regain_factor, length_m):
@@ -339,7 +339,7 @@ def test_circular_static_regain_round_trip_balances_when_not_floor_clamped():
     )
     assert balanced is True
     floor_d = airflow.circular_diameter_for_velocity(flow, MIN_VELOCITY)
-    assert d > floor_d + 1e-9  # sanity: this case must not be floor-clamped
+    assert d < floor_d - 1e-9  # sanity: this case must not be floor-clamped
 
     regain, friction, _v = _regain_balance(
         airflow.circular_area(d), airflow.hydraulic_diameter_circular(d),
@@ -348,16 +348,36 @@ def test_circular_static_regain_round_trip_balances_when_not_floor_clamped():
     assert regain == pytest.approx(friction, rel=1e-3)
 
 
-def test_circular_static_regain_clamps_to_minimum_velocity_floor():
-    # A fast upstream section (8 m/s) feeding a short, low-friction run: even
-    # at the fastest allowed velocity (the floor), the available regain
-    # (driven by the big upstream/downstream velocity-pressure gap) already
-    # exceeds this section's modest friction loss -- the unconstrained
-    # balance point would require an even faster duct than the floor allows,
-    # so sizing clamps to the floor (and reports balanced=False) rather than
-    # extrapolating past it.
+def test_circular_static_regain_not_clamped_when_faster_than_floor():
+    # A fast upstream section (8 m/s) feeding a short, low-friction run: the
+    # unconstrained balance point comes out faster than the minimum-velocity
+    # floor. That's not a problem -- the floor is a minimum, not a maximum --
+    # so sizing should return that faster/smaller duct as a normal balanced
+    # solution rather than clamping down to the floor.
     flow, length = 0.05, 0.5
     upstream_vp = airflow.velocity_pressure(DENSITY, 8.0)
+    d, balanced = airflow.circular_diameter_for_static_regain(
+        flow, upstream_vp, REGAIN_FACTOR, length, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY
+    )
+    assert balanced is True
+    floor_d = airflow.circular_diameter_for_velocity(flow, MIN_VELOCITY)
+    assert d < floor_d - 1e-9
+
+    regain, friction, _v = _regain_balance(
+        airflow.circular_area(d), airflow.hydraulic_diameter_circular(d),
+        flow, upstream_vp, REGAIN_FACTOR, length
+    )
+    assert regain == pytest.approx(friction, rel=1e-3)
+
+
+def test_circular_static_regain_clamps_to_minimum_velocity_floor():
+    # A long, rough run fed by an upstream section only just above the
+    # floor itself: even at the slowest/largest allowed duct (the floor),
+    # regain still can't offset this section's own friction -- the classic
+    # static-regain failure mode -- so sizing clamps to the floor (and
+    # reports balanced=False) rather than proposing something even slower.
+    flow, length = 0.3, 40.0
+    upstream_vp = airflow.velocity_pressure(DENSITY, 3.5)
     d, balanced = airflow.circular_diameter_for_static_regain(
         flow, upstream_vp, REGAIN_FACTOR, length, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY
     )
@@ -430,9 +450,22 @@ def test_rect_dims_for_static_regain_fixed_height_keeps_height_exact():
     assert h == pytest.approx(0.3)
 
 
-def test_rect_dims_for_static_regain_reports_unbalanced_when_floor_clamped():
+def test_rect_dims_for_static_regain_not_clamped_when_faster_than_floor():
     flow, length = 0.05, 0.5
     upstream_vp = airflow.velocity_pressure(DENSITY, 8.0)
+    w, h, balanced = airflow.rect_dims_for_static_regain(
+        flow, upstream_vp, REGAIN_FACTOR, length, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY,
+        "aspect_ratio", aspect_ratio=2.0
+    )
+    assert balanced is True
+    floor_w, floor_h = airflow.rect_dims_for_velocity(flow, MIN_VELOCITY, "aspect_ratio", aspect_ratio=2.0)
+    assert w < floor_w - 1e-9
+    assert h < floor_h - 1e-9
+
+
+def test_rect_dims_for_static_regain_reports_unbalanced_when_floor_clamped():
+    flow, length = 0.3, 40.0
+    upstream_vp = airflow.velocity_pressure(DENSITY, 3.5)
     w, h, balanced = airflow.rect_dims_for_static_regain(
         flow, upstream_vp, REGAIN_FACTOR, length, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY,
         "aspect_ratio", aspect_ratio=2.0

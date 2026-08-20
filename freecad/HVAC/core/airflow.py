@@ -445,9 +445,13 @@ def oval_dims_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
 # Static regain has a well-known failure mode on small/low-velocity branches:
 # regain can't offset any reasonable friction loss without an impractically
 # large (slow) duct. Every function here takes a min_velocity_m_s floor and
-# never proposes anything slower than that -- the search brackets from the
-# floor diameter/dimension upward, so if even the floor's own regain already
-# exceeds its friction, the floor is returned outright.
+# never proposes anything slower than that -- the search brackets scale
+# (diameter/dimension) up to the floor's own size as a ceiling, so if even
+# that ceiling's regain can't offset its friction, the ceiling is returned
+# outright (clamped, unbalanced) instead of extrapolating to something even
+# slower. A balance point faster than the floor is unconstrained -- the
+# floor is a minimum velocity, not a maximum -- so it's simply returned as a
+# normal balanced solution.
 # ----------------------------------------------------------------------------
 
 def _regain_minus_friction(area_and_dh_fn, scale, flow_m3_s, upstream_velocity_pressure_pa,
@@ -465,27 +469,34 @@ def _regain_minus_friction(area_and_dh_fn, scale, flow_m3_s, upstream_velocity_p
 
 def _solve_scale_for_static_regain(area_and_dh_fn, flow_m3_s, upstream_velocity_pressure_pa,
                                     regain_factor, length_m, roughness_m, kinematic_viscosity_m2_s,
-                                    air_density_kg_m3, lo, hi=5.0, iterations=60):
+                                    air_density_kg_m3, hi, lo=None, iterations=60):
     """
     Bisect a single scale parameter (e.g. diameter, or one duct dimension) so
     that regain_minus_friction(scale) == 0. That difference increases
     monotonically with scale (a bigger duct means both less friction and,
     since it's slower, more regain), so the bracket is well-posed.
 
-    lo is the scale at the minimum allowed velocity (a floor) -- see the
-    module note above.
+    hi is a ceiling on scale -- the size at the minimum allowed velocity (see
+    the module note above), optionally tightened further by the caller for
+    its own geometric constraint (e.g. an oval's width >= height). lo
+    defaults to a small fraction of hi (an effectively unbounded velocity);
+    callers only pass their own lo when there's a real geometric lower bound
+    on scale (e.g. an oval's height <= width).
 
     Returns (scale, balanced). balanced is False when the equation could not
-    actually be satisfied within [lo, hi] -- clamped to lo (regain already
-    exceeds friction even at the fastest allowed velocity -- the classic
-    static-regain failure mode on small/low-flow branches) or to hi (friction
-    is too high to offset even at the largest bracketed size, e.g. a very
-    long or rough run). Callers should treat balanced=False as "this section
-    did not actually regain-balance; a balancing damper may still be needed
-    here", not as an error -- a size is still returned either way.
+    actually be satisfied within [lo, hi] -- clamped to hi (friction still
+    exceeds regain even at the slowest/largest allowed size -- the classic
+    static-regain failure mode on small/long/rough runs, where regain can't
+    offset friction without an impractically large duct) or, in the
+    (unlikely) case regain already exceeds friction even at the tiny lo
+    bound, clamped to lo. Callers should treat balanced=False as "this
+    section did not actually regain-balance; a balancing damper may still be
+    needed here", not as an error -- a size is still returned either way.
     """
+    if lo is None:
+        lo = hi * 1e-4
     if lo >= hi:
-        return lo, False
+        return hi, False
 
     def balance(scale):
         return _regain_minus_friction(
@@ -493,10 +504,10 @@ def _solve_scale_for_static_regain(area_and_dh_fn, flow_m3_s, upstream_velocity_
             length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3
         )
 
-    if balance(lo) >= 0.0:
-        return lo, False
     if balance(hi) < 0.0:
         return hi, False
+    if balance(lo) >= 0.0:
+        return lo, False
 
     for _ in range(iterations):
         mid = (lo + hi) / 2.0
@@ -517,7 +528,7 @@ def circular_diameter_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa
     floor_diameter_m = circular_diameter_for_velocity(flow_m3_s, min_velocity_m_s)
     return _solve_scale_for_static_regain(
         area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-        length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, lo=floor_diameter_m
+        length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, hi=floor_diameter_m
     )
 
 
@@ -539,7 +550,7 @@ def rect_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
 
         height, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, lo=floor_h
+            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, hi=floor_h
         )
         return aspect_ratio * height, height, balanced
 
@@ -553,7 +564,7 @@ def rect_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
 
         width, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, lo=floor_w
+            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, hi=floor_w
         )
         return width, height, balanced
 
@@ -567,7 +578,7 @@ def rect_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
 
         height, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, lo=floor_h
+            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, hi=floor_h
         )
         return width, height, balanced
 
@@ -592,7 +603,7 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
 
         height, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, lo=floor_h
+            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, hi=floor_h
         )
         return aspect_ratio * height, height, balanced
 
@@ -607,7 +618,8 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
         width, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
             length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
-            lo=max(floor_w, height),  # width must also stay >= height for a valid oval
+            lo=height,  # width must also stay >= height for a valid oval
+            hi=max(floor_w, height),
         )
         return width, height, balanced
 
@@ -622,7 +634,7 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
         height, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
             length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
-            lo=floor_h, hi=width,  # height must also stay <= width for a valid oval
+            hi=min(floor_h, width),  # height must also stay <= width for a valid oval
         )
         return width, height, balanced
 

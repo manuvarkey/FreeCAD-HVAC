@@ -431,7 +431,12 @@ def test_static_regain_propagates_actual_upstream_velocity_not_target_velocity()
     # against segment A's own ACTUAL resolved velocity -- which is only the
     # same as TargetVelocity here because segment A isn't rounded/floor-
     # clamped; in general they can differ, and B must track the real value.
+    # segB_len is shortened from the base_tree default so B's own regain
+    # balance point isn't floor-clamped (a clamped result depends only on
+    # flow/MinimumVelocity, not on the upstream velocity being propagated,
+    # which would make this test unable to tell "actual" from "target").
     net, segment_map, _ = base_tree(
+        segB_len=1000.0,
         net_extra_props=_sizing_props(method="StaticRegain", target_velocity=5.0,
                                        min_velocity=4.0, regain_factor=0.75, rounding_mm=0.0),
     )
@@ -442,13 +447,13 @@ def test_static_regain_propagates_actual_upstream_velocity_not_target_velocity()
 
     upstream_vp = airflow.velocity_pressure(AIR_DENSITY, seg_a_result.velocity_ms)
     expected_d_m, _balanced = airflow.circular_diameter_for_static_regain(
-        airflow.lps_to_m3s(50.0), upstream_vp, 0.75, 3.0,
+        airflow.lps_to_m3s(50.0), upstream_vp, 0.75, 1.0,
         airflow.mm_to_m(DEFAULT_ROUGHNESS_MM), AIR_VISCOSITY, AIR_DENSITY, 4.0
     )
     assert seg_b_result.new_diameter_mm == pytest.approx(expected_d_m * 1000.0)
     # Sanity: not floor-clamped, so this is actually exercising the regain balance.
     floor_d_m = airflow.circular_diameter_for_velocity(airflow.lps_to_m3s(50.0), 4.0)
-    assert seg_b_result.new_diameter_mm > floor_d_m * 1000.0 + 1e-6
+    assert seg_b_result.new_diameter_mm < floor_d_m * 1000.0 - 1e-6
 
 
 def test_static_regain_two_downstream_branches_use_same_upstream_reference():
@@ -513,7 +518,13 @@ def test_static_regain_error_on_one_segment_does_not_crash_downstream():
 
 
 def test_static_regain_balanced_flag_true_and_no_warning_when_regain_achieved():
+    # Both branches short enough that their own regain balance point comes
+    # out faster than MinimumVelocity (i.e. not floor-clamped) -- the
+    # base_tree defaults (3-6m branches) are long enough to hit the floor
+    # (see test_static_regain_balanced_flag_false_and_warning_when_floor_clamped),
+    # so both are shortened here to actually exercise a clean balance.
     net, segment_map, _ = base_tree(
+        segB_len=1000.0, segC_len=1000.0,
         net_extra_props=_sizing_props(method="StaticRegain", target_velocity=5.0,
                                        min_velocity=4.0, regain_factor=0.75, rounding_mm=0.0),
     )
@@ -524,11 +535,13 @@ def test_static_regain_balanced_flag_true_and_no_warning_when_regain_achieved():
 
 
 def test_static_regain_balanced_flag_false_and_warning_when_floor_clamped():
-    # A short, low-flow branch off a fast upstream section: the classic
-    # static-regain failure mode (see the module docstring in airflow.py).
+    # The classic static-regain failure mode (see the module docstring in
+    # airflow.py): even at the slowest/largest duct MinimumVelocity allows,
+    # regain still can't offset this section's own friction -- the
+    # base_tree defaults (a 30 L/s, 6m branch off a 5 m/s trunk) already
+    # land in this regime.
     net, segment_map, _ = base_tree(
-        j4_flow=2.0, segC_len=500.0,
-        net_extra_props=_sizing_props(method="StaticRegain", target_velocity=8.0,
+        net_extra_props=_sizing_props(method="StaticRegain", target_velocity=5.0,
                                        min_velocity=4.0, regain_factor=0.75, rounding_mm=0.0),
     )
     result = DuctSizer(net).solve()
