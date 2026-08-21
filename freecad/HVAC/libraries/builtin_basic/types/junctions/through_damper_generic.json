@@ -12,7 +12,7 @@
     "Oval"
   ],
   "selection": {
-    "kind": "model",
+    "kind": "inline",
     "priority": 50
   },
   "constraints": {

@@ -316,9 +316,10 @@ def build_static_geometry(descriptor_path, context):
 
     if "connection_lengths" in outputs:
         if "connected_ports" not in context:
-            # connection_lengths is a junction-only mechanism: only Junction.py
-            # reads it back off the generator result, and Network.py only scans
-            # junction objects (isDuctJunction) when building the segment trim
+            # connection_lengths is a junction-only mechanism: only
+            # DuctComponent.execute() reads it back off the generator
+            # result, and DuctJunction.aggregateConnectionLengths only ever
+            # looks at component objects when building the segment trim
             # map. A segment-backed descriptor authoring this output would
             # otherwise resolve silently to [] and have no effect.
             raise StaticDescriptorError(

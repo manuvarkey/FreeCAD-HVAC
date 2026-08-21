@@ -656,3 +656,108 @@ def test_bundled_mixed_profile_fix_does_not_disturb_exact_profile_ranking():
         selection = reg.select_type(lib_id, request, strict=True)
         assert selection.status == "exact"
         assert selection.type_def.id == expected
+
+
+# ----------------------------------------------------------------------
+# selection.kind == "inline": dampers/silencers/flex connectors -- never
+# reachable through automatic (topology, family, profile) matching, only
+# through HVACLibrary.list_inline_types() for the "Add Inline Component"
+# UI action. See freecad/HVAC/library/Library.py and libraries/README.md.
+# ----------------------------------------------------------------------
+
+def test_selection_kind_inline_excluded_from_match_indexes():
+    model = _type_def("m1", "junction", ["through.straight.damper"], topology="through",
+                       profiles=["Circular"], kind="model")
+    inline = _type_def("i1", "junction", ["through.straight.damper"], topology="through",
+                        profiles=["Circular"], kind="inline")
+    lib = _library_with(model, inline)
+    lib.reindex()
+
+    all_indexed = set(lib.model_match_index.keys()) | set(lib.placeholder_match_index.keys())
+    indexed_ids = {t.id for candidates in lib.model_match_index.values() for t in candidates}
+    indexed_ids |= {t.id for candidates in lib.placeholder_match_index.values() for t in candidates}
+    assert "i1" in {t.id for t in [model, inline]}  # sanity: both types exist
+    assert "i1" not in indexed_ids
+    assert "m1" in indexed_ids
+    assert all_indexed  # the model's key is present
+
+
+def test_select_type_never_returns_an_inline_type():
+    model = _type_def("m1", "junction", ["through.straight.damper"], topology="through",
+                       profiles=["Circular"], kind="model", priority=0)
+    inline = _type_def("i1", "junction", ["through.straight.damper"], topology="through",
+                        profiles=["Circular"], kind="inline", priority=1000)
+    lib = _library_with(model, inline)
+    request = _junction_request("through", "through.straight.damper", "Circular", _ports(2))
+
+    selection = lib.select_type(request, strict=True)
+    assert selection.type_def is not None
+    assert selection.type_def.id == "m1"
+
+
+def test_resolve_sticky_type_treats_inline_current_type_like_placeholder():
+    inline = _type_def("i1", "junction", ["through.straight"], topology="through",
+                        profiles=["Circular"], kind="inline")
+    fallback = _type_def("m1", "junction", ["through.straight"], topology="through",
+                          profiles=["Circular"], kind="model")
+    lib = _library_with(inline, fallback)
+    reg = HVACLibraryRegistry()
+    reg.register_library(lib)
+
+    request = _junction_request("through", "through.straight", "Circular", _ports(2))
+    # An inline type should never end up as a Primary's current_type_id in
+    # practice, but resolve_sticky_type must not treat it as sticky if it
+    # somehow does -- same as a placeholder, always re-evaluated.
+    selection = reg.resolve_sticky_type("lib", "i1", request)
+    assert selection.status != "retained"
+    assert selection.type_def.id == "m1"
+
+
+def test_list_inline_types_filters_by_topology_and_profile():
+    damper = _type_def("through_damper", "junction", ["through.straight.damper"], topology="through",
+                        profiles=["Circular", "Rectangular"], kind="inline")
+    vav = _type_def("through_vav", "junction", ["through.straight.vav"], topology="through",
+                     profiles=["Oval"], kind="inline")
+    model = _type_def("m1", "junction", ["through.straight"], topology="through",
+                       profiles=["Circular"], kind="model")
+    lib = _library_with(damper, vav, model)
+
+    all_inline = lib.list_inline_types()
+    assert {t.id for t in all_inline} == {"through_damper", "through_vav"}
+
+    circular_only = lib.list_inline_types(topology="through", profile="Circular")
+    assert {t.id for t in circular_only} == {"through_damper"}
+
+    wrong_topology = lib.list_inline_types(topology="branch", profile="Circular")
+    assert wrong_topology == []
+
+
+def test_bundled_damper_and_vav_are_reclassified_inline():
+    reg = _load_bundled_registry()
+    for lib_id in ("smacna", "builtin_basic"):
+        lib = reg.get_library(lib_id)
+        damper = lib.get_type("through_damper_generic")
+        vav = lib.get_type("through_vav_generic")
+        assert damper.selection.kind == "inline"
+        assert vav.selection.kind == "inline"
+
+        inline_types = {t.id for t in lib.list_inline_types(topology="through")}
+        assert {"through_damper_generic", "through_vav_generic"} <= inline_types
+
+        # Never reachable through automatic matching, even if their own
+        # declared family were somehow requested.
+        request = _junction_request("through", "through.straight.damper", "Circular", _ports(2))
+        selection = reg.select_type(lib_id, request, strict=True)
+        assert selection.type_def is None or selection.type_def.id != "through_damper_generic"
+
+
+def test_bundled_reclassifying_dampers_to_inline_does_not_disturb_other_selection():
+    # The through/2-port automatic-selection outcome for an ordinary
+    # straight/bend run must be unaffected by the damper/VAV reclassification
+    # (they were never reachable by the classifier's own family keys anyway
+    # -- see through_damper_generic.json/through_vav_generic.json).
+    reg = _load_bundled_registry()
+    request = _junction_request("through", "through.straight", "Circular", _ports(2))
+    selection = reg.select_type("smacna", request, strict=True)
+    assert selection.type_def is not None
+    assert selection.type_def.id == "through_transition_generic"

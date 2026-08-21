@@ -70,6 +70,9 @@ class HVAC(Gui.Workbench):
                                 # 'HVAC_ReverseGeometryDirection',
                                 "Separator",
                                 'HVAC_EditType',
+                                'HVAC_AddInlineComponent',
+                                'HVAC_RemoveInlineComponent',
+                                'HVAC_SelectParentJunction',
                                 'HVAC_EditPlacement',
                                 'HVAC_ResetTypesToDefaults'
                                 ]
@@ -91,6 +94,9 @@ class HVAC(Gui.Workbench):
                                 # 'HVAC_ReverseGeometryDirection',
                                 "Separator",
                                 'HVAC_EditType',
+                                'HVAC_AddInlineComponent',
+                                'HVAC_RemoveInlineComponent',
+                                'HVAC_SelectParentJunction',
                                 'HVAC_EditPlacement',
                                 'HVAC_ResetTypesToDefaults'
                                 ]
@@ -112,6 +118,9 @@ class HVAC(Gui.Workbench):
                                 # 'HVAC_ReverseGeometryDirection',
                                 "Separator",
                                 'HVAC_EditType',
+                                'HVAC_AddInlineComponent',
+                                'HVAC_RemoveInlineComponent',
+                                'HVAC_SelectParentJunction',
                                 'HVAC_EditPlacement',
                                 'HVAC_ResetTypesToDefaults'
                                 ]
@@ -227,6 +236,9 @@ class HVAC(Gui.Workbench):
             def __init__(self):
                 super().__init__()
                 self.commands = ['HVAC_EditType',
+                                 'HVAC_AddInlineComponent',
+                                 'HVAC_RemoveInlineComponent',
+                                 'HVAC_SelectParentJunction',
                                  'HVAC_EditPlacement',
                                  'HVAC_ResetTypesToDefaults']
                 self.title = translate("HVAC", "Edit Tools")

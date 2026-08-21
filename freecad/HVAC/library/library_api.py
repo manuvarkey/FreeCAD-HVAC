@@ -758,8 +758,15 @@ class HVACLibraryAPI:
             return None
 
     @staticmethod
-    def copy_port(port, position=None, direction=None, profile_x_axis=None):
-        """Copy a port dict, optionally overriding position/direction/profile_x_axis (everything else unchanged)."""
+    def copy_port(port, position=None, direction=None, profile_x_axis=None, edge_key=None, segment_end=None):
+        """
+        Copy a port dict, optionally overriding position/direction/
+        profile_x_axis/edge_key/segment_end (everything else unchanged).
+
+        edge_key/segment_end are useful when synthesizing a port that
+        doesn't correspond to the original port's own connection any more
+        (e.g. an internal seam between two chained junction components).
+        """
         out = dict(port)
         if position is not None:
             out["position"] = HVACLibraryAPI.vec(position)
@@ -767,6 +774,10 @@ class HVACLibraryAPI:
             out["direction"] = HVACLibraryAPI.vec(direction)
         if profile_x_axis is not None:
             out["profile_x_axis"] = HVACLibraryAPI.vec(profile_x_axis)
+        if edge_key is not None:
+            out["edge_key"] = str(edge_key)
+        if segment_end is not None:
+            out["segment_end"] = str(segment_end)
         return out
     
     @staticmethod

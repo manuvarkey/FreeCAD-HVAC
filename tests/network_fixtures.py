@@ -6,6 +6,9 @@ tests run against a small synthetic tree network without a real FreeCAD
 installation or real base geometry.
 """
 
+import json
+from dataclasses import asdict
+
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 
 from freecad.HVAC.core.NetworkParser import EdgeRef, JunctionAnalysis, JunctionPort
@@ -70,6 +73,9 @@ class FakeParser:
     def node_key(self, node_id):
         return "N{}".format(node_id)
 
+    def node_ids(self):
+        return list(self._node_ports.keys())
+
     def build_junction_analysis(self, node_id, segment_map):
         ports = [
             _port(tag, end, flow_into_junction=(end == "end"))
@@ -131,13 +137,72 @@ def make_segment(tag, diameter_mm, length_mm, roughness_mm=0.0, profile="Circula
     )
 
 
+class FakeJunctionProxy:
+    """
+    Stand-in for DuctJunction.Proxy: these solver tests only ever build
+    single-component (Primary-only) junctions, so getComponents() always
+    returns exactly that one fake DuctComponent.
+    """
+
+    def __init__(self, component):
+        self.component = component
+
+    def getComponents(self):
+        return [self.component]
+
+    def getPrimaryComponent(self):
+        return self.component
+
+
+class FakeJunctionObj(FakeObj):
+    """
+    Stand-in for a DuctJunction FreeCAD object. LibraryId/TypeId are
+    convenience passthroughs to the junction's own (single, Primary) fake
+    DuctComponent (self._component), so existing test code that pokes
+    junction.TypeId/LibraryId directly (mirroring how these tests were
+    written before physical-fitting ownership moved onto DuctComponent)
+    keeps working unchanged.
+    """
+
+    def __init__(self, **kwargs):
+        self._component = FakeObj(
+            Label="", Name="", ComponentRole="Primary", Sequence=0,
+            LocalPortsJson="[]", ConnectionLengthsJson="[]", Family="",
+            CalcFlowRate=0.0, CalcVelocity=0.0, CalcLossCoefficient=0.0, CalcPressureDrop=0.0,
+        )
+        self.Proxy = FakeJunctionProxy(self._component)
+        super().__init__(**kwargs)
+        if not self._component.Label:
+            label = getattr(self, "Label", "Junction")
+            self._component.Label = "{}_Comp0".format(label)
+            self._component.Name = self._component.Label
+
+    @property
+    def LibraryId(self):
+        return self._component.LibraryId
+
+    @LibraryId.setter
+    def LibraryId(self, value):
+        self._component.LibraryId = value
+
+    @property
+    def TypeId(self):
+        return self._component.TypeId
+
+    @TypeId.setter
+    def TypeId(self, value):
+        self._component.TypeId = value
+
+
 def make_junction(label, design_flow=0.0, library_id="testlib", type_id="branch_tee_generic"):
-    return FakeObj(
+    return FakeJunctionObj(
         Label=label,
-        LibraryId=library_id,
-        TypeId=type_id,
+        Name=label,
         Family="",
         DesignFlowRate=design_flow,
+        Topology="branch",
+        LibraryId=library_id,
+        TypeId=type_id,
     )
 
 
@@ -150,6 +215,20 @@ def make_net(parser, segment_map, junction_map, **extra_props):
     props.update(extra_props)
     net = FakeObj(**props)
     net.Proxy = FakeProxy(parser, segment_map, junction_map)
+
+    # Populate each junction's (single, Primary) fake component's
+    # LocalPortsJson/Topology from the parser's own analysis, mirroring
+    # what DuctJunction.composeComponents() does for a single-component
+    # junction in the real system: a straight passthrough of the real
+    # connected ports.
+    for node_id in parser.node_ids():
+        junction = junction_map.get(parser.node_key(node_id))
+        if junction is None or not hasattr(junction, "_component"):
+            continue
+        ja = parser.build_junction_analysis(node_id, segment_map)
+        junction.Topology = ja.topology
+        junction._component.LocalPortsJson = json.dumps([asdict(p) for p in ja.connected_ports])
+
     return net
 
 

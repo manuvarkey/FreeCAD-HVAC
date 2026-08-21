@@ -129,13 +129,17 @@ A type-def opts into this by declaring what it can represent:
   }
   ```
 
-  - `kind`: `"model"` (a real, geometry-producing type) or `"placeholder"`
-    (an invisible marker/fallback -- see `*_marker.json`). Descriptors
-    without a `selection` block default to `kind: "model"`, `priority: 0`,
-    so existing type-defs keep loading unchanged.
+  - `kind`: `"model"` (a real, geometry-producing type), `"placeholder"`
+    (an invisible marker/fallback -- see `*_marker.json`), or `"inline"`
+    (a user-added-only device -- damper, silencer, flex connector, ...;
+    see "Inline components" below). Descriptors without a `selection`
+    block default to `kind: "model"`, `priority: 0`, so existing type-defs
+    keep loading unchanged.
   - `priority`: tiebreaker used only when more than one type is otherwise
     equally specific for the same request (see "Ranking" below). It plays
-    no role once a type is already selected -- see "Sticky selection".
+    no role once a type is already selected -- see "Sticky selection". Not
+    used for `kind: "inline"` types, which are never ranked against one
+    another automatically.
 
 ### `"Generic"` profile wildcard
 
@@ -221,6 +225,28 @@ An explicit **"reset to network defaults"** (`resetObjectsToNetworkDefaults`)
 intentionally bypasses stickiness and always calls `select_type()` fresh
 against the network's default library, since the user is asking to discard
 manual choices, not just repair invalid ones.
+
+### Inline components
+
+A `DuctJunction` that's a simple 2-port `through` node can carry, besides
+its automatically-selected **Primary** `DuctComponent`, zero or more
+user-added **Inline** components in series (a damper, a silencer, a flex
+connector) -- see [`ARCHITECTURE.md`](../../ARCHITECTURE.md) for how a
+junction composes its component chain. A type-def marks itself as one of
+these by declaring `selection.kind: "inline"`.
+
+Inline types are excluded entirely from `HVACLibrary`'s automatic-matching
+indexes (`_rebuild_match_index`), so `select_type()`/`resolve_sticky_type()`
+can never choose one as a Primary component, no matter how its `family`/
+`profiles` are declared -- they're reachable only through
+`HVACLibraryRegistry.list_inline_types(library_id, topology=, profile=)`,
+which the "Add Inline Component" UI action uses to populate its type
+picker. Unlike Primary selection, there's no family matching involved:
+adding an inline component is always a direct, deliberate user choice, not
+something the classifier's output should drive.
+
+`freecad/HVAC/libraries/smacna/types/junctions/through_damper_generic.json`
+and `through_vav_generic.json` are the built-in examples.
 
 ### Adding a new type that's automatically selectable
 

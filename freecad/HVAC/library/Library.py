@@ -74,7 +74,8 @@ class HVACGeometryDef:
 # Selection kinds a type descriptor may declare under "selection.kind".
 SELECTION_KIND_MODEL = "model"
 SELECTION_KIND_PLACEHOLDER = "placeholder"
-VALID_SELECTION_KINDS = {SELECTION_KIND_MODEL, SELECTION_KIND_PLACEHOLDER}
+SELECTION_KIND_INLINE = "inline"
+VALID_SELECTION_KINDS = {SELECTION_KIND_MODEL, SELECTION_KIND_PLACEHOLDER, SELECTION_KIND_INLINE}
 
 
 @dataclass
@@ -83,9 +84,17 @@ class HVACSelectionDef:
     Registry-driven selection metadata for a type descriptor.
 
     kind:
-        "model"       -- a real, selectable geometry-producing type.
+        "model"       -- a real, selectable geometry-producing type. Eligible
+                          to become a DuctJunction's Primary DuctComponent
+                          via automatic (topology, family, profile) matching.
         "placeholder" -- an invisible/marker fallback (never sticky; always
                           re-evaluated on sync so it can upgrade to a model).
+        "inline"      -- a user-added-only device (damper, silencer, flex
+                          connector, ...). Never automatically selected as a
+                          Primary component -- excluded from select_type()'s
+                          indexes entirely; only reachable via
+                          HVACLibrary.list_inline_types() for the "Add
+                          Inline Component" UI action.
     priority:
         Tiebreaker used only when choosing among multiple candidates that are
         otherwise equally specific (same tier: exact-profile model,
@@ -238,6 +247,29 @@ class HVACLibrary:
         profiles = self.list_profiles(category=category, family=family)
         return profiles[0] if profiles else ""
 
+    def list_inline_types(self, topology=None, profile=None):
+        """
+        All selection.kind=="inline" junction types (dampers, silencers,
+        flex connectors, ...) compatible with an optional topology/profile
+        filter -- for the "Add Inline Component" UI action, not automatic
+        Primary-fitting matching (see _rebuild_match_index). No family
+        filter: unlike Primary selection, adding an inline component is
+        always a direct user choice, so there's no classifier family key to
+        match against.
+        """
+        out = []
+        for t in self.types_by_id.values():
+            if getattr(t.selection, "kind", SELECTION_KIND_MODEL) != SELECTION_KIND_INLINE:
+                continue
+            if t.category != "junction":
+                continue
+            if topology and t.topology not in (topology, "generic"):
+                continue
+            if profile and t.profiles and "Generic" not in t.profiles and profile not in t.profiles:
+                continue
+            out.append(t)
+        return out
+
     # ------------------------------------------------------------------
     # Match indexes -- rebuilt lazily whenever a type is added/reloaded.
     # ------------------------------------------------------------------
@@ -249,12 +281,19 @@ class HVACLibrary:
         select_type() can jump straight to the candidates for a request
         instead of scanning every type. A type with no declared profiles is
         indexed under "Generic" (matches any profile).
+
+        "inline"-kind types (see HVACSelectionDef) are deliberately left out
+        of both indexes -- they must never be reachable through automatic
+        Primary-fitting selection. They're looked up separately, by a plain
+        scan, in list_inline_types() below.
         """
         self._model_match_index = {}
         self._placeholder_match_index = {}
 
         for t in self.types_by_id.values():
             kind = getattr(t.selection, "kind", SELECTION_KIND_MODEL)
+            if kind == SELECTION_KIND_INLINE:
+                continue
             target = (
                 self._model_match_index
                 if kind == SELECTION_KIND_MODEL
@@ -465,6 +504,13 @@ class HVACLibraryRegistry:
             return False
         return lib.matches_type(lib.get_type(type_id), request)
 
+    def list_inline_types(self, library_id: str, topology=None, profile=None):
+        """See HVACLibrary.list_inline_types."""
+        lib = self.get_library(library_id)
+        if lib is None:
+            return []
+        return lib.list_inline_types(topology=topology, profile=profile)
+
     def resolve_sticky_type(
         self, library_id: str, current_type_id: str, request: HVACTypeMatchRequest, strict=False
     ) -> HVACTypeSelection:
@@ -485,7 +531,12 @@ class HVACLibraryRegistry:
             current_type = lib.get_type(current_type_id)
             if current_type is not None:
                 kind = getattr(current_type.selection, "kind", SELECTION_KIND_MODEL)
-                if kind != SELECTION_KIND_PLACEHOLDER and lib.matches_type(current_type, request):
+                # Defense-in-depth: inline types are never assigned as a
+                # Primary component's current_type_id in practice (the UI
+                # never offers them there), but treat them the same as
+                # placeholders here anyway rather than relying solely on
+                # that invariant.
+                if kind not in (SELECTION_KIND_PLACEHOLDER, SELECTION_KIND_INLINE) and lib.matches_type(current_type, request):
                     return HVACTypeSelection(
                         library_id=library_id,
                         type_def=current_type,

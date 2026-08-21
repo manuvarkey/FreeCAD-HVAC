@@ -350,15 +350,22 @@ class DuctSizer:
             junction_obj = junction_map[parser.node_key(node_id)]
             ja = comp.analysis_by_node[node_id]
 
-            library_id = getattr(junction_obj, "LibraryId", "")
-            type_id = getattr(junction_obj, "TypeId", "")
+            # Branch/cross/multiport nodes (degree >= 3) always have exactly
+            # one Primary DuctComponent -- multi-component composition only
+            # ever applies to a simple through/2-port node (see
+            # DuctJunction.composeComponents) -- so this is the same single
+            # fitting a junction's own LibraryId/TypeId used to point at
+            # directly.
+            primary = junction_obj.Proxy.getPrimaryComponent()
+            library_id = getattr(primary, "LibraryId", "") if primary is not None else ""
+            type_id = getattr(primary, "TypeId", "") if primary is not None else ""
             type_def = reg.resolve_type(library_id, type_id) if library_id and type_id else None
 
             properties = {}
             if type_def is not None:
                 for pdef in getattr(type_def, "properties", []) or []:
-                    if hasattr(junction_obj, pdef.name):
-                        properties[pdef.name] = getattr(junction_obj, pdef.name)
+                    if hasattr(primary, pdef.name):
+                        properties[pdef.name] = getattr(primary, pdef.name)
                     else:
                         properties[pdef.name] = getattr(pdef, "default", None)
 
@@ -374,7 +381,7 @@ class DuctSizer:
                 connected_ports_ctx.append(port_dict)
 
             context = {
-                "obj": junction_obj,
+                "obj": primary,
                 "center_point": ja.point,
                 "properties": properties,
                 "connected_ports": connected_ports_ctx,

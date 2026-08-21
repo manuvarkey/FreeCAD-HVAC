@@ -921,12 +921,27 @@ class CommandEditType:
         if not selected_geom:
             return
 
+        # A DuctJunction has no type of its own -- retarget to its Primary
+        # DuctComponent so picking a junction node in the tree still lets
+        # you edit "its" fitting type directly.
+        resolved = []
+        for o in selected_geom:
+            if hvaclib.isDuctJunction(o):
+                primary = o.Proxy.getPrimaryComponent()
+                if primary is not None:
+                    resolved.append(primary)
+                continue
+            resolved.append(o)
+        selected_geom = resolved
+        if not selected_geom:
+            return
+
         # Keep selection homogeneous for the first version
         has_segments = any(hvaclib.isDuctSegment(o) for o in selected_geom)
-        has_junctions = any(hvaclib.isDuctJunction(o) for o in selected_geom)
-        if has_segments and has_junctions:
+        has_components = any(hvaclib.isDuctComponent(o) for o in selected_geom)
+        if has_segments and has_components:
             FreeCAD.Console.PrintWarning(
-                "HVAC - Please select only segments or only junctions.\n"
+                "HVAC - Please select only segments or only junctions/components.\n"
             )
             return
 
@@ -935,6 +950,209 @@ class CommandEditType:
             apply_callback=Network.DuctNetwork.applyTypeSelection,
         )
         Gui.Control.showDialog(self.task_panel)
+
+
+class CommandAddInlineComponent:
+    """Add an Inline device (damper, silencer, ...) to a selected through/2-port junction."""
+
+    @staticmethod
+    def _eligibleJunction():
+        # A DuctJunction has no Shape any more, so it can't be picked in the
+        # 3D view -- a user naturally selects the fitting itself (its
+        # Primary/Inline DuctComponent) instead. Accept either: a directly
+        # selected junction, or a component, retargeted to its parent.
+        selected_geom = hvaclib.selectedGeometryObjects() or []
+        junction = None
+        for o in selected_geom:
+            if hvaclib.isDuctJunction(o):
+                candidate = o
+            elif hvaclib.isDuctComponent(o):
+                parent_name = getattr(o, "ParentJunctionName", "")
+                candidate = o.Document.getObject(parent_name) if parent_name else None
+            else:
+                continue
+            if candidate is None:
+                continue
+            if junction is not None and junction is not candidate:
+                return None  # selection implicates more than one junction
+            junction = candidate
+
+        if junction is None:
+            return None
+        if getattr(junction, "Topology", "") != "through" or int(getattr(junction, "Degree", 0) or 0) != 2:
+            return None
+        return junction
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("DuctsIcon.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_AddInlineComponent', 'Add Inline Component'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_AddInlineComponent',
+                'Add an inline device (damper, silencer, ...) to a selected through/2-port junction'
+            ),
+            'CmdType': 'ForEdit',
+        }
+
+    def IsActive(self):
+        if Gui.ActiveDocument is None:
+            return False
+        return self._eligibleJunction() is not None
+
+    def Activated(self):
+        from ..core.Component import DuctComponent
+
+        junction = self._eligibleJunction()
+        if junction is None:
+            return
+
+        net = hvaclib.getOwnerNetwork(junction)
+        if net is None:
+            return
+
+        primary = junction.Proxy.getPrimaryComponent()
+        library_id = getattr(primary, "LibraryId", "") or net.Proxy.getDefaultLibraryId()
+        profile = getattr(primary, "Profile", "") if primary is not None else ""
+        types = hvaclib.HVACLibraryService.list_inline_types(
+            library_id, topology=getattr(junction, "Topology", ""), profile=profile,
+        )
+        if not types:
+            FreeCAD.Console.PrintWarning(
+                "HVAC - No inline component types available in library '{}'.\n".format(library_id)
+            )
+            return
+
+        labels = [t.label for t in types]
+        label, ok = QtWidgets.QInputDialog.getItem(
+            Gui.getMainWindow(),
+            translate("HVAC_AddInlineComponent", "Add Inline Component"),
+            translate("HVAC_AddInlineComponent", "Type:"),
+            labels, 0, False,
+        )
+        if not ok or not label:
+            return
+        type_def = types[labels.index(label)]
+
+        # New Inline components default to the end of the sequence (Sequence
+        # = current max + 10), leaving gaps so a user can reorder/insert by
+        # editing Sequence directly in the property editor.
+        existing = junction.Proxy.getComponents()
+        next_sequence = max((int(getattr(c, "Sequence", 0)) for c in existing), default=0) + 10
+
+        doc = net.Document
+        component = DuctComponent.create(
+            doc, "{}_Comp{}".format(junction.Name, next_sequence),
+            parent_junction=junction, role="Inline", sequence=next_sequence, owner_network=net,
+        )
+        net.Geometry.addObject(component)
+        component.LibraryId = library_id
+        component.TypeId = type_def.id
+        component.Proxy.applyTypeSchema()
+
+        proxy = getattr(net, "Proxy", None)
+        if proxy:
+            proxy.requestSync(force_recompute=True)
+
+
+class CommandRemoveInlineComponent:
+    """Remove selected Inline component(s) from their parent junction."""
+
+    @staticmethod
+    def _selectedInlineComponents():
+        selected_geom = hvaclib.selectedGeometryObjects() or []
+        return [
+            o for o in selected_geom
+            if hvaclib.isDuctComponent(o) and getattr(o, "ComponentRole", "") == "Inline"
+        ]
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("DuctsIcon.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_RemoveInlineComponent', 'Remove Inline Component'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_RemoveInlineComponent',
+                'Remove the selected inline component(s) from their parent junction'
+            ),
+            'CmdType': 'ForEdit',
+        }
+
+    def IsActive(self):
+        if Gui.ActiveDocument is None:
+            return False
+        return bool(self._selectedInlineComponents())
+
+    def Activated(self):
+        components = self._selectedInlineComponents()
+        if not components:
+            return
+
+        nets_to_sync = set()
+        for component in components:
+            net = hvaclib.getOwnerNetwork(component)
+            if net is None:
+                continue
+            nets_to_sync.add(net)
+            net.Proxy.removeGeometryObject(component)
+
+        for net in nets_to_sync:
+            proxy = getattr(net, "Proxy", None)
+            if proxy:
+                proxy.requestSync(force_recompute=True)
+
+
+class CommandSelectParentJunction:
+    """Select the parent DuctJunction of a selected fitting (DuctComponent).
+
+    A junction has no Shape any more, so it can't be picked in the 3D view
+    -- users naturally select the fitting itself there. Junction-level
+    properties (DesignFlowRate, NodeKey, Topology, ...) only ever show in
+    the property editor once the junction itself is selected, so this
+    provides a quick way to jump from "the thing I clicked in 3D" to "the
+    node it belongs to" without having to find it in the tree.
+    """
+
+    @staticmethod
+    def _selectedComponents():
+        selected_geom = hvaclib.selectedGeometryObjects() or []
+        return [o for o in selected_geom if hvaclib.isDuctComponent(o)]
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("DuctsIcon.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_SelectParentJunction', 'Select Parent Junction'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_SelectParentJunction',
+                'Select the parent junction of the selected fitting, to edit junction-level '
+                'properties (e.g. Design Flow Rate) in the property editor'
+            ),
+            'CmdType': 'ForEdit',
+        }
+
+    def IsActive(self):
+        if Gui.ActiveDocument is None:
+            return False
+        return bool(self._selectedComponents())
+
+    def Activated(self):
+        components = self._selectedComponents()
+        if not components:
+            return
+
+        junctions = []
+        for comp in components:
+            parent_name = getattr(comp, "ParentJunctionName", "")
+            parent = comp.Document.getObject(parent_name) if parent_name else None
+            if parent is not None and parent not in junctions:
+                junctions.append(parent)
+        if not junctions:
+            return
+
+        Gui.Selection.clearSelection()
+        for junction in junctions:
+            try:
+                Gui.Selection.addSelection(junction)
+            except TypeError:
+                Gui.Selection.addSelection(junction.Document.Name, junction.Name)
 
 
 class CommandEditPlacement:
@@ -1164,6 +1382,9 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand("HVAC_CreateLine", CommandCreateLine())
     FreeCAD.Gui.addCommand("HVAC_CreateSpline", CommandCreateSpline())
     FreeCAD.Gui.addCommand('HVAC_EditType', CommandEditType())
+    FreeCAD.Gui.addCommand('HVAC_AddInlineComponent', CommandAddInlineComponent())
+    FreeCAD.Gui.addCommand('HVAC_RemoveInlineComponent', CommandRemoveInlineComponent())
+    FreeCAD.Gui.addCommand('HVAC_SelectParentJunction', CommandSelectParentJunction())
     FreeCAD.Gui.addCommand('HVAC_EditPlacement', CommandEditPlacement())
     FreeCAD.Gui.addCommand('HVAC_EditNetworkTypeDefaults', CommandEditNetworkTypeDefaults())
     FreeCAD.Gui.addCommand('HVAC_CalculateAirflow', CommandCalculateAirflow())

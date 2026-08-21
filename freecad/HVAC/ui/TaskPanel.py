@@ -561,8 +561,16 @@ class TaskPanelTypeEditor:
             type_defs = lib.list_types(category="segment")
 
         else:
-            # For junctions, keep family filtering.
+            # For a junction's Primary/Inline DuctComponent, Family is a
+            # junction-level classifier concept (not the component's own --
+            # see Component.py), so resolve it off the parent junction via
+            # ParentJunctionName. Profile is the component's own
+            # composer-derived local profile.
             family = getattr(ref, "Family", "")
+            if not family and hvaclib.isDuctComponent(ref):
+                parent_name = getattr(ref, "ParentJunctionName", "")
+                parent = ref.Document.getObject(parent_name) if parent_name else None
+                family = getattr(parent, "Family", "") if parent is not None else ""
             profile = getattr(ref, "Profile", "")
             type_defs = lib.list_types(
                 category="junction",

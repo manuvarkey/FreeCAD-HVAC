@@ -38,6 +38,7 @@ from ..ui import TaskPanel
 from ..core.NetworkParser import DuctNetworkParser
 from ..core.Segment import DuctSegment
 from ..core.Junction import DuctJunction, DuctJunctionVirtual
+from ..core.Component import DuctComponent
 
 
 class DuctManagedFolder:
@@ -101,7 +102,12 @@ class DuctManagedFolderViewProvider:
 
     def claimChildren(self):
         try:
-            return list(self.Object.OutList)
+            # DuctComponent objects live in this folder's OutList (so
+            # collectComponentObjects can find them), but they're claimed
+            # by their parent DuctJunction for tree display (see
+            # DuctJunctionViewProvider.claimChildren) -- filter them out
+            # here or they'd show up twice.
+            return [o for o in self.Object.OutList if not hvaclib.isDuctComponent(o)]
         except Exception:
             return []
 
@@ -571,6 +577,19 @@ class DuctNetwork:
             if obj is None:
                 continue
 
+            # A DuctJunction has no type of its own any more -- retarget to
+            # its Primary DuctComponent so "reset to defaults" on a selected
+            # junction node does something useful. There's no automatic
+            # default for a user-added Inline component (it was a deliberate
+            # choice, not something the classifier picked), so those are
+            # simply skipped.
+            if hvaclib.isDuctJunction(obj):
+                obj = obj.Proxy.getPrimaryComponent()
+                if obj is None:
+                    continue
+            elif hvaclib.isDuctComponent(obj) and getattr(obj, "ComponentRole", "") != "Primary":
+                continue
+
             net = DuctNetwork.getOwnerNetwork(obj)
             if net is None:
                 continue
@@ -620,11 +639,14 @@ class DuctNetwork:
                     obj.Offset = default_offset
                     changed = True
 
-            elif hvaclib.isDuctJunction(obj):
-                topology = getattr(obj, "Topology", "")
-                family_key = getattr(obj, "Family", "")
+            elif hvaclib.isDuctComponent(obj):
+                parent = doc.getObject(getattr(obj, "ParentJunctionName", ""))
+                if parent is None:
+                    continue
+                topology = getattr(parent, "Topology", "")
+                family_key = getattr(parent, "Family", "")
                 try:
-                    analysis = json.loads(getattr(obj, "AnalysisJson", "") or "{}")
+                    analysis = json.loads(getattr(parent, "AnalysisJson", "") or "{}")
                 except Exception:
                     analysis = {}
                 connected_ports = list(analysis.get("connected_ports", []) or [])
@@ -721,7 +743,14 @@ class DuctNetwork:
     def removeGeometryObject(self, obj):
         """Remove a derived geometry object from the Geometry folder and document."""
         net = self.Object
-        if (hvaclib.isDuctSegment(obj) or hvaclib.isDuctJunction(obj)) and getattr(obj, "Proxy", None):
+        # A junction owns its DuctComponent children -- deleting one must
+        # cascade to delete them too, or they'd be left as orphaned objects
+        # with a dangling ParentJunctionName.
+        if hvaclib.isDuctJunction(obj) and getattr(obj, "Proxy", None):
+            for comp in list(obj.Proxy.getComponents()):
+                self.removeGeometryObject(comp)
+        if (hvaclib.isDuctSegment(obj) or hvaclib.isDuctJunction(obj) or hvaclib.isDuctComponent(obj)) \
+                and getattr(obj, "Proxy", None):
             obj.Proxy._allow_delete = True
         if hasattr(net, "Geometry") and net.Geometry and obj in net.Geometry.OutList:
             net.Geometry.removeObject(obj)
@@ -757,7 +786,24 @@ class DuctNetwork:
             if key:
                 junctions[key] = child
         return junctions
-        
+
+    def collectComponentObjects(self):
+        """{parent_junction_name: [component_obj, ...]}, Sequence-sorted -- built
+        once per sync so syncJunctionComponents doesn't rescan Geometry per node."""
+        net = self.Object
+        by_parent = {}
+        geometry = getattr(net, "Geometry", None)
+        if geometry is None:
+            return by_parent
+        for child in list(geometry.OutList):
+            if not hvaclib.isDuctComponent(child):
+                continue
+            by_parent.setdefault(getattr(child, "ParentJunctionName", ""), []).append(child)
+        for lst in by_parent.values():
+            lst.sort(key=lambda c: int(getattr(c, "Sequence", 0)))
+        return by_parent
+
+
     def collectVirtualJunctionObjects(self):
         topology_objs = []
         for child in list(getattr(self.Object.Topology, "Group", []) or []):
@@ -815,13 +861,13 @@ class DuctNetwork:
         Gui.Selection.clearSelection()
     
         for child in net.Geometry.OutList:
-            if not (hvaclib.isDuctSegment(child) or hvaclib.isDuctJunction(child)):
+            if not (hvaclib.isDuctSegment(child) or hvaclib.isDuctJunction(child) or hvaclib.isDuctComponent(child)):
                 continue
             try:
                 Gui.Selection.addSelection(child)
             except TypeError:
                 Gui.Selection.addSelection(child.Document.Name, child.Name)
-                
+
     def showAllGeometry(self):
         geometry = self.Object.Geometry
         if getattr(geometry, "ViewObject", None):
@@ -831,20 +877,20 @@ class DuctNetwork:
                 pass
 
         for obj in list(geometry.OutList):
-            if hvaclib.isDuctSegment(obj) or hvaclib.isDuctJunction(obj):
+            if hvaclib.isDuctSegment(obj) or hvaclib.isDuctJunction(obj) or hvaclib.isDuctComponent(obj):
                 self._setGeometryVisibilityDeferred(obj, True)
 
     def hideAllGeometry(self):
         geometry = self.Object.Geometry
-    
+
         if getattr(geometry, "ViewObject", None):
             try:
                 geometry.ViewObject.Visibility = False
             except Exception:
                 pass
-    
+
         for obj in list(geometry.OutList):
-            if hvaclib.isDuctSegment(obj) or hvaclib.isDuctJunction(obj):
+            if hvaclib.isDuctSegment(obj) or hvaclib.isDuctJunction(obj) or hvaclib.isDuctComponent(obj):
                 self._setGeometryVisibilityDeferred(obj, False)
                 
     def _segmentFromBaseObject(self, seg, base_obj):
@@ -856,13 +902,16 @@ class DuctNetwork:
         )
                 
     def showAllJunctionGeometry(self):
+        # DuctJunction itself has no Shape/visual presence any more -- the
+        # thing that actually needs hiding/showing while editing base
+        # geometry is each junction's DuctComponent children.
         for obj in list(self.Object.Geometry.OutList):
-            if hvaclib.isDuctJunction(obj):
+            if hvaclib.isDuctComponent(obj):
                 self._setGeometryVisibilityDeferred(obj, True)
-                
+
     def hideAllJunctionGeometry(self):
         for obj in list(self.Object.Geometry.OutList):
-            if hvaclib.isDuctJunction(obj):
+            if hvaclib.isDuctComponent(obj):
                 self._setGeometryVisibilityDeferred(obj, False)
     
     def showGeometryForBaseObject(self, base_obj):
@@ -911,7 +960,7 @@ class DuctNetwork:
         
     @staticmethod
     def isGeometryObject(obj):
-        return hvaclib.isDuctJunction(obj) or hvaclib.isDuctSegment(obj)
+        return hvaclib.isDuctJunction(obj) or hvaclib.isDuctSegment(obj) or hvaclib.isDuctComponent(obj)
                 
     @staticmethod
     def getOwnerNetwork(obj):
@@ -1149,33 +1198,37 @@ class DuctNetwork:
         
     def syncJunctions(self, parser, initial_sync=False):
         """
-        Synchronize derived DuctJunction objects with parser nodes.
-    
-        Existing junction LibraryId / TypeId are preserved.
-        New junctions are initialized from network defaults.
+        Synchronize derived DuctJunction objects with parser nodes, and
+        (via syncJunctionComponents) each junction's Primary/Inline
+        DuctComponent children.
+
+        A DuctJunction itself carries no LibraryId/TypeId any more -- see
+        syncJunctionComponents for how the Primary component's type is
+        resolved/retained and how the component chain is composed.
         """
         net = self.Object
         doc = net.Document
         geometry = getattr(net, "Geometry", None)
         if doc is None or geometry is None:
             return False
-            
+
         changed = False
         live_objs = set()
-    
+
         # Get default library for segment profiles
         default_lib = self.getDefaultLibrary()
         if default_lib is None:
             return False
-        
-        # Collect existing junctions and segment map
+
+        # Collect existing junctions, their components, and the segment map
         existing_junctions = self.collectJunctionObjects()
+        components_by_parent = self.collectComponentObjects()
         segment_map = self.collectSegmentObjects()
-        
+
         # Inspect each node from the parser and update junction objects
         for node_id in parser.nodes():
             node_key = parser.node_key(node_id)
-                        
+
             # Get junction analysis
             junction_analysis = parser.build_junction_analysis(node_id, segment_map)
             if not junction_analysis:
@@ -1189,7 +1242,7 @@ class DuctNetwork:
             point = junction_analysis.point
             connected_edge_keys = [p.edge_key for p in junction_analysis.connected_ports]
             match_profile = hvaclib.HVACLibraryService.match_profile_from_ports(connected_ports)
-    
+
             # If initial sync, the tags are regenerated hence find element based on position
             # Also update the existing junction's key in the dictionary with the modified key
             if initial_sync:
@@ -1200,14 +1253,21 @@ class DuctNetwork:
                         junction_obj = junc
                         matched_old_key = old_key
                         break
-    
+
                 if matched_old_key is not None and matched_old_key != node_key:
                     existing_junctions.pop(matched_old_key, None)
                     existing_junctions[node_key] = junction_obj
+                    # components_by_parent is keyed by the junction OBJECT's
+                    # own .Name (ParentJunctionName), not by NodeKey -- that
+                    # never changes across a resync, so no remapping is
+                    # needed here (unlike existing_junctions, which really is
+                    # keyed by NodeKey).
             # Else find element based on key
             else:
                 junction_obj = existing_junctions.get(node_key)
-    
+
+            is_new_junction = junction_obj is None
+
             # If junction does not exist, create a new one
             if junction_obj is None:
                 junction_obj = DuctJunction.create(
@@ -1220,42 +1280,14 @@ class DuctNetwork:
                     degree=degree,
                     topology=topology
                 )
-                # Seed the new junction's library from the network default;
-                # TypeId selection is handled uniformly below for both new
-                # and existing junctions (resolve_sticky_type sees an empty
-                # current TypeId here and runs automatic selection).
-                if hasattr(junction_obj, "LibraryId"):
-                    junction_obj.LibraryId = default_lib.id
-
                 changed = True
-                
-                # If source object is marked as hidden, hide junction geometry
-                if self._hidden_source_names:
-                    self._setGeometryVisibilityDeferred(junction_obj, False)
-                else:
-                    self._setGeometryVisibilityDeferred(junction_obj, True)
-    
+
             # Add junction to geometry folder if not already present
             if junction_obj not in geometry.OutList:
                 geometry.addObject(junction_obj)
                 changed = True
-    
+
             live_objs.add(junction_obj)
-    
-            # Sticky registry-driven selection: retain the current TypeId if
-            # it's still a compatible real model, otherwise auto-select
-            # (falling back to a placeholder if no model matches).
-            library_id = getattr(junction_obj, "LibraryId", "") or default_lib.id
-            current_type_id = getattr(junction_obj, "TypeId", "")
-            selection = hvaclib.HVACLibraryService.resolve_junction_type(
-                library_id,
-                current_type_id,
-                topology=topology,
-                family_key=family,
-                profile=match_profile,
-                connected_ports=connected_ports,
-            )
-            type_id = selection.type_def.id if selection.type_def else ""
 
             # Update metadata based on updated data
             meta_changed = junction_obj.Proxy.updateMetadata(
@@ -1266,29 +1298,153 @@ class DuctNetwork:
                 degree=degree,
                 topology=topology,
                 family=family,
-                library_id=library_id,
-                type_id=type_id,
                 connected_edge_keys=connected_edge_keys,
                 analysis_json=analysis_json,
             )
             changed = changed or meta_changed
-            
-            # Update property schema based on type ID and library ID
-            schema_changed = junction_obj.Proxy.applyTypeSchema()
-            changed = changed or schema_changed
-    
+
+            # Create/update this junction's Primary component (sticky type
+            # resolution), retain its Inline components, and compose the
+            # whole chain's local ports.
+            components_changed = self.syncJunctionComponents(
+                junction_obj, topology, family, match_profile, connected_ports,
+                components_by_parent.get(junction_obj.Name, []), default_lib,
+                hide_new=bool(self._hidden_source_names) if is_new_junction else None,
+            )
+            changed = changed or components_changed
+
             # Update label for segment object based on source object and edge index
             new_label = DuctJunction.labelFor(family, node_id)
             if junction_obj.Label != new_label:
                 junction_obj.Label = new_label
                 changed = True
-    
+
         # Remove old junctions
         for junction_obj in list(existing_junctions.values()):
             if junction_obj not in live_objs:
                 self.removeGeometryObject(junction_obj)
                 changed = True
-        
+
+        return changed
+
+    def syncJunctionComponents(
+        self, junction_obj, topology, family, match_profile, connected_ports,
+        existing_components, default_lib, hide_new=None,
+    ):
+        """
+        Create/update a junction's Primary DuctComponent (sticky type
+        resolution, same registry policy the junction itself used to run
+        directly) and compose the whole component chain's local ports.
+
+        Inline components are never auto-selected/replaced here -- they're
+        retained as-is (only their type schema is re-applied, in case a
+        library reload changed their declared properties). If the junction
+        is no longer eligible for multiple components (not a simple
+        through/2-port node any more), any existing Inline components are
+        deleted, with a console warning, rather than left silently
+        orphaned.
+        """
+        net = self.Object
+        doc = net.Document
+        geometry = net.Geometry
+        changed = False
+
+        eligible_for_multi = (topology == "through" and len(connected_ports) == 2)
+
+        # Defensive: a junction should never end up with more than one
+        # Primary component, but self-heal if it somehow does (e.g. a
+        # document synced under a since-fixed lookup bug) rather than
+        # silently treating extras as an Inline-like chain.
+        primaries = [c for c in existing_components if getattr(c, "ComponentRole", "") == "Primary"]
+        primary = None
+        if primaries:
+            primaries.sort(key=lambda c: (int(getattr(c, "Sequence", 0)), c.Name))
+            primary = primaries[0]
+            extras = primaries[1:]
+            if extras:
+                FreeCAD.Console.PrintWarning(
+                    "HVAC - Junction '{}' had {} duplicate Primary component(s); removing the extras.\n".format(
+                        junction_obj.Label, len(extras)
+                    )
+                )
+                for comp in extras:
+                    self.removeGeometryObject(comp)
+                changed = True
+
+        inline_components = [c for c in existing_components if getattr(c, "ComponentRole", "") == "Inline"]
+
+        if not eligible_for_multi and inline_components:
+            FreeCAD.Console.PrintWarning(
+                "HVAC - Junction '{}' is no longer a simple through/2-port node; "
+                "removing {} inline component(s).\n".format(junction_obj.Label, len(inline_components))
+            )
+            for comp in inline_components:
+                self.removeGeometryObject(comp)
+            inline_components = []
+            changed = True
+
+        if primary is None:
+            primary = DuctComponent.create(
+                doc, "{}_Comp0".format(junction_obj.Name),
+                parent_junction=junction_obj, role="Primary", sequence=0, owner_network=net,
+            )
+            changed = True
+            if hide_new is not None:
+                self._setGeometryVisibilityDeferred(primary, not hide_new)
+
+        if primary not in geometry.OutList:
+            geometry.addObject(primary)
+            changed = True
+
+        # Sticky registry-driven selection: retain the Primary's current
+        # TypeId if it's still a compatible real model, otherwise
+        # auto-select (falling back to a placeholder if no model matches).
+        # This is exactly the policy DuctJunction itself used to run
+        # directly before LibraryId/TypeId moved onto the Primary component.
+        library_id = getattr(primary, "LibraryId", "") or default_lib.id
+        current_type_id = getattr(primary, "TypeId", "")
+        selection = hvaclib.HVACLibraryService.resolve_junction_type(
+            library_id,
+            current_type_id,
+            topology=topology,
+            family_key=family,
+            profile=match_profile,
+            connected_ports=connected_ports,
+        )
+        type_id = selection.type_def.id if selection.type_def else ""
+
+        meta_changed = primary.Proxy.updateMetadata(
+            parent_junction=junction_obj, role="Primary", sequence=0,
+            library_id=library_id, type_id=type_id,
+        )
+        changed = changed or meta_changed
+
+        schema_changed = primary.Proxy.applyTypeSchema()
+        changed = changed or schema_changed
+
+        new_label = DuctComponent.labelFor(
+            "Primary", selection.type_def.label if selection.type_def else "", 0
+        )
+        if primary.Label != new_label:
+            primary.Label = new_label
+            changed = True
+
+        # Inline components are retained as-is (never auto-replaced) --
+        # just re-apply their schema in case their type's declared
+        # properties changed underneath them (e.g. a library reload).
+        for comp in inline_components:
+            if comp not in geometry.OutList:
+                geometry.addObject(comp)
+                changed = True
+            if comp.Proxy.applyTypeSchema():
+                changed = True
+
+        # Build the ordered chain and write each component's local ports.
+        junction_obj.Proxy.composeComponents()
+
+        for comp in junction_obj.Proxy.getComponents():
+            comp.touch()
+
         return changed
                             
     def refreshBaseDirectionOverlay(self, parser):
@@ -1333,7 +1489,20 @@ class DuctNetwork:
                 parser.set_node_groups(node_groups)
             self._parser = parser
         return self._parser
-    
+
+    def aggregateAllConnectionLengths(self):
+        """
+        Refresh every live junction's aggregate ConnectionLengthsJson from
+        its component chain (see DuctJunction.aggregateConnectionLengths).
+        Run after a recompute so each component's own execute() has had a
+        chance to write its own ConnectionLengthsJson first.
+        """
+        for junction_obj in self.collectJunctionObjects().values():
+            proxy = getattr(junction_obj, "Proxy", None)
+            if proxy is not None and hasattr(proxy, "aggregateConnectionLengths"):
+                proxy.aggregateConnectionLengths()
+
+
     def _runDeferredSync(self, force_recompute=False):
         obj = self.Object
         self._sync_scheduled = False
@@ -1361,10 +1530,14 @@ class DuctNetwork:
                 self.syncSegments(parser, initial_sync=True)
                 obj.Document.recompute()
                 
-                # Stage 2: Sync junctions, so that their execute() writes ConnectionLengthsJson
+                # Stage 2: Sync junctions/components, so that each component's
+                # execute() writes its own ConnectionLengthsJson
                 self.syncJunctions(parser, initial_sync=True)
                 obj.Document.recompute()
-                
+                # Aggregate each junction's ConnectionLengthsJson from its
+                # now-computed component chain, for Stage 3 to consume.
+                self.aggregateAllConnectionLengths()
+
                 # Stage 3: Sync segments which consume the junction trim data
                 self.syncSegments(parser, initial_sync=False)
                 obj.Document.recompute()
@@ -1382,11 +1555,16 @@ class DuctNetwork:
                 if changed_segments or force_recompute:
                     obj.Document.recompute()
                     
-                # Stage 2: Sync junctions, for creating ports; so that their execute() writes ConnectionLengthsJson
+                # Stage 2: Sync junctions/components, for creating ports; so
+                # that each component's execute() writes its own
+                # ConnectionLengthsJson
                 changed_junctions = self.syncJunctions(parser, initial_sync=False)
                 if changed_junctions or force_recompute:
                     obj.Document.recompute()
-    
+                # Aggregate each junction's ConnectionLengthsJson from its
+                # now-computed component chain, for Stage 3 to consume.
+                self.aggregateAllConnectionLengths()
+
                 # Stage 3: Sync segments which consume the junction trim data
                 changed_segments = self.syncSegments(parser, initial_sync=False)
                 if changed_segments or force_recompute:
@@ -1488,11 +1666,19 @@ class DuctNetwork:
         for obj in objects or []:
             if obj is None:
                 continue
-            
+
+            # A DuctJunction carries no LibraryId/TypeId of its own -- retarget
+            # to its Primary DuctComponent, so applying a type selection to a
+            # selected junction node acts on "its" fitting.
+            if hvaclib.isDuctJunction(obj):
+                obj = obj.Proxy.getPrimaryComponent()
+                if obj is None:
+                    continue
+
             net = DuctNetwork.getOwnerNetwork(obj)
             if net is not None:
                 nets_to_sync.add(net)
-                    
+
             if hasattr(obj, "LibraryId") and library_id:
                 if obj.LibraryId != library_id:
                     obj.LibraryId = library_id

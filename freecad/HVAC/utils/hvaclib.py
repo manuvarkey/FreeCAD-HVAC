@@ -222,11 +222,18 @@ class HVACLibraryService:
         return lib.list_types(category="junction", family=family)
 
     @classmethod
+    def list_inline_types(cls, library_id: str | None = None, topology: str | None = None, profile: str | None = None) -> list:
+        """selection.kind=="inline" junction types, for the Add Inline Component UI."""
+        reg = cls._get_registry()
+        lib = reg.get_library(library_id) if library_id else reg.get_active_library()
+        if lib is None:
+            return []
+        return lib.list_inline_types(topology=topology, profile=profile)
+
+    @classmethod
     def all_type_defs_for_object(cls, obj) -> list:
         reg = cls._get_registry()
         library_id = getattr(obj, "LibraryId", "")
-        topology = getattr(obj, "Topology", "")
-        profile = getattr(obj, "Profile", "")
 
         lib = reg.get_library(library_id) if library_id else reg.get_active_library()
         if lib is None:
@@ -235,7 +242,13 @@ class HVACLibraryService:
         if isDuctSegment(obj):
             return lib.list_types(category="segment")
 
-        if isDuctJunction(obj):
+        if isDuctComponent(obj):
+            # A component's own Profile is derived/read-only, but topology
+            # is a junction-level concept -- read it off the parent.
+            parent_name = getattr(obj, "ParentJunctionName", "")
+            parent = obj.Document.getObject(parent_name) if parent_name else None
+            topology = getattr(parent, "Topology", "") if parent is not None else ""
+            profile = getattr(obj, "Profile", "")
             return lib.list_types(
                 category="junction",
                 topology=topology or None,
@@ -334,7 +347,7 @@ def selectedGeometryObjects():
     if objs:
         filtered = [
             o for o in objs
-            if isDuctSegment(o) or isDuctJunction(o)
+            if isDuctSegment(o) or isDuctJunction(o) or isDuctComponent(o)
         ]
         return filtered
     return None
@@ -362,7 +375,11 @@ def isDuctSegment(obj):
 def isDuctJunction(obj):
     from ..core.Junction import DuctJunction
     return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunction)
-    
+
+def isDuctComponent(obj):
+    from ..core.Component import DuctComponent
+    return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctComponent)
+
 def isDuctJunctionVirtual(obj):
     from ..core.Junction import DuctJunctionVirtual
     return bool(obj) and hasattr(obj, "Proxy") and isinstance(obj.Proxy, DuctJunctionVirtual)
