@@ -53,7 +53,8 @@ class DuctComponent:
         obj,
         parent_junction=None,
         role="Primary",
-        sequence=0,
+        attached_edge_key="",
+        port_sequence=0,
         library_id="",
         type_id="",
     ):
@@ -64,7 +65,8 @@ class DuctComponent:
         self.updateMetadata(
             parent_junction=parent_junction,
             role=role,
-            sequence=sequence,
+            attached_edge_key=attached_edge_key,
+            port_sequence=port_sequence,
             library_id=library_id,
             type_id=type_id,
         )
@@ -119,6 +121,7 @@ class DuctComponent:
                 )
 
             params = reg.resolve_params(type_def, obj=obj)
+            is_primary = getattr(obj, "ComponentRole", "") == "Primary"
 
             context = {
                 "obj": obj,
@@ -140,13 +143,15 @@ class DuctComponent:
                 # Primary's family-driven dispatch (e.g. through_generic's
                 # elbow-vs-transition switch) needs it, so read it straight
                 # off the parent junction rather than duplicating it here.
-                "family": self._parentAttr(obj, "Family") if getattr(obj, "ComponentRole", "") == "Primary" else "",
-                # Topology is likewise a junction-level fact, not the
-                # component's own -- validate_context checks it against the
-                # type-def's declared topology (e.g. "branch" for a tee), so
-                # this must be the REAL topology, not just "through" (which
-                # is only true for a simple through/2-port chain).
-                "topology": self._parentAttr(obj, "Topology", "through"),
+                "family": self._parentAttr(obj, "Family") if is_primary else "",
+                # Topology is likewise a junction-level fact for the Primary
+                # -- validate_context checks it against the type-def's
+                # declared topology (e.g. "branch" for a tee). An Inline
+                # component is always a physically two-port device, no
+                # matter what the parent junction's real topology is (a
+                # damper on a tee's branch leg must still validate as
+                # "through", not "branch"), so it always gets "through".
+                "topology": self._parentAttr(obj, "Topology", "through") if is_primary else "through",
                 "type_id": type_id,
                 "library_id": library_id,
             }
@@ -210,7 +215,8 @@ class DuctComponent:
             )
             obj.ComponentRole = ["Primary", "Inline"]
 
-        self._addProperty(obj, "App::PropertyInteger", "Sequence", "HVAC", "Inlet-to-outlet order within the parent junction's component chain")
+        self._addProperty(obj, "App::PropertyString", "AttachedEdgeKey", "HVAC", "Real edge_key this Inline component's chain is attached to (empty for Primary)")
+        self._addProperty(obj, "App::PropertyInteger", "PortSequence", "HVAC", "Order from the Primary outward toward the attached edge (Inline only)")
         self._addProperty(obj, "App::PropertyString", "LibraryId", "HVAC", "HVAC library id")
         self._addProperty(obj, "App::PropertyString", "TypeId", "HVAC", "Selected fitting type id")
         self._addProperty(obj, "App::PropertyString", "Profile", "HVAC", "Duct profile at this component's primary/outlet side")
@@ -244,6 +250,7 @@ class DuctComponent:
             "OwnerNetworkName",
             "ParentJunctionName",
             "ComponentRole",
+            "AttachedEdgeKey",
             "Profile",
             "TypeSchemaPropertyNames",
             "LocalPortsJson",
@@ -264,7 +271,8 @@ class DuctComponent:
         self,
         parent_junction=None,
         role=None,
-        sequence=None,
+        attached_edge_key=None,
+        port_sequence=None,
         library_id="",
         type_id="",
         profile="",
@@ -285,8 +293,12 @@ class DuctComponent:
             obj.ComponentRole = str(role)
             changed = True
 
-        if sequence is not None and getattr(obj, "Sequence", None) != int(sequence):
-            obj.Sequence = int(sequence)
+        if attached_edge_key is not None and getattr(obj, "AttachedEdgeKey", "") != str(attached_edge_key):
+            obj.AttachedEdgeKey = str(attached_edge_key)
+            changed = True
+
+        if port_sequence is not None and getattr(obj, "PortSequence", None) != int(port_sequence):
+            obj.PortSequence = int(port_sequence)
             changed = True
 
         if library_id and getattr(obj, "LibraryId", "") != str(library_id):
@@ -304,19 +316,20 @@ class DuctComponent:
         return changed
 
     @classmethod
-    def create(cls, doc, name, parent_junction, role, sequence, owner_network=None):
+    def create(cls, doc, name, parent_junction, role, attached_edge_key="", port_sequence=0, owner_network=None):
         component = doc.addObject("Part::FeaturePython", name)
         cls(
             component,
             parent_junction=parent_junction,
             role=role,
-            sequence=sequence,
+            attached_edge_key=attached_edge_key,
+            port_sequence=port_sequence,
         )
         DuctComponentViewProvider(component.ViewObject)
         return component
 
     @staticmethod
-    def labelFor(role, type_label, sequence):
+    def labelFor(role, type_label):
         label = str(type_label) if type_label else "Component"
         return "{} [{}]".format(label, role)
 

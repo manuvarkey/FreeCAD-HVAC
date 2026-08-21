@@ -23,6 +23,8 @@
 
 """This module implements HVAC duct description classes."""
 
+import json
+
 import FreeCAD
 import FreeCADGui as Gui
 from PySide import QtWidgets, QtCore
@@ -593,6 +595,104 @@ class TaskPanelTypeEditor:
                     library_id=library_id,
                     type_id=type_id,
                 )
+            )
+        return True
+
+    def reject(self):
+        return True
+
+
+class TaskPanelAddInlineComponent:
+    """
+    Task panel for adding an Inline device (damper, silencer, ...) to a
+    junction: pick which real edge to attach it to and which type, in one
+    step (rather than two sequential pop-up dialogs).
+    """
+
+    def __init__(self, junction, apply_callback=None):
+        self.junction = junction
+        self.apply_callback = apply_callback
+        self.form = QtWidgets.QWidget()
+        self.form.setWindowTitle(translate("HVAC_AddInlineComponent", "Add Inline Component"))
+
+        layout = QtWidgets.QVBoxLayout(self.form)
+        layout.addWidget(QtWidgets.QLabel(
+            translate("HVAC_AddInlineComponent", "Junction: {}").format(junction.Label)
+        ))
+
+        try:
+            analysis = json.loads(getattr(junction, "AnalysisJson", "") or "{}")
+        except Exception:
+            analysis = {}
+        self.ports = list(analysis.get("connected_ports", []) or [])
+
+        layout.addWidget(QtWidgets.QLabel(translate("HVAC_AddInlineComponent", "Attach to edge:")))
+        self.edge_combo = QtWidgets.QComboBox()
+        for port in self.ports:
+            self.edge_combo.addItem(self._portLabel(port))
+        layout.addWidget(self.edge_combo)
+        # Degree 1: nothing to choose, but still shown for clarity.
+        self.edge_combo.setEnabled(len(self.ports) > 1)
+
+        layout.addWidget(QtWidgets.QLabel(translate("HVAC_AddInlineComponent", "Type:")))
+        self.type_combo = QtWidgets.QComboBox()
+        layout.addWidget(self.type_combo)
+
+        self._refreshTypes()
+        self.edge_combo.currentIndexChanged.connect(self._refreshTypes)
+
+    @staticmethod
+    def _portLabel(port):
+        """Size (inlet/outlet) -- direction vector -- e.g. '300 x 250 mm
+        (outlet) -- (1.00, 0.00, 0.00)'. Leads with what a user actually
+        recognizes a duct run by, not the internal edge_key."""
+        section_params = port.get("section_params", {}) or {}
+        if port.get("profile") == "Circular":
+            size = "{:.0f} mm dia".format(section_params.get("Diameter", 0.0) or 0.0)
+        else:
+            size = "{:.0f} x {:.0f} mm".format(
+                section_params.get("Width", 0.0) or 0.0, section_params.get("Height", 0.0) or 0.0,
+            )
+        role = translate("HVAC_AddInlineComponent", "inlet") if port.get("flow_into_junction") else translate("HVAC_AddInlineComponent", "outlet")
+        direction = port.get("direction") or (0.0, 0.0, 0.0)
+        return "{} ({}) -- ({:.2f}, {:.2f}, {:.2f})".format(size, role, direction[0], direction[1], direction[2])
+
+    def _currentPort(self):
+        idx = self.edge_combo.currentIndex()
+        if idx < 0 or idx >= len(self.ports):
+            return None
+        return self.ports[idx]
+
+    def _refreshTypes(self):
+        self.type_combo.clear()
+        junction = self.junction
+        primary = junction.Proxy.getPrimaryComponent()
+        net = hvaclib.getOwnerNetwork(junction)
+        library_id = getattr(primary, "LibraryId", "") or (net.Proxy.getDefaultLibraryId() if net is not None else "")
+        self._library_id = library_id
+
+        port = self._currentPort()
+        profile = port.get("profile", "") if port else ""
+        # Always "through": an Inline device is always a physically
+        # two-port device evaluated against its own attached leg, no
+        # matter what the parent junction's real topology is.
+        types = hvaclib.HVACLibraryService.list_inline_types(library_id, topology="through", profile=profile)
+        self._types = types
+        for tdef in types:
+            self.type_combo.addItem(tdef.label, tdef.id)
+
+    def accept(self):
+        port = self._currentPort()
+        type_id = self.type_combo.currentData()
+        if port is None or not type_id:
+            return True
+
+        edge_key = port.get("edge_key", "")
+        library_id = getattr(self, "_library_id", "")
+        if edge_key and self.apply_callback:
+            QtCore.QTimer.singleShot(
+                0,
+                lambda: self.apply_callback(self.junction, edge_key, library_id, type_id),
             )
         return True
 

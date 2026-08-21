@@ -141,7 +141,8 @@ class FakeJunctionProxy:
     """
     Stand-in for DuctJunction.Proxy: these solver tests only ever build
     single-component (Primary-only) junctions, so getComponents() always
-    returns exactly that one fake DuctComponent.
+    returns exactly that one fake DuctComponent and there are never any
+    Inline chains.
     """
 
     def __init__(self, component):
@@ -152,6 +153,12 @@ class FakeJunctionProxy:
 
     def getPrimaryComponent(self):
         return self.component
+
+    def getPortChains(self):
+        return {}
+
+    def getInlineComponents(self, edge_key=None):
+        return []
 
 
 class FakeJunctionObj(FakeObj):
@@ -166,7 +173,7 @@ class FakeJunctionObj(FakeObj):
 
     def __init__(self, **kwargs):
         self._component = FakeObj(
-            Label="", Name="", ComponentRole="Primary", Sequence=0,
+            Label="", Name="", ComponentRole="Primary", AttachedEdgeKey="", PortSequence=0,
             LocalPortsJson="[]", ConnectionLengthsJson="[]", Family="",
             CalcFlowRate=0.0, CalcVelocity=0.0, CalcLossCoefficient=0.0, CalcPressureDrop=0.0,
         )

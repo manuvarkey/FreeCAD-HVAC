@@ -121,7 +121,6 @@ class AirflowSolver:
         graph = comp.graph
         edge_flow_lps = comp.edge_flow_lps
         port_lookup = comp.port_lookup
-        analysis_by_node = comp.analysis_by_node
 
         # Phase D: size every segment on its own (flow, velocity, Reynolds,
         # straight-duct friction loss) -- see _size_segment below.
@@ -132,15 +131,16 @@ class AirflowSolver:
 
         # Phase E: work out each junction's fitting/dynamic loss and add it
         # onto the segment(s) leaving that junction. A junction's physical
-        # fitting(s) live on its DuctComponent children (see Component.py) --
-        # the common case is exactly one Primary component, which behaves
-        # identically to how a junction's own LibraryId/TypeId used to work
-        # here. A simple through/2-port node can additionally carry Inline
-        # components in series; each one's own loss is evaluated against its
-        # own local ports/velocity and converted to Pa immediately (never
+        # fitting(s) live on its DuctComponent children (see Component.py):
+        # one Primary, evaluated once against its own full real multi-port
+        # context (behaves identically to how a junction's own LibraryId/
+        # TypeId used to work here), and independently, each real edge may
+        # additionally carry its own chain of Inline components in series --
+        # each one's own loss is evaluated against its own local ports and
+        # THAT EDGE's own flow/velocity, converted to Pa immediately (never
         # summing K across components that don't share a reference velocity
         # -- see DuctComponent.CalcPressureDrop), then the Pa contributions
-        # are summed once onto the one real segment leaving the junction.
+        # are summed once onto that one real edge's own segment.
         junction_warning = {}
         reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
         air_density = float(getattr(net, "AirDensity", 1.204) or 1.204)
@@ -152,167 +152,194 @@ class AirflowSolver:
                 continue
 
             junction_obj = junction_map[parser.node_key(node_id)]
-            ja = analysis_by_node[node_id]
-            components = junction_obj.Proxy.getComponents()
-            if not components:
+            primary = junction_obj.Proxy.getPrimaryComponent()
+            if primary is None:
                 continue
 
-            # A simple through/2-port node's component chain may include
-            # Inline components with synthetic (non-segment) internal ports;
-            # anything else (branch/cross/multiport/end) always has exactly
-            # one Primary component whose local ports are the real,
-            # unmodified connected ports -- handled by the original,
-            # single-component-loop logic below, unchanged in behavior.
-            is_chain = getattr(junction_obj, "Topology", "") == "through" and degree == 2
-
-            real_inlet = next((p for p in ja.connected_ports if p.flow_into_junction), None)
-            chain_flow_lps = seg_result[real_inlet.edge_key].flow_lps if real_inlet else 0.0
-            real_outlet = next((p for p in ja.connected_ports if p.flow_into_junction is False), None)
-
             warning = ""
-            chain_total_pa = 0.0
 
-            for comp_obj in components:
-                library_id = getattr(comp_obj, "LibraryId", "")
-                type_id = getattr(comp_obj, "TypeId", "")
-                type_def = reg.resolve_type(library_id, type_id) if library_id and type_id else None
+            # -- Primary, evaluated once with its full real multi-port
+            # context: a branch/cross/multiport/end node's Primary may have
+            # several REAL ports, each needing its own directly-attributed
+            # contribution. This never depended on topology/degree to begin
+            # with -- a Primary's own ports are always real segments.
+            library_id = getattr(primary, "LibraryId", "")
+            type_id = getattr(primary, "TypeId", "")
+            type_def = reg.resolve_type(library_id, type_id) if library_id and type_id else None
 
-                # Build the same kind of "properties" dict a geometry backend
-                # would see, so the loss formula can use the component's own
-                # settings (e.g. an elbow's radius).
-                properties = {}
-                if type_def is not None:
-                    for pdef in getattr(type_def, "properties", []) or []:
-                        if hasattr(comp_obj, pdef.name):
-                            properties[pdef.name] = getattr(comp_obj, pdef.name)
-                        else:
-                            properties[pdef.name] = getattr(pdef, "default", None)
-
-                local_ports = json.loads(getattr(comp_obj, "LocalPortsJson", "") or "[]")
-                for port in local_ports:
-                    self._fillPortFlow(port, seg_result, chain_flow_lps, air_viscosity)
-
-                context = {
-                    "obj": comp_obj,
-                    "center_point": HVACLibraryAPI.average_point([p["position"] for p in local_ports]),
-                    "properties": properties,
-                    "connected_ports": local_ports,
-                    # Only a Primary's family-driven dispatch (e.g.
-                    # through_generic) needs this; DuctComponent has no
-                    # Family of its own, so read the junction's.
-                    "family": getattr(junction_obj, "Family", "") if getattr(comp_obj, "ComponentRole", "") == "Primary" else "",
-                    "type_id": type_id,
-                    "library_id": library_id,
-                    "air_density": air_density,
-                    "air_kinematic_viscosity": air_viscosity,
-                }
-
-                # A loss function's result can take three shapes:
-                #  - dict {edge_key: K}: one coefficient per port, for
-                #    junctions where each inlet leg genuinely has its own
-                #    loss (a merging junction has no single "the" outlet to
-                #    put one K on), or a single-entry dict from a 2-port
-                #    fitting (elbow/transition), keyed to its own outlet.
-                #  - float: one coefficient applied to every outlet port
-                #    alike (e.g. a damper/VAV's inline_device_loss).
-                #  - None: no formula available -- fall back to K_DEFAULT.
-                k_result = reg.call_loss(library_id, type_def, context) if type_def is not None else None
-
-                if not is_chain:
-                    # Original single-component behavior, unchanged: a
-                    # branch/cross/multiport/end node's one component may
-                    # have several REAL ports, each needing its own
-                    # directly-attributed contribution.
-                    if isinstance(k_result, dict):
-                        junction_warning[node_id] = ""
-                        for edge_key, k in k_result.items():
-                            if k is None:
-                                continue
-                            sres = seg_result.get(edge_key)
-                            if sres is None:
-                                continue
-                            port = next((p for p in local_ports if p.get("edge_key") == edge_key), None)
-                            v_ref = port["velocity_ms"] if port else sres.velocity_ms
-                            # += (not =): a segment can pick up loss from
-                            # both ends -- its upstream fitting here, and
-                            # separately its downstream terminal device
-                            # (e.g. a diffuser) when that junction is
-                            # visited later in this same loop. Since each
-                            # junction is only visited once, this never
-                            # double-counts either one.
-                            sres.fitting_loss_pa += float(k) * airflow.velocity_pressure(air_density, v_ref)
-                        continue
-
-                    if k_result is None:
-                        if degree == 1:
-                            # Most open ends are placeholder markers with no
-                            # real device modeled (e.g. the default
-                            # end_terminal_marker), so "no loss" is the
-                            # expected, normal case here -- not a
-                            # missing-data problem worth a warning.
-                            junction_warning[node_id] = ""
-                            continue
-                        # A real fitting (degree >= 2) always has some
-                        # physical loss, so missing data here is worth
-                        # flagging.
-                        k_uniform = K_DEFAULT
-                        warning = "No fitting-loss data for type '{}'; using generic default K={}.".format(
-                            type_id or "(none)", K_DEFAULT
-                        )
-                        junction_warning[node_id] = warning
-                        global_warnings.append("{}: {}".format(junction_obj.Label, warning))
+            # Build the same kind of "properties" dict a geometry backend
+            # would see, so the loss formula can use the component's own
+            # settings (e.g. an elbow's radius).
+            properties = {}
+            if type_def is not None:
+                for pdef in getattr(type_def, "properties", []) or []:
+                    if hasattr(primary, pdef.name):
+                        properties[pdef.name] = getattr(primary, pdef.name)
                     else:
-                        k_uniform = float(k_result)
-                        junction_warning[node_id] = ""
+                        properties[pdef.name] = getattr(pdef, "default", None)
 
-                    for port in local_ports:
-                        if port.get("flow_into_junction"):
-                            continue  # inlet port -- fitting loss attributed at outlet ports only
-                        sres = seg_result.get(port.get("edge_key"))
-                        if sres is None:
-                            continue
-                        sres.fitting_loss_pa += k_uniform * airflow.velocity_pressure(air_density, port["velocity_ms"])
-                    continue
+            local_ports = json.loads(getattr(primary, "LocalPortsJson", "") or "[]")
+            for port in local_ports:
+                # Primary's own ports are always real segments, so
+                # chain_flow_lps is never actually used here (the real-edge
+                # match in _fillPortFlow always short-circuits first).
+                self._fillPortFlow(port, seg_result, 0.0, air_viscosity)
 
-                # Simple through/2-port chain: normalize this component's
-                # own result to one (K, reference velocity) pair -- a 2-port
-                # fitting's dict result always has exactly one entry, keyed
-                # to its own outlet -- then convert to Pa using THIS
-                # component's own local velocity and add to the chain total.
-                # Never apply directly to seg_result here: an interior
-                # component's own ports are synthetic (no matching real
-                # segment), so the whole chain's total is attributed once,
-                # after this loop, onto the one real outlet segment.
-                outlet_port = next((p for p in local_ports if p.get("flow_into_junction") is False), None)
-                v_ref = outlet_port["velocity_ms"] if outlet_port else 0.0
+            context = {
+                "obj": primary,
+                "center_point": HVACLibraryAPI.average_point([p["position"] for p in local_ports]),
+                "properties": properties,
+                "connected_ports": local_ports,
+                # Only a Primary's family-driven dispatch (e.g.
+                # through_generic) needs this.
+                "family": getattr(junction_obj, "Family", ""),
+                "type_id": type_id,
+                "library_id": library_id,
+                "air_density": air_density,
+                "air_kinematic_viscosity": air_viscosity,
+            }
 
-                if isinstance(k_result, dict):
-                    k = k_result.get(outlet_port.get("edge_key")) if outlet_port else None
-                    k = 0.0 if k is None else float(k)
-                elif k_result is not None:
-                    k = float(k_result)
-                elif degree == 1:
-                    k = 0.0
-                else:
-                    k = K_DEFAULT
-                    warning = "No fitting-loss data for component '{}' (type '{}'); using generic default K={}.".format(
-                        comp_obj.Label, type_id or "(none)", K_DEFAULT
+            # A loss function's result can take three shapes:
+            #  - dict {edge_key: K}: one coefficient per port, for
+            #    junctions where each inlet leg genuinely has its own
+            #    loss (a merging junction has no single "the" outlet to
+            #    put one K on), or a single-entry dict from a 2-port
+            #    fitting (elbow/transition), keyed to its own outlet.
+            #  - float: one coefficient applied to every outlet port
+            #    alike (e.g. a damper/VAV's inline_device_loss).
+            #  - None: no formula available -- fall back to K_DEFAULT.
+            k_result = reg.call_loss(library_id, type_def, context) if type_def is not None else None
+
+            if isinstance(k_result, dict):
+                for edge_key, k in k_result.items():
+                    if k is None:
+                        continue
+                    sres = seg_result.get(edge_key)
+                    if sres is None:
+                        continue
+                    port = next((p for p in local_ports if p.get("edge_key") == edge_key), None)
+                    v_ref = port["velocity_ms"] if port else sres.velocity_ms
+                    # += (not =): a segment can pick up loss from both the
+                    # Primary's own contribution here AND, separately, that
+                    # same edge's own Inline chain (evaluated below) -- both
+                    # additive, never double-counted since each is only
+                    # ever computed once per junction visit.
+                    sres.fitting_loss_pa += float(k) * airflow.velocity_pressure(air_density, v_ref)
+            elif k_result is None and degree == 1:
+                # Most open ends are placeholder markers with no real
+                # device modeled (e.g. the default end_terminal_marker), so
+                # "no loss" is the expected, normal case here -- not a
+                # missing-data problem worth a warning.
+                pass
+            else:
+                if k_result is None:
+                    # A real fitting (degree >= 2) always has some physical
+                    # loss, so missing data here is worth flagging.
+                    k_uniform = K_DEFAULT
+                    warning = "No fitting-loss data for type '{}'; using generic default K={}.".format(
+                        type_id or "(none)", K_DEFAULT
                     )
                     global_warnings.append("{}: {}".format(junction_obj.Label, warning))
+                else:
+                    k_uniform = float(k_result)
 
-                dp_pa = k * airflow.velocity_pressure(air_density, v_ref)
-                chain_total_pa += dp_pa
-                comp_obj.CalcFlowRate = outlet_port.get("flow_rate_lps", 0.0) if outlet_port else 0.0
-                comp_obj.CalcVelocity = v_ref
-                comp_obj.CalcLossCoefficient = k
-                comp_obj.CalcPressureDrop = dp_pa
+                for port in local_ports:
+                    if port.get("flow_into_junction"):
+                        continue  # inlet port -- fitting loss attributed at outlet ports only
+                    sres = seg_result.get(port.get("edge_key"))
+                    if sres is None:
+                        continue
+                    sres.fitting_loss_pa += k_uniform * airflow.velocity_pressure(air_density, port["velocity_ms"])
 
-            if is_chain:
-                junction_warning[node_id] = warning
-                if real_outlet is not None:
-                    sres = seg_result.get(real_outlet.edge_key)
-                    if sres is not None:
-                        sres.fitting_loss_pa += chain_total_pa
+            # -- Each real edge's own independent Inline chain, using THAT
+            # EDGE'S OWN flow (a branch leg's damper must see only that
+            # leg's flow, not the whole junction's).
+            for edge_key, chain in junction_obj.Proxy.getPortChains().items():
+                sres_edge = seg_result.get(edge_key)
+                if sres_edge is None or not chain:
+                    continue
+                # Named distinctly from the outer edge_flow_lps (comp.
+                # edge_flow_lps, a dict keyed by EdgeRef -- Phase G below
+                # still needs that one intact): this is one edge's own
+                # already-solved flow rate, a plain float.
+                chain_edge_flow_lps = sres_edge.flow_lps
+                chain_total_pa = 0.0
+                chain_warning = ""
+
+                for comp_obj in chain:
+                    c_library_id = getattr(comp_obj, "LibraryId", "")
+                    c_type_id = getattr(comp_obj, "TypeId", "")
+                    c_type_def = reg.resolve_type(c_library_id, c_type_id) if c_library_id and c_type_id else None
+
+                    c_properties = {}
+                    if c_type_def is not None:
+                        for pdef in getattr(c_type_def, "properties", []) or []:
+                            if hasattr(comp_obj, pdef.name):
+                                c_properties[pdef.name] = getattr(comp_obj, pdef.name)
+                            else:
+                                c_properties[pdef.name] = getattr(pdef, "default", None)
+
+                    c_local_ports = json.loads(getattr(comp_obj, "LocalPortsJson", "") or "[]")
+                    for port in c_local_ports:
+                        self._fillPortFlow(port, seg_result, chain_edge_flow_lps, air_viscosity)
+
+                    c_context = {
+                        "obj": comp_obj,
+                        "center_point": HVACLibraryAPI.average_point([p["position"] for p in c_local_ports]),
+                        "properties": c_properties,
+                        "connected_ports": c_local_ports,
+                        # An Inline component has no Family of its own.
+                        "family": "",
+                        "type_id": c_type_id,
+                        "library_id": c_library_id,
+                        "air_density": air_density,
+                        "air_kinematic_viscosity": air_viscosity,
+                    }
+                    c_k_result = reg.call_loss(c_library_id, c_type_def, c_context) if c_type_def is not None else None
+
+                    # Normalize this component's own result to one (K,
+                    # reference velocity) pair -- a 2-port fitting's dict
+                    # result always has exactly one entry, keyed to its own
+                    # outlet -- then convert to Pa using THIS component's
+                    # own local velocity and add to the chain total. Never
+                    # apply directly to seg_result here: an interior
+                    # component's own ports may be synthetic seams (no
+                    # matching real segment), so the whole chain's total is
+                    # attributed once, after this loop, onto this one real
+                    # edge.
+                    outlet_port = next((p for p in c_local_ports if p.get("flow_into_junction") is False), None)
+                    v_ref = outlet_port["velocity_ms"] if outlet_port else 0.0
+
+                    if isinstance(c_k_result, dict):
+                        k = c_k_result.get(outlet_port.get("edge_key")) if outlet_port else None
+                        k = 0.0 if k is None else float(k)
+                    elif c_k_result is not None:
+                        k = float(c_k_result)
+                    elif degree == 1:
+                        k = 0.0
+                    else:
+                        k = K_DEFAULT
+                        chain_warning = "No fitting-loss data for component '{}' (type '{}'); using generic default K={}.".format(
+                            comp_obj.Label, c_type_id or "(none)", K_DEFAULT
+                        )
+                        global_warnings.append("{}: {}".format(junction_obj.Label, chain_warning))
+
+                    dp_pa = k * airflow.velocity_pressure(air_density, v_ref)
+                    chain_total_pa += dp_pa
+                    comp_obj.CalcFlowRate = outlet_port.get("flow_rate_lps", 0.0) if outlet_port else 0.0
+                    comp_obj.CalcVelocity = v_ref
+                    comp_obj.CalcLossCoefficient = k
+                    comp_obj.CalcPressureDrop = dp_pa
+
+                # += : a real edge can legitimately receive a contribution
+                # from both the Primary's own per-port k_result above AND
+                # this edge's own Inline chain -- additive, never double
+                # counted, since each is only ever computed once.
+                sres_edge.fitting_loss_pa += chain_total_pa
+                if chain_warning:
+                    warning = (warning + "; " + chain_warning) if warning else chain_warning
+
+            junction_warning[node_id] = warning
 
         # Straight friction (Phase D) + fitting loss (just computed) = each segment's total.
         for sres in seg_result.values():

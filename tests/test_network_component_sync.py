@@ -1,10 +1,11 @@
 """
 Focused tests for DuctNetwork's junction/component sync orchestration:
 DuctNetwork.syncJunctionComponents (create/retain the Primary component with
-sticky type resolution, retain Inline components untouched, auto-delete
-Inline components with a warning when a junction stops being a simple
-through/2-port node) and DuctNetwork.removeGeometryObject's deletion cascade
-(deleting a junction deletes its DuctComponent children).
+sticky type resolution, retain each Inline component as long as its own
+AttachedEdgeKey is still a real connected edge -- independent of the
+junction's overall topology/degree -- and auto-delete it with a warning
+otherwise) and DuctNetwork.removeGeometryObject's deletion cascade (deleting
+a junction deletes its DuctComponent children).
 
 Uses real DuctJunction/DuctComponent/DuctNetwork classes against a minimal
 fake FreeCAD document, so hvaclib.isDuctJunction/isDuctComponent/
@@ -116,8 +117,12 @@ def _smacna_library():
     return reg.get_library("smacna")
 
 
-def _circular_ports(n=2):
-    return [{"profile": "Circular"} for _ in range(n)]
+def _circular_ports(n=2, edge_keys=None):
+    keys = list(edge_keys) if edge_keys is not None else [chr(ord("A") + i) for i in range(n)]
+    return [
+        {"profile": "Circular", "edge_key": key, "flow_into_junction": (i == 0)}
+        for i, key in enumerate(keys)
+    ]
 
 
 def test_creates_primary_component_when_absent():
@@ -181,7 +186,7 @@ def test_inline_component_never_auto_replaced_when_primary_family_changes():
 
     inline = DuctComponent.create(
         doc, "{}_Comp10".format(junction.Name), parent_junction=junction,
-        role="Inline", sequence=10, owner_network=net_obj,
+        role="Inline", attached_edge_key="B", port_sequence=10, owner_network=net_obj,
     )
     net_obj.Geometry.addObject(inline)
     inline.LibraryId = "smacna"
@@ -203,7 +208,14 @@ def test_inline_component_never_auto_replaced_when_primary_family_changes():
     assert len(components) == 2
 
 
-def test_ineligible_topology_deletes_inline_components_with_warning(monkeypatch):
+def test_topology_change_retains_inline_when_attached_edge_still_connected(monkeypatch):
+    """
+    An Inline component's retention no longer depends on the junction
+    staying a simple through/2-port node -- only on its OWN AttachedEdgeKey
+    still being one of the junction's real connected edges. A topology
+    change (a new edge C snapped in, turning this node into a branch) must
+    not disturb a damper attached to edge B, which is still there.
+    """
     doc, net_obj, net_proxy = _make_network()
     junction = _make_junction(doc, net_obj, topology="through", degree=2)
     net_obj.Geometry.addObject(junction)
@@ -217,17 +229,96 @@ def test_ineligible_topology_deletes_inline_components_with_warning(monkeypatch)
 
     inline = DuctComponent.create(
         doc, "{}_Comp10".format(junction.Name), parent_junction=junction,
-        role="Inline", sequence=10, owner_network=net_obj,
+        role="Inline", attached_edge_key="B", port_sequence=10, owner_network=net_obj,
     )
     net_obj.Geometry.addObject(inline)
     inline_name = inline.Name
 
-    # The base geometry changed underneath this node so it's now a branch
-    # (degree 3) -- no longer eligible for multiple components.
     junction.Topology = "branch"
-    network_mod.FreeCAD.Console.PrintWarning.reset_mock()
     net_proxy.syncJunctionComponents(
         junction, "branch", "branch.tee", "Circular", _circular_ports(3),
+        existing_components=[primary, inline], default_lib=lib, hide_new=None,
+    )
+
+    components = [o for o in net_obj.Geometry.OutList if hvaclib.isDuctComponent(o)]
+    assert {c.Name for c in components} == {primary.Name, inline_name}
+    assert doc.getObject(inline_name) is not None
+    assert inline.ComponentRole == "Inline"
+
+
+def test_inline_attached_edge_key_survives_document_reload_tag_regeneration(monkeypatch):
+    """
+    Regression: base-geometry Tags regenerate on every document reload (see
+    syncSegments' own "tags are regenerated" handling, Network.py ~1063),
+    so a real edge_key an Inline component was attached to under the OLD
+    tag would otherwise never match again post-reload, permanently deleting
+    the component on the very first sync after every file reopen.
+    syncSegments(initial_sync=True) records old_tag -> new_tag in
+    self._edge_key_remap; syncJunctionComponents must carry
+    AttachedEdgeKey forward through that map before checking retention.
+    """
+    doc, net_obj, net_proxy = _make_network()
+    junction = _make_junction(doc, net_obj, topology="through", degree=2)
+    net_obj.Geometry.addObject(junction)
+    lib = _smacna_library()
+
+    net_proxy.syncJunctionComponents(
+        junction, "through", "through.straight", "Circular", _circular_ports(2),
+        existing_components=[], default_lib=lib, hide_new=None,
+    )
+    primary = next(o for o in net_obj.Geometry.OutList if hvaclib.isDuctComponent(o))
+
+    inline = DuctComponent.create(
+        doc, "{}_Comp10".format(junction.Name), parent_junction=junction,
+        role="Inline", attached_edge_key="OLD_TAG_123", port_sequence=10, owner_network=net_obj,
+    )
+    net_obj.Geometry.addObject(inline)
+    inline_name = inline.Name
+
+    # Simulate what a real syncSegments(initial_sync=True) pass would have
+    # just recorded: the edge that used to be tagged OLD_TAG_123 is now
+    # tagged "B" after reload.
+    net_proxy._edge_key_remap = {"OLD_TAG_123": "B"}
+
+    net_proxy.syncJunctionComponents(
+        junction, "through", "through.straight", "Circular", _circular_ports(2),
+        existing_components=[primary, inline], default_lib=lib, hide_new=None,
+    )
+
+    components = [o for o in net_obj.Geometry.OutList if hvaclib.isDuctComponent(o)]
+    assert {c.Name for c in components} == {primary.Name, inline_name}
+    assert doc.getObject(inline_name) is not None
+    assert inline.AttachedEdgeKey == "B"
+
+
+def test_inline_dropped_when_its_attached_edge_disappears(monkeypatch):
+    """
+    If the specific edge an Inline component is attached to disappears
+    (e.g. base geometry resnapped it to a different key), that Inline
+    component is removed with a console warning -- independent of whatever
+    happens to the junction's other edges/topology.
+    """
+    doc, net_obj, net_proxy = _make_network()
+    junction = _make_junction(doc, net_obj, topology="through", degree=2)
+    net_obj.Geometry.addObject(junction)
+    lib = _smacna_library()
+
+    net_proxy.syncJunctionComponents(
+        junction, "through", "through.straight", "Circular", _circular_ports(2),
+        existing_components=[], default_lib=lib, hide_new=None,
+    )
+    primary = next(o for o in net_obj.Geometry.OutList if hvaclib.isDuctComponent(o))
+
+    inline = DuctComponent.create(
+        doc, "{}_Comp10".format(junction.Name), parent_junction=junction,
+        role="Inline", attached_edge_key="B", port_sequence=10, owner_network=net_obj,
+    )
+    net_obj.Geometry.addObject(inline)
+    inline_name = inline.Name
+
+    network_mod.FreeCAD.Console.PrintWarning.reset_mock()
+    net_proxy.syncJunctionComponents(
+        junction, "through", "through.straight", "Circular", _circular_ports(edge_keys=["A", "X"]),
         existing_components=[primary, inline], default_lib=lib, hide_new=None,
     )
 
@@ -254,7 +345,7 @@ def test_remove_geometry_object_cascades_to_components():
     primary = next(o for o in net_obj.Geometry.OutList if hvaclib.isDuctComponent(o))
     inline = DuctComponent.create(
         doc, "{}_Comp10".format(junction.Name), parent_junction=junction,
-        role="Inline", sequence=10, owner_network=net_obj,
+        role="Inline", attached_edge_key="B", port_sequence=10, owner_network=net_obj,
     )
     net_obj.Geometry.addObject(inline)
 
@@ -360,10 +451,16 @@ def _run_full_sync_round(net_proxy, junction, lib):
     chain, run each component's own execute() (standing in for a real
     FreeCAD recompute), then aggregate -- exactly the sequence
     Network.py's syncJunctionComponents + aggregateAllConnectionLengths
-    drive in the real addon."""
+    drive in the real addon. connected_ports is derived from the SAME
+    AnalysisJson composeComponents() itself reads (mirroring how
+    syncJunctions() derives both from one shared JunctionAnalysis), so
+    Inline retention (keyed on real edge_keys) stays consistent with it.
+    """
     existing = junction.Proxy.getComponents()
+    analysis = json.loads(getattr(junction, "AnalysisJson", "") or "{}")
+    connected_ports = analysis.get("connected_ports") or [{"profile": "Circular", "edge_key": "A"}, {"profile": "Circular", "edge_key": "B"}]
     net_proxy.syncJunctionComponents(
-        junction, "through", "through.straight", "Circular", [{"profile": "Circular"}] * 2,
+        junction, "through", "through.straight", "Circular", connected_ports,
         existing_components=existing, default_lib=lib, hide_new=None,
     )
     for comp in junction.Proxy.getComponents():
@@ -397,12 +494,12 @@ def test_adding_inline_component_updates_aggregate_segment_trims():
     }
     assert set(lengths_before.keys()) == {"A", "B"}
 
-    # Add an Inline damper, exactly like CommandAddInlineComponent does.
-    existing = junction.Proxy.getComponents()
-    next_sequence = max((int(getattr(c, "Sequence", 0)) for c in existing), default=0) + 10
+    # Add an Inline damper on edge B, exactly like CommandAddInlineComponent does.
+    existing_chain = junction.Proxy.getInlineComponents("B")
+    next_port_sequence = max((int(getattr(c, "PortSequence", 0)) for c in existing_chain), default=0) + 10
     inline = DuctComponent.create(
-        doc, "{}_Comp{}".format(junction.Name, next_sequence),
-        parent_junction=junction, role="Inline", sequence=next_sequence, owner_network=net_obj,
+        doc, "{}_Comp{}".format(junction.Name, next_port_sequence),
+        parent_junction=junction, role="Inline", attached_edge_key="B", port_sequence=next_port_sequence, owner_network=net_obj,
     )
     net_obj.Geometry.addObject(inline)
     inline.LibraryId = "smacna"
@@ -424,9 +521,8 @@ def test_adding_inline_component_updates_aggregate_segment_trims():
     }
     assert set(lengths_after.keys()) == {"A", "B"}
 
-    # The damper (Sequence 10, after the Primary) sits on the B side --
-    # that side's aggregate trim must grow to include the damper's own
-    # body length; the A side (still just the Primary's own left face) is
-    # unaffected.
+    # The damper is attached to edge B -- that side's aggregate trim must
+    # grow to include the damper's own body length; the A side (still just
+    # the Primary's own left face) is unaffected.
     assert lengths_after["A"] == pytest.approx(lengths_before["A"])
     assert lengths_after["B"] > lengths_before["B"]

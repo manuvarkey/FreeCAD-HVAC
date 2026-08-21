@@ -296,6 +296,41 @@ def test_select_type_unsupported_family_returns_not_found_with_no_placeholder():
     assert selection.type_def is None
 
 
+def test_automatic_primary_selection_never_selects_kind_inline():
+    """
+    An "inline"-kind type (a damper/silencer/etc, meant only for the Add
+    Inline Component UI, see list_inline_types) must never be reachable
+    through automatic Primary-fitting selection, even when it would
+    otherwise be the best (or only) family/topology/profile match --
+    _rebuild_match_index deliberately excludes it from both the model and
+    placeholder match indexes. This guards the invariant now that the
+    junction-composition refactor removed the old topology/degree gate that
+    used to make a chain-eligible Primary's own selection path the only one
+    that could ever run this matching logic in the first place.
+    """
+    inline_damper = _type_def(
+        "through_damper_generic", "junction", family=["through.bend"], topology="through",
+        profiles=["Circular"], kind="inline", priority=999,
+    )
+    lib = _library_with(inline_damper)
+
+    selection = lib.select_type(_junction_request("through", "through.bend", "Circular", _ports(2, "Circular")))
+    assert selection.type_def is None
+    assert selection.status == "not_found"
+
+    # Also true through the sticky resolution path used by normal sync.
+    registry = HVACLibraryRegistry()
+    registry.register_library(lib)
+    sticky = registry.resolve_sticky_type(
+        "lib", "", _junction_request("through", "through.bend", "Circular", _ports(2, "Circular")),
+    )
+    assert sticky.type_def is None
+
+    # But it IS reachable through list_inline_types, the Add Inline
+    # Component UI's own lookup.
+    assert [t.id for t in lib.list_inline_types(topology="through")] == ["through_damper_generic"]
+
+
 # ----------------------------------------------------------------------
 # Constraints
 # ----------------------------------------------------------------------

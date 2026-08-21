@@ -136,9 +136,10 @@ class DuctNetwork:
         self._sync_scheduled = False
         self._sync_suspended = False
         self._hidden_source_names = set()
+        self._edge_key_remap = {}
         self._parser = None
         self.setProperties(obj)
-        
+
     def dumps(self):
         return None
 
@@ -157,6 +158,7 @@ class DuctNetwork:
         self._sync_scheduled = False
         self._sync_suspended = False
         self._hidden_source_names = set()
+        self._edge_key_remap = {}
         self._parser = None
         self.setProperties(obj)
         self.requestSync(initial_sync=True)
@@ -788,8 +790,9 @@ class DuctNetwork:
         return junctions
 
     def collectComponentObjects(self):
-        """{parent_junction_name: [component_obj, ...]}, Sequence-sorted -- built
-        once per sync so syncJunctionComponents doesn't rescan Geometry per node."""
+        """{parent_junction_name: [component_obj, ...]}, Primary-first then
+        Inline grouped by AttachedEdgeKey/PortSequence -- built once per
+        sync so syncJunctionComponents doesn't rescan Geometry per node."""
         net = self.Object
         by_parent = {}
         geometry = getattr(net, "Geometry", None)
@@ -800,7 +803,12 @@ class DuctNetwork:
                 continue
             by_parent.setdefault(getattr(child, "ParentJunctionName", ""), []).append(child)
         for lst in by_parent.values():
-            lst.sort(key=lambda c: int(getattr(c, "Sequence", 0)))
+            lst.sort(key=lambda c: (
+                0 if getattr(c, "ComponentRole", "") == "Primary" else 1,
+                getattr(c, "AttachedEdgeKey", ""),
+                int(getattr(c, "PortSequence", 0)),
+                c.Name,
+            ))
         return by_parent
 
 
@@ -1046,14 +1054,20 @@ class DuctNetwork:
         existing_segments = self.collectSegmentObjects()
         trim_map = self.collectSegmentTrimMap()
         live_objs = set()
-    
+
+        if initial_sync:
+            # Reset once per initial-sync pass (this method also runs a
+            # second time per pass with initial_sync=False, in Stage 3 --
+            # that call must not wipe what Stage 1 just recorded).
+            self._edge_key_remap = {}
+
         for edge_ref in parser.edges():
             key = edge_ref.tag
-    
+
             source_obj = doc.getObject(edge_ref.obj_name)
             if source_obj is None:
                 continue
-    
+
             # If initial sync, the tags are regenerated hence find element based on SourceObjectName and SourceIndex
             # Also update the existing segment's key in the dictionary with the modified key (Object.Tag)
             if initial_sync:
@@ -1064,10 +1078,15 @@ class DuctNetwork:
                         segment_obj = seg
                         matched_old_key = old_key
                         break
-    
+
                 if matched_old_key is not None and matched_old_key != key:
                     existing_segments.pop(matched_old_key, None)
                     existing_segments[key] = segment_obj
+                    # Record old_key -> key so syncJunctionComponents can
+                    # carry forward any DuctComponent.AttachedEdgeKey that
+                    # was snapshotted under the old (pre-reload) tag --
+                    # see that method for why this is needed.
+                    self._edge_key_remap[matched_old_key] = key
             # Else find element based on key
             else:
                 segment_obj = existing_segments.get(key)
@@ -1338,18 +1357,27 @@ class DuctNetwork:
 
         Inline components are never auto-selected/replaced here -- they're
         retained as-is (only their type schema is re-applied, in case a
-        library reload changed their declared properties). If the junction
-        is no longer eligible for multiple components (not a simple
-        through/2-port node any more), any existing Inline components are
-        deleted, with a console warning, rather than left silently
-        orphaned.
+        library reload changed their declared properties). Each Inline
+        component is retained only while its own AttachedEdgeKey is still
+        one of this junction's real edges -- if that edge disappears (a
+        topology/geometry change resnapped or removed it), that component
+        is deleted with a console warning rather than left silently
+        orphaned. A junction losing its through/2-port shape no longer
+        drops Inline components on its own -- each edge's chain is
+        independent of the junction's overall topology.
+
+        Before that check, AttachedEdgeKey is carried forward through
+        self._edge_key_remap (built by syncSegments(initial_sync=True),
+        which always runs first in a sync pass -- see _runDeferredSync):
+        base-geometry Tags regenerate on every document reload, so without
+        this an Inline component's AttachedEdgeKey (snapshotted under the
+        old tag) would never match the new tag and would be wrongly
+        dropped on the very first sync after every file reopen.
         """
         net = self.Object
         doc = net.Document
         geometry = net.Geometry
         changed = False
-
-        eligible_for_multi = (topology == "through" and len(connected_ports) == 2)
 
         # Defensive: a junction should never end up with more than one
         # Primary component, but self-heal if it somehow does (e.g. a
@@ -1358,7 +1386,7 @@ class DuctNetwork:
         primaries = [c for c in existing_components if getattr(c, "ComponentRole", "") == "Primary"]
         primary = None
         if primaries:
-            primaries.sort(key=lambda c: (int(getattr(c, "Sequence", 0)), c.Name))
+            primaries.sort(key=lambda c: c.Name)
             primary = primaries[0]
             extras = primaries[1:]
             if extras:
@@ -1371,22 +1399,44 @@ class DuctNetwork:
                     self.removeGeometryObject(comp)
                 changed = True
 
+        real_edge_keys = {p.get("edge_key") for p in connected_ports}
         inline_components = [c for c in existing_components if getattr(c, "ComponentRole", "") == "Inline"]
 
-        if not eligible_for_multi and inline_components:
+        # A document reload regenerates every base-geometry Tag, so a real
+        # edge_key an Inline component was attached to under the old tag
+        # would otherwise never match again -- carry AttachedEdgeKey
+        # forward through the same old-tag -> new-tag map syncSegments just
+        # built (Stage 1 always runs before this), exactly like SegmentKey
+        # itself gets carried forward.
+        edge_key_remap = getattr(self, "_edge_key_remap", None) or {}
+        for comp in inline_components:
+            old_key = getattr(comp, "AttachedEdgeKey", "")
+            new_key = edge_key_remap.get(old_key)
+            if new_key is not None and new_key != old_key:
+                comp.AttachedEdgeKey = new_key
+                changed = True
+
+        keep, drop = [], []
+        for comp in inline_components:
+            (keep if getattr(comp, "AttachedEdgeKey", "") in real_edge_keys else drop).append(comp)
+
+        if drop:
             FreeCAD.Console.PrintWarning(
-                "HVAC - Junction '{}' is no longer a simple through/2-port node; "
-                "removing {} inline component(s).\n".format(junction_obj.Label, len(inline_components))
+                "HVAC - Junction '{}' no longer has edge(s) {}; removing {} inline component(s).\n".format(
+                    junction_obj.Label,
+                    sorted({getattr(c, "AttachedEdgeKey", "") for c in drop}),
+                    len(drop),
+                )
             )
-            for comp in inline_components:
+            for comp in drop:
                 self.removeGeometryObject(comp)
-            inline_components = []
             changed = True
+        inline_components = keep
 
         if primary is None:
             primary = DuctComponent.create(
                 doc, "{}_Comp0".format(junction_obj.Name),
-                parent_junction=junction_obj, role="Primary", sequence=0, owner_network=net,
+                parent_junction=junction_obj, role="Primary", attached_edge_key="", port_sequence=0, owner_network=net,
             )
             changed = True
             if hide_new is not None:
@@ -1414,7 +1464,7 @@ class DuctNetwork:
         type_id = selection.type_def.id if selection.type_def else ""
 
         meta_changed = primary.Proxy.updateMetadata(
-            parent_junction=junction_obj, role="Primary", sequence=0,
+            parent_junction=junction_obj, role="Primary", attached_edge_key="", port_sequence=0,
             library_id=library_id, type_id=type_id,
         )
         changed = changed or meta_changed
@@ -1423,7 +1473,7 @@ class DuctNetwork:
         changed = changed or schema_changed
 
         new_label = DuctComponent.labelFor(
-            "Primary", selection.type_def.label if selection.type_def else "", 0
+            "Primary", selection.type_def.label if selection.type_def else ""
         )
         if primary.Label != new_label:
             primary.Label = new_label
@@ -1726,6 +1776,49 @@ class DuctNetwork:
                 if proxy:
                     proxy.requestSync(force_recompute=True)
      
+    @staticmethod
+    def applyAddInlineComponent(junction, edge_key, library_id, type_id):
+        """
+        Create a new Inline DuctComponent on junction, attached to edge_key,
+        and sync. (Used as callback for CommandAddInlineComponent's task
+        panel -- TaskPanelAddInlineComponent.)
+        """
+        from .Component import DuctComponent
+
+        if junction is None or not edge_key or not type_id:
+            return
+
+        net = DuctNetwork.getOwnerNetwork(junction)
+        if net is None:
+            return
+        doc = net.Document
+
+        # New Inline components default to the end of THIS EDGE's own chain
+        # (PortSequence = that chain's current max + 10), leaving gaps so a
+        # user can reorder/insert by editing PortSequence directly in the
+        # property editor.
+        existing_chain = junction.Proxy.getInlineComponents(edge_key)
+        next_port_sequence = max((int(getattr(c, "PortSequence", 0)) for c in existing_chain), default=0) + 10
+        # Name uniqueness is decoupled from edge_key/PortSequence -- an
+        # edge_key can contain characters invalid in a FreeCAD object Name
+        # (e.g. "Sketch001:0").
+        name_index = len(junction.Proxy.getComponents())
+
+        component = DuctComponent.create(
+            doc, "{}_Comp{}".format(junction.Name, name_index),
+            parent_junction=junction, role="Inline",
+            attached_edge_key=edge_key, port_sequence=next_port_sequence,
+            owner_network=net,
+        )
+        net.Geometry.addObject(component)
+        component.LibraryId = library_id
+        component.TypeId = type_id
+        component.Proxy.applyTypeSchema()
+
+        proxy = getattr(net, "Proxy", None)
+        if proxy:
+            proxy.requestSync(force_recompute=True)
+
     @staticmethod
     def applyPlacementSelection(objects, attachment=None, offset=None, profile_x_axis=None):
         """

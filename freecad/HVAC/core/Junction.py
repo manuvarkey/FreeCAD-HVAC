@@ -56,15 +56,15 @@ class DuctJunction:
     Derived per-node network junction: a purely logical/connectivity
     container. It holds no library type or geometry of its own -- each
     physical fitting it represents is a separate DuctComponent child (see
-    core/Component.py), found via getComponents()/getPrimaryComponent().
+    core/Component.py), found via getComponents()/getPrimaryComponent()/
+    getPortChains().
 
-    A junction's only "compute" job is composing its component chain: for
-    the common case (a single Primary, no Inline components) each
-    component just gets the junction's real connected ports unchanged --
-    identical to how a single fitting worked before this class was split.
-    For a simple through/2-port node carrying one or more Inline
-    components too, composeComponents() works out each component's local
-    inlet/outlet ports in inlet->outlet order and writes them to that
+    A junction's only "compute" job is composing its component chain: one
+    Primary component always gets every one of the junction's real ports
+    unchanged, and independently, each real edge may additionally carry its
+    own chain of zero-or-more Inline components between the Primary and
+    that edge's own external segment. composeComponents() works out every
+    component's local inlet/outlet ports and writes them to that
     component's LocalPortsJson (see below).
     """
 
@@ -226,7 +226,13 @@ class DuctJunction:
     # ------------------------------------------------------------------
 
     def getComponents(self):
-        """This junction's DuctComponent children, Sequence-ascending."""
+        """
+        This junction's DuctComponent children: Primary first, then Inline
+        components grouped by their attached edge and PortSequence-ascending
+        within each group. Convenience accessor only -- composeComponents()
+        never relies on this ordering for correctness, it always groups by
+        AttachedEdgeKey itself (see getPortChains()).
+        """
         obj = self.Object
         net = hvaclib.getOwnerNetwork(obj)
         geometry = getattr(net, "Geometry", None) if net is not None else None
@@ -236,7 +242,12 @@ class DuctJunction:
             c for c in geometry.OutList
             if hvaclib.isDuctComponent(c) and getattr(c, "ParentJunctionName", "") == obj.Name
         ]
-        out.sort(key=lambda c: int(getattr(c, "Sequence", 0)))
+        out.sort(key=lambda c: (
+            0 if getattr(c, "ComponentRole", "") == "Primary" else 1,
+            getattr(c, "AttachedEdgeKey", ""),
+            int(getattr(c, "PortSequence", 0)),
+            c.Name,
+        ))
         return out
 
     def getPrimaryComponent(self):
@@ -245,44 +256,61 @@ class DuctJunction:
                 return c
         return None
 
+    def getPortChains(self):
+        """
+        {edge_key: [Inline components]}, each list Primary-outward (i.e.
+        PortSequence-ascending) -- the independent chain of Inline devices
+        attached to that one real edge. Edges with no Inline components are
+        simply absent from this dict.
+        """
+        chains = {}
+        for c in self.getComponents():
+            if getattr(c, "ComponentRole", "") != "Inline":
+                continue
+            edge_key = getattr(c, "AttachedEdgeKey", "")
+            if edge_key:
+                chains.setdefault(edge_key, []).append(c)
+        for lst in chains.values():
+            lst.sort(key=lambda c: int(getattr(c, "PortSequence", 0)))
+        return chains
+
+    def getInlineComponents(self, edge_key=None):
+        """All Inline components, or (if edge_key is given) just that edge's own chain."""
+        if edge_key is None:
+            return [c for c in self.getComponents() if getattr(c, "ComponentRole", "") == "Inline"]
+        return self.getPortChains().get(edge_key, [])
+
     def composeComponents(self):
         """
         Work out every child component's local inlet/outlet ports and write
-        them to each component's LocalPortsJson, in Sequence order. Called
-        once per sync (Network.syncJunctionComponents), before the
-        recompute that runs each component's own execute().
+        them to each component's LocalPortsJson. Called once per sync
+        (Network.syncJunctionComponents), before the recompute that runs
+        each component's own execute().
 
         Everything stays in absolute world coordinates -- DuctJunction/
         DuctSegment never use Placement, and this keeps that convention
         rather than introducing a local frame.
 
-        Single-component case (the common one: a plain fitting, or any
-        junction that isn't a simple through/2-port node): each component
-        just gets the junction's real connected_ports unchanged -- exactly
-        the context a single fitting always received.
+        The Primary always gets every one of the junction's real ports
+        unchanged, no matter the topology/degree -- exactly the context a
+        single fitting always received. Independently of that, each real
+        edge may additionally carry its own chain of zero-or-more Inline
+        components between the Primary and that edge's own external
+        segment (see getPortChains()) -- a tee's branch leg and one of its
+        run legs can each grow a completely independent chain, evaluated
+        with that leg's own geometry alone.
 
-        Multi-component case (through/2-port node, 2+ components): builds
-        an ordered chain from the real inlet port through to the real
-        outlet port. Every existing 2-port geometry backend (elbow,
-        transition, damper, VAV) treats its two given ports as coincident
-        at one shared anchor point and independently pushes each one
-        outward, in that port's own direction, by a trim length that
-        depends only on the component's own properties/profile -- never on
-        where that anchor happens to sit in space. That position-
-        independence is what makes this composition possible: each
-        component's own (left trim, right trim) can be read once from a
-        "peek" geometry call (position doesn't matter yet), then the real
-        anchor for every component is derived from a single running sum of
-        (this component's own outward push + the next component's own
-        outward push) along the appropriate side's direction -- see
-        _peekComponentTrims. The real anchor for the very first component
-        is exactly the real inlet port's own position, so the upstream
-        segment's trim comes out identical to today's single-fitting
-        behavior; every other anchor is purely derived, so adding,
-        removing, or reordering Inline components never moves the
-        junction's own CenterPoint or the real inlet segment's trim --
-        only how far the chain reaches toward the real outlet, i.e. that
-        segment's own trim.
+        Every 2-port geometry backend (elbow, transition, damper, VAV)
+        treats its two given ports as coincident at one shared anchor point
+        and independently pushes each one outward, in that port's own
+        direction, by a trim length that depends only on the component's
+        own properties/profile -- never on where that anchor happens to sit
+        in space. That position-independence is what makes this
+        composition possible: for a given edge, the Primary's own trim on
+        that port (peeked once, from its real multi-port geometry) plus
+        each chain component's own (inner trim, outer trim) (each peeked
+        once too) are summed into a running anchor per component -- see
+        _peekConnectionLengths.
         """
         obj = self.Object
         try:
@@ -290,150 +318,144 @@ class DuctJunction:
         except Exception:
             analysis = {}
         ports = list(analysis.get("connected_ports", []) or [])
-        components = self.getComponents()
-
-        eligible = getattr(obj, "Topology", "") == "through" and len(ports) == 2 and len(components) > 1
-        if not eligible:
-            primary = self.getPrimaryComponent()
-            if primary is not None:
-                primary.LocalPortsJson = json.dumps(ports)
-                primary.Profile = hvaclib.HVACLibraryService.match_profile_from_ports(ports)
-            return
-
-        port_a, port_b = ports[0], ports[1]
-        if port_a.get("flow_into_junction") is False and port_b.get("flow_into_junction") is True:
-            port_a, port_b = port_b, port_a
-        # port_a: real inlet-facing port. port_b: real outlet-facing port.
-
-        primary_index = next(
-            (i for i, c in enumerate(components) if getattr(c, "ComponentRole", "") == "Primary"),
-            0,
-        )
-
-        pos_a = HVACLibraryAPI.vec(port_a["position"])
-        dir_a = HVACLibraryAPI.unit(port_a["direction"])
-        dir_b = HVACLibraryAPI.unit(port_b["direction"])
-        step_upstream = dir_a * -1.0   # advancing from port_a, deeper into the junction
-        step_downstream = dir_b        # advancing from the junction, out toward port_b
-
+        ports_by_edge = {p.get("edge_key"): p for p in ports}
         node_key = getattr(obj, "NodeKey", "")
 
-        # Pass 1: work out each component's own local left/right port
-        # templates (direction/profile/edge_key -- all position-
-        # independent) and peek its own (trim_left, trim_right).
-        left_tpls = []
-        right_tpls = []
-        trims_left = []
-        trims_right = []
-        for i, comp_obj in enumerate(components):
-            is_first = (i == 0)
-            is_last = (i == len(components) - 1)
+        primary = self.getPrimaryComponent()
+        if primary is None or not ports:
+            return
 
-            if is_first:
-                left_tpl = dict(port_a)
-            else:
-                left_carrier = port_a if i <= primary_index else port_b
-                left_dir = dir_a if i <= primary_index else (dir_b * -1.0)
-                left_tpl = HVACLibraryAPI.copy_port(
-                    left_carrier, position=pos_a, direction=left_dir,
-                    edge_key="{}#seam{}".format(node_key, i - 1), segment_end="end",
+        # Primary always gets every real port, unchanged.
+        primary.LocalPortsJson = json.dumps([_json_safe_port(p) for p in ports])
+        primary.Profile = hvaclib.HVACLibraryService.match_profile_from_ports(ports)
+
+        chains = {
+            edge_key: chain
+            for edge_key, chain in self.getPortChains().items()
+            if edge_key in ports_by_edge and chain
+        }
+        if not chains:
+            return
+
+        # Peek the Primary's own trim on every real port ONCE -- using the
+        # junction's REAL topology/family, since the Primary can now be a
+        # branch/cross tee with a chain on just one of its legs.
+        primary_trims = self._peekConnectionLengths(
+            primary, ports,
+            topology=getattr(obj, "Topology", "through"),
+            family=getattr(obj, "Family", ""),
+            analysis=analysis,
+        )
+
+        chained_lengths = {}
+        for edge_key, chain in chains.items():
+            real_port = ports_by_edge[edge_key]
+            pos = HVACLibraryAPI.vec(real_port["position"])
+            dir_e = HVACLibraryAPI.unit(real_port["direction"])
+            into_e = real_port.get("flow_into_junction")
+            trim_primary = primary_trims.get((edge_key, real_port.get("segment_end")), 0.0)
+
+            # Build each chain component's own coincident inner/outer
+            # templates -- inner always faces the Primary (direction -d),
+            # outer always faces the segment (direction +d), regardless of
+            # where the component sits in the chain -- and peek its own
+            # (trim_in, trim_out).
+            k = len(chain)
+            inner_tpls, outer_tpls, trims_in, trims_out = [], [], [], []
+            for j, comp_obj in enumerate(chain):
+                inner_tpl = HVACLibraryAPI.copy_port(
+                    real_port, direction=dir_e * -1.0,
+                    edge_key="{}#{}_seam{}".format(node_key, edge_key, j), segment_end="end",
                 )
-                # A synthetic seam's LEFT side is always this component's
-                # own local inlet, regardless of which real port's
-                # profile/section it happens to carry -- loss functions key
-                # off flow_into_junction, not edge_key, to find "the inlet".
-                left_tpl["flow_into_junction"] = True
-                left_tpl["flow_role"] = "inlet"
+                inner_tpl["flow_into_junction"] = not into_e
+                inner_tpl["flow_role"] = "inlet" if not into_e else "outlet"
 
-            if is_last:
-                right_tpl = dict(port_b)
-            else:
-                right_carrier = port_b if i >= primary_index else port_a
-                right_dir = dir_b if i >= primary_index else (dir_a * -1.0)
-                right_tpl = HVACLibraryAPI.copy_port(
-                    right_carrier, position=pos_a, direction=right_dir,
-                    edge_key="{}#seam{}".format(node_key, i), segment_end="start",
+                if j == k - 1:
+                    outer_tpl = dict(real_port)  # outermost: the real external interface
+                else:
+                    outer_tpl = HVACLibraryAPI.copy_port(
+                        real_port, direction=dir_e,
+                        edge_key="{}#{}_seam{}".format(node_key, edge_key, j + 1), segment_end="start",
+                    )
+                outer_tpl["flow_into_junction"] = into_e
+                outer_tpl["flow_role"] = "outlet" if not into_e else "inlet"
+
+                inner_tpls.append(inner_tpl)
+                outer_tpls.append(outer_tpl)
+                trims = self._peekConnectionLengths(
+                    comp_obj, [inner_tpl, outer_tpl], topology="through", family="", analysis=analysis,
                 )
-                right_tpl["flow_into_junction"] = False
-                right_tpl["flow_role"] = "outlet"
+                trims_in.append(trims.get((inner_tpl["edge_key"], inner_tpl["segment_end"]), 0.0))
+                trims_out.append(trims.get((outer_tpl["edge_key"], outer_tpl["segment_end"]), 0.0))
 
-            left_tpls.append(left_tpl)
-            right_tpls.append(right_tpl)
-            tl, tr = self._peekComponentTrims(comp_obj, left_tpl, right_tpl, analysis)
-            trims_left.append(tl)
-            trims_right.append(tr)
+            # Running-sum anchors, always stepping outward along dir_e: the
+            # first chain component's anchor is where the Primary's own
+            # face ends AND where the first component's own body begins
+            # (primary_trim + trims_in[0]); every later anchor adds the
+            # previous component's own outward push to this one's own
+            # inward push.
+            anchors = [pos + dir_e * (trim_primary + trims_in[0])]
+            for j in range(1, k):
+                anchors.append(anchors[j - 1] + dir_e * (trims_out[j - 1] + trims_in[j]))
 
-        # Pass 2: derive each component's real shared anchor from a running
-        # sum -- the first component is anchored exactly at the real inlet
-        # port, every other anchor follows from the previous component's
-        # own outward push plus this component's own outward push, along
-        # whichever side's direction the transition happens on.
-        anchors = [pos_a]
-        for i in range(len(components) - 1):
-            step = step_upstream if i < primary_index else step_downstream
-            anchors.append(anchors[i] + step * (trims_right[i] + trims_left[i + 1]))
+            for j, comp_obj in enumerate(chain):
+                local_ports = [
+                    HVACLibraryAPI.copy_port(inner_tpls[j], position=anchors[j]),
+                    HVACLibraryAPI.copy_port(outer_tpls[j], position=anchors[j]),
+                ]
+                comp_obj.LocalPortsJson = json.dumps([_json_safe_port(p) for p in local_ports])
+                comp_obj.Profile = str(local_ports[1].get("profile", "") or "")
 
-        # Pass 3: write each component's final local ports at its real anchor.
-        for i, comp_obj in enumerate(components):
-            local_ports = [
-                HVACLibraryAPI.copy_port(left_tpls[i], position=anchors[i]),
-                HVACLibraryAPI.copy_port(right_tpls[i], position=anchors[i]),
-            ]
-            comp_obj.LocalPortsJson = json.dumps([_json_safe_port(p) for p in local_ports])
-            comp_obj.Profile = str(local_ports[1].get("profile", "") or "")
+            last_face = anchors[-1] + dir_e * trims_out[-1]
+            chained_lengths[edge_key] = max(0.0, (last_face - pos).dot(dir_e))
 
-        # Pass 4: write the aggregate external trim contract directly. The
-        # upstream real segment's trim is simply the first component's own
-        # left push (its anchor is exactly pos_a, so nothing accumulates
-        # ahead of it). The downstream real segment's trim is NOT just the
-        # last component's own local push -- that alone only accounts for
-        # its own body and silently ignores everything upstream of it in
-        # the chain. It has to be the distance from the real port_b
-        # position to where the chain's actual final face ends up, found
-        # directly from the last component's own real anchor + push
-        # (this stays correct even with a bent Primary, since it's a plain
-        # position difference, not a re-derivation through intermediate
-        # anchors).
-        last_right_face = anchors[-1] + dir_b * trims_right[-1]
-        trim_b = max(0.0, (last_right_face - HVACLibraryAPI.vec(port_b["position"])).dot(dir_b))
-        trim_a = max(0.0, trims_left[0])
+        # Write ConnectionLengthsJson, merging this pass's chained-edge
+        # entries into whatever was already there -- non-chained edges are
+        # left for aggregateConnectionLengths() to fill from the Primary's
+        # own post-execute report.
+        try:
+            existing = {
+                item["edge_key"]: item for item in json.loads(getattr(obj, "ConnectionLengthsJson", "") or "[]")
+            }
+        except Exception:
+            existing = {}
+        for edge_key, length in chained_lengths.items():
+            real_port = ports_by_edge[edge_key]
+            existing[edge_key] = {"edge_key": edge_key, "segment_end": real_port.get("segment_end"), "length": length}
+        obj.ConnectionLengthsJson = json.dumps(list(existing.values()))
 
-        aggregate = [
-            {"edge_key": port_a.get("edge_key"), "segment_end": port_a.get("segment_end"), "length": trim_a},
-            {"edge_key": port_b.get("edge_key"), "segment_end": port_b.get("segment_end"), "length": trim_b},
-        ]
-        aggregate_json = json.dumps(aggregate)
-        if getattr(obj, "ConnectionLengthsJson", "") != aggregate_json:
-            obj.ConnectionLengthsJson = aggregate_json
-
-    def _peekComponentTrims(self, comp_obj, left_tpl, right_tpl, analysis):
+    def _peekConnectionLengths(self, comp_obj, local_ports, topology, family, analysis):
         """
         Ask this component's own geometry backend how far it pushes out
-        past each of its two given (coincident) ports, purely to learn its
-        own (trim_left, trim_right) -- the shape itself is discarded here;
-        execute() (run right after composeComponents, via touch() +
-        recompute()) builds the real Shape with the exact same call using
-        the final anchor positions. Calling build_geometry twice per
-        component per sync is a deliberate, bounded cost -- see
-        composeComponents()'s docstring; it keeps execute() as the single
-        source of truth for Shape rather than caching a result across the
-        sync/recompute boundary.
+        past each of its given (coincident) ports, purely to learn its own
+        per-port trims -- the shape itself is discarded here; execute()
+        (run right after composeComponents, via touch() + recompute())
+        builds the real Shape with the exact same call using the final
+        anchor positions. Calling build_geometry twice per component per
+        sync is a deliberate, bounded cost -- see composeComponents()'s
+        docstring; it keeps execute() as the single source of truth for
+        Shape rather than caching a result across the sync/recompute
+        boundary.
 
-        Returns (0.0, 0.0) if the component has no type selected yet, or
-        its geometry backend fails/reports nothing for a given side.
+        local_ports can be an N-port list (the Primary, given its real
+        ports) or a 2-port list (an Inline component's own inner/outer
+        templates) -- both are handled identically here.
+
+        Returns {(edge_key, segment_end): trim_length}; empty if the
+        component has no type selected yet, or its geometry backend
+        fails/reports nothing.
         """
         library_id = getattr(comp_obj, "LibraryId", "")
         type_id = getattr(comp_obj, "TypeId", "")
         if not library_id or not type_id:
-            return 0.0, 0.0
+            return {}
 
         try:
             reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
             type_def = reg.resolve_type(library_id, type_id)
             if type_def is None:
-                return 0.0, 0.0
+                return {}
             params = reg.resolve_params(type_def, obj=comp_obj)
-            local_ports = [left_tpl, right_tpl]
             context = {
                 "obj": comp_obj,
                 "center_point": HVACLibraryAPI.average_point([p["position"] for p in local_ports]),
@@ -445,74 +467,67 @@ class DuctJunction:
                 # it, for consistency with DuctComponent.execute()'s own
                 # context (see there for why this matters, e.g. build_tee).
                 "analysis": analysis,
-                # DuctComponent has no Family of its own -- only a Primary's
-                # family-driven dispatch (e.g. through_generic) needs it,
-                # and this junction (self.Object) IS the parent, so read it
-                # directly rather than looking anything up.
-                "family": getattr(self.Object, "Family", "") if getattr(comp_obj, "ComponentRole", "") == "Primary" else "",
-                "topology": "through",
+                "family": family,
+                "topology": topology,
                 "type_id": type_id,
                 "library_id": library_id,
             }
             result = reg.build_geometry(library_id, type_def, context)
         except Exception:
-            return 0.0, 0.0
+            return {}
 
-        lengths = result.get("connection_lengths", []) or []
-
-        def _find(port):
-            for item in lengths:
-                if item.get("edge_key") == port.get("edge_key") and item.get("segment_end") == port.get("segment_end"):
-                    try:
-                        return max(0.0, float(item.get("length", 0.0) or 0.0))
-                    except Exception:
-                        return 0.0
-            return 0.0
-
-        return _find(left_tpl), _find(right_tpl)
+        out = {}
+        for item in result.get("connection_lengths", []) or []:
+            key = (item.get("edge_key"), item.get("segment_end"))
+            try:
+                out[key] = max(0.0, float(item.get("length", 0.0) or 0.0))
+            except Exception:
+                out[key] = 0.0
+        return out
 
     def aggregateConnectionLengths(self):
         """
         Build the external trim contract (spec: DuctJunction.
-        ConnectionLengthsJson is the only network-facing trimming contact)
-        for the single-component case: a plain fitting, or any node that
-        isn't a through/2-port chain (branch/cross/multiport/end). The
-        single component's own reported connection lengths already are the
-        correct, real-anchor-relative trims -- no aggregation math needed,
-        just a passthrough filtered to this junction's real
-        ConnectedEdgeKeys.
+        ConnectionLengthsJson is the only network-facing trimming contact),
+        independently per real edge:
 
-        A multi-component through/2-port chain's aggregate trim is instead
-        computed and written directly by composeComponents() (its Pass 4)
-        -- that needs the exact cumulative anchor geometry, which isn't
-        recoverable from the outermost component's own post-execute
-        ConnectionLengthsJson alone (that value is relative to its own
-        local anchor, not the true distance from the real boundary port),
-        so this method leaves it alone here.
+        - A chained edge's value was already computed and written by
+          composeComponents() (needs the exact cumulative chain anchor
+          geometry, not recoverable from any single component's own
+          post-execute ConnectionLengthsJson) -- left untouched here.
+        - A non-chained edge's value is a straight passthrough of the
+          Primary's own reported trim on that port.
         """
         obj = self.Object
-        components = self.getComponents()
-        if not components:
+        primary = self.getPrimaryComponent()
+        if primary is None:
             return
-
-        if getattr(obj, "Topology", "") == "through" and len(components) > 1:
-            return
-
-        first, last = components[0], components[-1]
-        try:
-            first_lengths = json.loads(getattr(first, "ConnectionLengthsJson", "") or "[]")
-        except Exception:
-            first_lengths = []
-        try:
-            last_lengths = json.loads(getattr(last, "ConnectionLengthsJson", "") or "[]")
-        except Exception:
-            last_lengths = []
 
         real_edge_keys = set(getattr(obj, "ConnectedEdgeKeys", []) or [])
-        combined = list(first_lengths) + (list(last_lengths) if last is not first else [])
-        out = [item for item in combined if isinstance(item, dict) and item.get("edge_key") in real_edge_keys]
+        chained_edge_keys = set(self.getPortChains().keys())
 
-        lengths_json = json.dumps(out)
+        try:
+            primary_lengths = {
+                item["edge_key"]: item for item in json.loads(getattr(primary, "ConnectionLengthsJson", "") or "[]")
+            }
+        except Exception:
+            primary_lengths = {}
+        try:
+            existing = {
+                item["edge_key"]: item for item in json.loads(getattr(obj, "ConnectionLengthsJson", "") or "[]")
+            }
+        except Exception:
+            existing = {}
+
+        out = {}
+        for edge_key in real_edge_keys:
+            if edge_key in chained_edge_keys:
+                if edge_key in existing:
+                    out[edge_key] = existing[edge_key]
+            elif edge_key in primary_lengths:
+                out[edge_key] = primary_lengths[edge_key]
+
+        lengths_json = json.dumps(list(out.values()))
         if getattr(obj, "ConnectionLengthsJson", "") != lengths_json:
             obj.ConnectionLengthsJson = lengths_json
 

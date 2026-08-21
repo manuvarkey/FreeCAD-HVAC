@@ -276,6 +276,40 @@ def test_execute_context_topology_resolved_from_parent_not_hardcoded(monkeypatch
     assert registry.last_context["topology"] == "branch"
 
 
+def test_execute_inline_always_synthesizes_topology_through(monkeypatch):
+    """
+    An Inline component is always a physically two-port device, no matter
+    what its parent junction's real topology is -- a damper attached to one
+    leg of a branch/cross tee must still validate as "through", not
+    "branch", or its type-def's declared topology check would wrongly
+    reject it.
+    """
+    class FakeParent:
+        Topology = "branch"
+        Family = "branch.tee"
+
+    class FakeDoc:
+        def getObject(self, name):
+            return FakeParent() if name == "Junc0" else None
+
+    obj = FakeDuctObj()
+    obj.Document = FakeDoc()
+    obj.LibraryId = "smacna"
+    obj.TypeId = "through_damper_generic"
+    obj.ComponentRole = "Inline"
+    obj.ParentJunctionName = "Junc0"
+    obj.LocalPortsJson = json.dumps([_port("N0#C_seam0", "end", True), _port("C", "start", False)])
+
+    registry = _FakeRegistry(_FakeTypeDef([]), {"shape": object(), "connection_lengths": []})
+    _patch_registry(monkeypatch, registry)
+
+    dc = _bare_component(obj)
+    dc.execute(obj)
+
+    assert registry.last_context["topology"] == "through"
+    assert registry.last_context["family"] == ""
+
+
 def test_execute_context_includes_parent_analysis(monkeypatch):
     """
     Regression: context["analysis"] was dropped entirely from

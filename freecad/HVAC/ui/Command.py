@@ -953,7 +953,7 @@ class CommandEditType:
 
 
 class CommandAddInlineComponent:
-    """Add an Inline device (damper, silencer, ...) to a selected through/2-port junction."""
+    """Add an Inline device (damper, silencer, ...) to one edge of a selected junction."""
 
     @staticmethod
     def _eligibleJunction():
@@ -979,9 +979,12 @@ class CommandAddInlineComponent:
 
         if junction is None:
             return None
-        if getattr(junction, "Topology", "") != "through" or int(getattr(junction, "Degree", 0) or 0) != 2:
+        if int(getattr(junction, "Degree", 0) or 0) < 1:
             return None
         return junction
+
+    def __init__(self):
+        self.task_panel = None
 
     def GetResources(self):
         return {
@@ -989,7 +992,7 @@ class CommandAddInlineComponent:
             'MenuText': QT_TRANSLATE_NOOP('HVAC_AddInlineComponent', 'Add Inline Component'),
             'ToolTip': QT_TRANSLATE_NOOP(
                 'HVAC_AddInlineComponent',
-                'Add an inline device (damper, silencer, ...) to a selected through/2-port junction'
+                'Add an inline device (damper, silencer, ...) to one edge of a selected junction'
             ),
             'CmdType': 'ForEdit',
         }
@@ -1000,58 +1003,16 @@ class CommandAddInlineComponent:
         return self._eligibleJunction() is not None
 
     def Activated(self):
-        from ..core.Component import DuctComponent
+        from ..ui.TaskPanel import TaskPanelAddInlineComponent
 
         junction = self._eligibleJunction()
         if junction is None:
             return
 
-        net = hvaclib.getOwnerNetwork(junction)
-        if net is None:
-            return
-
-        primary = junction.Proxy.getPrimaryComponent()
-        library_id = getattr(primary, "LibraryId", "") or net.Proxy.getDefaultLibraryId()
-        profile = getattr(primary, "Profile", "") if primary is not None else ""
-        types = hvaclib.HVACLibraryService.list_inline_types(
-            library_id, topology=getattr(junction, "Topology", ""), profile=profile,
+        self.task_panel = TaskPanelAddInlineComponent(
+            junction, apply_callback=Network.DuctNetwork.applyAddInlineComponent,
         )
-        if not types:
-            FreeCAD.Console.PrintWarning(
-                "HVAC - No inline component types available in library '{}'.\n".format(library_id)
-            )
-            return
-
-        labels = [t.label for t in types]
-        label, ok = QtWidgets.QInputDialog.getItem(
-            Gui.getMainWindow(),
-            translate("HVAC_AddInlineComponent", "Add Inline Component"),
-            translate("HVAC_AddInlineComponent", "Type:"),
-            labels, 0, False,
-        )
-        if not ok or not label:
-            return
-        type_def = types[labels.index(label)]
-
-        # New Inline components default to the end of the sequence (Sequence
-        # = current max + 10), leaving gaps so a user can reorder/insert by
-        # editing Sequence directly in the property editor.
-        existing = junction.Proxy.getComponents()
-        next_sequence = max((int(getattr(c, "Sequence", 0)) for c in existing), default=0) + 10
-
-        doc = net.Document
-        component = DuctComponent.create(
-            doc, "{}_Comp{}".format(junction.Name, next_sequence),
-            parent_junction=junction, role="Inline", sequence=next_sequence, owner_network=net,
-        )
-        net.Geometry.addObject(component)
-        component.LibraryId = library_id
-        component.TypeId = type_def.id
-        component.Proxy.applyTypeSchema()
-
-        proxy = getattr(net, "Proxy", None)
-        if proxy:
-            proxy.requestSync(force_recompute=True)
+        Gui.Control.showDialog(self.task_panel)
 
 
 class CommandRemoveInlineComponent:
