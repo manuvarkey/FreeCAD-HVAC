@@ -655,7 +655,8 @@ class TaskPanelAddInlineComponent:
             )
         role = translate("HVAC_AddInlineComponent", "inlet") if port.get("flow_into_junction") else translate("HVAC_AddInlineComponent", "outlet")
         direction = port.get("direction") or (0.0, 0.0, 0.0)
-        return "{} ({}) -- ({:.2f}, {:.2f}, {:.2f})".format(size, role, direction[0], direction[1], direction[2])
+        direction = [0.0 if abs(x) < 0.05 else x for x in direction]  # round small values to 0.0 to avoid noise
+        return "{} ({}) -- ({:.1f}, {:.1f}, {:.1f})".format(size, role, direction[0], direction[1], direction[2])
 
     def _currentPort(self):
         idx = self.edge_combo.currentIndex()
