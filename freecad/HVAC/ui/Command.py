@@ -232,13 +232,30 @@ class CommandCreateVirtualJunction:
                 if point:
                     points.add(hvaclib.vec_to_xyz(point))
 
-            # Case 2: Terminal Junction selected
+            # Case 2: Terminal Junction selected (e.g. from the tree view,
+            # where the logical DuctJunction node is still selectable even
+            # though it has no shape of its own)
             if hvaclib.isDuctJunction(sel.Object):
                 ana_nid = sel.Object.NodeId
                 geo_points = parser.node_group_members_xyz(ana_nid)
                 if geo_points:
                     points.add(geo_points[0])
-                
+
+            # Case 3: A junction's fitting geometry selected in the 3D view.
+            # DuctJunction itself is purely logical and has no Shape (see
+            # Junction.py), so the only thing a user can actually click on
+            # at a junction is one of its DuctComponent fittings -- resolve
+            # back to the owning junction via ParentJunctionName.
+            if hvaclib.isDuctComponent(sel.Object):
+                doc = sel.Object.Document
+                parent_name = getattr(sel.Object, "ParentJunctionName", "")
+                parent_junction = doc.getObject(parent_name) if parent_name else None
+                if parent_junction is not None and hvaclib.isDuctJunction(parent_junction):
+                    ana_nid = parent_junction.NodeId
+                    geo_points = parser.node_group_members_xyz(ana_nid)
+                    if geo_points:
+                        points.add(geo_points[0])
+
         return list(points)
 
     def Activated(self):
