@@ -1864,8 +1864,8 @@ class DuctNetwork:
     def applyAddInlineComponent(junction, edge_key, library_id, type_id):
         """
         Create a new Inline DuctComponent on junction, attached to edge_key,
-        and sync. (Used as callback for CommandAddInlineComponent's task
-        panel -- TaskPanelAddInlineComponent.)
+        and sync. (Used as callback for CommandEditInlineComponents' task
+        panel -- TaskPanelEditInlineComponents.)
         """
         from .Component import DuctComponent
 
@@ -1902,6 +1902,25 @@ class DuctNetwork:
         proxy = getattr(net, "Proxy", None)
         if proxy:
             proxy.requestSync(force_recompute=True)
+
+    @staticmethod
+    def applyRemoveInlineComponent(component):
+        """
+        Remove one Inline DuctComponent and sync. (Used as callback for
+        CommandEditInlineComponents' task panel -- TaskPanelEditInlineComponents.)
+        """
+        if component is None:
+            return
+
+        net = DuctNetwork.getOwnerNetwork(component)
+        if net is None:
+            return
+
+        proxy = getattr(net, "Proxy", None)
+        if proxy is None:
+            return
+        proxy.removeGeometryObject(component)
+        proxy.requestSync(force_recompute=True)
 
     @staticmethod
     def applyPlacementSelection(objects, attachment=None, offset=None, profile_x_axis=None):

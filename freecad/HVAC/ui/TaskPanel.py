@@ -35,6 +35,7 @@ translate = FreeCAD.Qt.translate
 
 from ..utils import hvaclib
 from ..utils import materials as hvac_materials
+from ..ui.Observer import buildPortHighlightCoinNode
 
 
 class TaskPanelActivate:
@@ -780,22 +781,57 @@ class TaskPanelTypeEditor:
         return True
 
 
-class TaskPanelAddInlineComponent:
+class TaskPanelEditInlineComponents:
     """
-    Task panel for adding an Inline device (damper, silencer, ...) to a
-    junction: pick which real edge to attach it to and which type, in one
-    step (rather than two sequential pop-up dialogs).
+    Task panel for managing a junction's Inline devices (dampers,
+    silencers, ...) in one place, replacing the previous separate Add/
+    Remove Inline Component commands: a list of what's already attached
+    (selecting an entry highlights it in the 3D view), a Delete button for
+    it, and an "Add inline component" section (pick which real edge to
+    attach a new one to and which type -- the old Add Inline Component
+    panel's own content) that highlights the currently-picked port with a
+    semi-transparent plane so a user can see which physical connection
+    "Attach to edge" refers to.
+
+    Add/remove act immediately through add_callback/remove_callback rather
+    than being deferred to accept() -- the list has to reflect each change
+    right away so the panel can stay open across several edits.
     """
 
-    def __init__(self, junction, apply_callback=None):
+    def __init__(self, junction, add_callback=None, remove_callback=None):
         self.junction = junction
-        self.apply_callback = apply_callback
+        self.add_callback = add_callback
+        self.remove_callback = remove_callback
+        self._highlight_root = None
+        self._components = []
+
         self.form = QtWidgets.QWidget()
-        self.form.setWindowTitle(translate("HVAC_AddInlineComponent", "Add Inline Component"))
+        self.form.setWindowTitle(translate("HVAC_EditInlineComponents", "Edit Inline Components"))
 
         layout = QtWidgets.QVBoxLayout(self.form)
         layout.addWidget(QtWidgets.QLabel(
-            translate("HVAC_AddInlineComponent", "Junction: {}").format(junction.Label)
+            translate("HVAC_EditInlineComponents", "Junction: {}").format(junction.Label)
+        ))
+
+        layout.addWidget(QtWidgets.QLabel(
+            translate("HVAC_EditInlineComponents", "Existing inline components:")
+        ))
+        self.component_list = QtWidgets.QListWidget()
+        self.component_list.currentRowChanged.connect(self._onSelectComponent)
+        layout.addWidget(self.component_list)
+
+        self.delete_button = QtWidgets.QPushButton(
+            translate("HVAC_EditInlineComponents", "Delete Selected")
+        )
+        self.delete_button.clicked.connect(self._deleteSelected)
+        layout.addWidget(self.delete_button)
+
+        separator = QtWidgets.QFrame()
+        separator.setFrameShape(QtWidgets.QFrame.HLine)
+        layout.addWidget(separator)
+
+        layout.addWidget(QtWidgets.QLabel(
+            translate("HVAC_EditInlineComponents", "Add inline component:")
         ))
 
         try:
@@ -804,7 +840,7 @@ class TaskPanelAddInlineComponent:
             analysis = {}
         self.ports = list(analysis.get("connected_ports", []) or [])
 
-        layout.addWidget(QtWidgets.QLabel(translate("HVAC_AddInlineComponent", "Attach to edge:")))
+        layout.addWidget(QtWidgets.QLabel(translate("HVAC_EditInlineComponents", "Attach to edge:")))
         self.edge_combo = QtWidgets.QComboBox()
         for port in self.ports:
             self.edge_combo.addItem(self._portLabel(port))
@@ -812,12 +848,67 @@ class TaskPanelAddInlineComponent:
         # Degree 1: nothing to choose, but still shown for clarity.
         self.edge_combo.setEnabled(len(self.ports) > 1)
 
-        layout.addWidget(QtWidgets.QLabel(translate("HVAC_AddInlineComponent", "Type:")))
+        layout.addWidget(QtWidgets.QLabel(translate("HVAC_EditInlineComponents", "Type:")))
         self.type_combo = QtWidgets.QComboBox()
         layout.addWidget(self.type_combo)
 
+        self.add_button = QtWidgets.QPushButton(translate("HVAC_EditInlineComponents", "Add"))
+        self.add_button.clicked.connect(self._addComponent)
+        layout.addWidget(self.add_button)
+
         self._refreshTypes()
         self.edge_combo.currentIndexChanged.connect(self._refreshTypes)
+        self.edge_combo.currentIndexChanged.connect(self._highlightCurrentPort)
+
+        self._refreshComponentList()
+        self._highlightCurrentPort()
+
+    # ------------------------------------------------------------------
+    # Existing components list
+    # ------------------------------------------------------------------
+
+    def _refreshComponentList(self):
+        self.component_list.blockSignals(True)
+        self.component_list.clear()
+        self._components = self.junction.Proxy.getInlineComponents()
+        for component in self._components:
+            self.component_list.addItem(self._componentLabel(component))
+        self.component_list.blockSignals(False)
+        Gui.Selection.clearSelection()
+
+    @classmethod
+    def _componentLabel(cls, component):
+        edge_key = getattr(component, "AttachedEdgeKey", "")
+        return "{} -- {}".format(edge_key, cls._typeLabel(component))
+
+    @staticmethod
+    def _typeLabel(component):
+        library_id = getattr(component, "LibraryId", "")
+        type_id = getattr(component, "TypeId", "")
+        reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
+        lib = reg.get_library(library_id) if library_id else None
+        tdef = lib.get_type(type_id) if lib is not None else None
+        return tdef.label if tdef is not None else (type_id or translate("HVAC_EditInlineComponents", "(no type)"))
+
+    def _onSelectComponent(self, row):
+        Gui.Selection.clearSelection()
+        if row is None or row < 0 or row >= len(self._components):
+            return
+        component = self._components[row]
+        Gui.Selection.addSelection(component.Document.Name, component.Name)
+
+    def _deleteSelected(self):
+        row = self.component_list.currentRow()
+        if row is None or row < 0 or row >= len(self._components):
+            return
+        component = self._components[row]
+        if self.remove_callback:
+            self.remove_callback(component)
+        self._refreshComponentList()
+
+    # ------------------------------------------------------------------
+    # Add section
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _portLabel(port):
@@ -831,7 +922,7 @@ class TaskPanelAddInlineComponent:
             size = "{:.0f} x {:.0f} mm".format(
                 section_params.get("Width", 0.0) or 0.0, section_params.get("Height", 0.0) or 0.0,
             )
-        role = translate("HVAC_AddInlineComponent", "inlet") if port.get("flow_into_junction") else translate("HVAC_AddInlineComponent", "outlet")
+        role = translate("HVAC_EditInlineComponents", "inlet") if port.get("flow_into_junction") else translate("HVAC_EditInlineComponents", "outlet")
         direction = port.get("direction") or (0.0, 0.0, 0.0)
         direction = [0.0 if abs(x) < 0.05 else x for x in direction]  # round small values to 0.0 to avoid noise
         return "{} ({}) -- ({:.1f}, {:.1f}, {:.1f})".format(size, role, direction[0], direction[1], direction[2])
@@ -860,22 +951,89 @@ class TaskPanelAddInlineComponent:
         for tdef in types:
             self.type_combo.addItem(tdef.label, tdef.id)
 
-    def accept(self):
+    def _translatedPort(self, port):
+        """
+        A connected_ports entry's own "position" is the raw, pre-fitting
+        anchor point every port on this junction shares before any
+        geometry backend pushes its own port outward (see Junction.py's
+        composeComponents() docstring) -- highlighting it as-is would
+        always land on the junction's shared center, not on the physical
+        duct wall / existing inline device chain a new component would
+        actually attach to. junction.ConnectionLengthsJson already holds
+        each real edge's current total push-out length (kept up to date by
+        composeComponents()/aggregateConnectionLengths() on every sync), so
+        translate the port that far along its own direction before
+        drawing the highlight.
+        """
+        edge_key = port.get("edge_key", "")
+        try:
+            lengths = json.loads(getattr(self.junction, "ConnectionLengthsJson", "") or "[]")
+        except Exception:
+            lengths = []
+        length = 0.0
+        for item in lengths:
+            if item.get("edge_key") == edge_key:
+                length = float(item.get("length", 0.0) or 0.0)
+                break
+
+        position = hvaclib.vec(port.get("position"))
+        direction = hvaclib.vec(port.get("direction"))
+        if position is None or direction is None:
+            return port
+
+        translated = dict(port)
+        translated["position"] = hvaclib.vec_to_xyz(position + direction * length)
+        return translated
+
+    def _highlightCurrentPort(self):
+        """Show a semi-transparent plane over the port picked in "Attach to
+        edge", sized ~2x its own duct section and centered on where a new
+        device would actually attach, so a user can see which physical
+        connection it refers to before adding one there."""
+        self._clearHighlight()
+        port = self._currentPort()
+        if port is None:
+            return
+        net = hvaclib.getOwnerNetwork(self.junction)
+        vobj = getattr(net, "ViewObject", None) if net is not None else None
+        if vobj is None:
+            return
+        try:
+            self._highlight_root = buildPortHighlightCoinNode(self._translatedPort(port))
+            vobj.RootNode.addChild(self._highlight_root)
+        except Exception:
+            self._highlight_root = None
+
+    def _clearHighlight(self):
+        if self._highlight_root is None:
+            return
+        try:
+            net = hvaclib.getOwnerNetwork(self.junction)
+            vobj = getattr(net, "ViewObject", None) if net is not None else None
+            if vobj is not None:
+                vobj.RootNode.removeChild(self._highlight_root)
+        except Exception:
+            pass
+        self._highlight_root = None
+
+    def _addComponent(self):
         port = self._currentPort()
         type_id = self.type_combo.currentData()
         if port is None or not type_id:
-            return True
+            return
 
         edge_key = port.get("edge_key", "")
         library_id = getattr(self, "_library_id", "")
-        if edge_key and self.apply_callback:
-            QtCore.QTimer.singleShot(
-                0,
-                lambda: self.apply_callback(self.junction, edge_key, library_id, type_id),
-            )
+        if edge_key and self.add_callback:
+            self.add_callback(self.junction, edge_key, library_id, type_id)
+        self._refreshComponentList()
+
+    def accept(self):
+        self._clearHighlight()
         return True
 
     def reject(self):
+        self._clearHighlight()
         return True
 
 

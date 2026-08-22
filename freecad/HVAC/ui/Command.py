@@ -1029,8 +1029,14 @@ class CommandEditMaterial:
         Gui.Control.showDialog(self.task_panel)
 
 
-class CommandAddInlineComponent:
-    """Add an Inline device (damper, silencer, ...) to one edge of a selected junction."""
+class CommandEditInlineComponents:
+    """
+    Manage a junction's Inline devices (dampers, silencers, ...) from one
+    TaskPanel: list what's already there (selecting an entry highlights it
+    in the 3D view), delete any of them, and add a new one to a chosen
+    edge -- replaces the previous separate Add/Remove Inline Component
+    commands (see ui/TaskPanel.py:TaskPanelEditInlineComponents).
+    """
 
     @staticmethod
     def _eligibleJunction():
@@ -1066,10 +1072,10 @@ class CommandAddInlineComponent:
     def GetResources(self):
         return {
             'Pixmap': hvaclib.get_icon_path("DuctsIcon.svg"),
-            'MenuText': QT_TRANSLATE_NOOP('HVAC_AddInlineComponent', 'Add Inline Component'),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_EditInlineComponents', 'Edit Inline Components'),
             'ToolTip': QT_TRANSLATE_NOOP(
-                'HVAC_AddInlineComponent',
-                'Add an inline device (damper, silencer, ...) to one edge of a selected junction'
+                'HVAC_EditInlineComponents',
+                'View, add, or remove inline devices (dampers, silencers, ...) on a junction'
             ),
             'CmdType': 'ForEdit',
         }
@@ -1080,62 +1086,18 @@ class CommandAddInlineComponent:
         return self._eligibleJunction() is not None
 
     def Activated(self):
-        from ..ui.TaskPanel import TaskPanelAddInlineComponent
+        from ..ui.TaskPanel import TaskPanelEditInlineComponents
 
         junction = self._eligibleJunction()
         if junction is None:
             return
 
-        self.task_panel = TaskPanelAddInlineComponent(
-            junction, apply_callback=Network.DuctNetwork.applyAddInlineComponent,
+        self.task_panel = TaskPanelEditInlineComponents(
+            junction,
+            add_callback=Network.DuctNetwork.applyAddInlineComponent,
+            remove_callback=Network.DuctNetwork.applyRemoveInlineComponent,
         )
         Gui.Control.showDialog(self.task_panel)
-
-
-class CommandRemoveInlineComponent:
-    """Remove selected Inline component(s) from their parent junction."""
-
-    @staticmethod
-    def _selectedInlineComponents():
-        selected_geom = hvaclib.selectedGeometryObjects() or []
-        return [
-            o for o in selected_geom
-            if hvaclib.isDuctComponent(o) and getattr(o, "ComponentRole", "") == "Inline"
-        ]
-
-    def GetResources(self):
-        return {
-            'Pixmap': hvaclib.get_icon_path("DuctsIcon.svg"),
-            'MenuText': QT_TRANSLATE_NOOP('HVAC_RemoveInlineComponent', 'Remove Inline Component'),
-            'ToolTip': QT_TRANSLATE_NOOP(
-                'HVAC_RemoveInlineComponent',
-                'Remove the selected inline component(s) from their parent junction'
-            ),
-            'CmdType': 'ForEdit',
-        }
-
-    def IsActive(self):
-        if Gui.ActiveDocument is None:
-            return False
-        return bool(self._selectedInlineComponents())
-
-    def Activated(self):
-        components = self._selectedInlineComponents()
-        if not components:
-            return
-
-        nets_to_sync = set()
-        for component in components:
-            net = hvaclib.getOwnerNetwork(component)
-            if net is None:
-                continue
-            nets_to_sync.add(net)
-            net.Proxy.removeGeometryObject(component)
-
-        for net in nets_to_sync:
-            proxy = getattr(net, "Proxy", None)
-            if proxy:
-                proxy.requestSync(force_recompute=True)
 
 
 class CommandSelectParentJunction:
@@ -1421,8 +1383,7 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand("HVAC_CreateSpline", CommandCreateSpline())
     FreeCAD.Gui.addCommand('HVAC_EditType', CommandEditType())
     FreeCAD.Gui.addCommand('HVAC_EditMaterial', CommandEditMaterial())
-    FreeCAD.Gui.addCommand('HVAC_AddInlineComponent', CommandAddInlineComponent())
-    FreeCAD.Gui.addCommand('HVAC_RemoveInlineComponent', CommandRemoveInlineComponent())
+    FreeCAD.Gui.addCommand('HVAC_EditInlineComponents', CommandEditInlineComponents())
     FreeCAD.Gui.addCommand('HVAC_SelectParentJunction', CommandSelectParentJunction())
     FreeCAD.Gui.addCommand('HVAC_EditPlacement', CommandEditPlacement())
     FreeCAD.Gui.addCommand('HVAC_EditNetworkTypeDefaults', CommandEditNetworkTypeDefaults())

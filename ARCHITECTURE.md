@@ -302,7 +302,7 @@ are never reachable through this automatic flow at all: their type-defs
 declare `selection: {kind: "inline"}`, which excludes them from both the
 model and placeholder match indexes entirely (`HVACLibrary.
 _rebuild_match_index`), so they're only reachable via `HVACLibrary.
-list_inline_types()` (the "Add Inline Component" UI action).
+list_inline_types()` (the "Edit Inline Components" UI action's Add section).
 
 Key rules (all enforced in `freecad/HVAC/library/Library.py`):
 - A type-def opts in via `family` (classifier keys it supports), `profiles`

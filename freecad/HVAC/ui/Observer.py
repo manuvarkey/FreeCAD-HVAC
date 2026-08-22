@@ -760,6 +760,65 @@ def buildArrowCoinNodes(lines, size_scale=1.0):
 
     return root
 
+def buildPortHighlightCoinNode(port):
+    """
+    Build one Coin node: a semi-transparent quad marking a junction port's
+    connection plane, centered on the port and sized to ~2x its own
+    section extents. Used by TaskPanelEditInlineComponents so a user can
+    see which physical port "Attach to edge" currently refers to, before
+    committing to it.
+
+    port: a connected_ports-style dict (position, direction, profile_x_axis,
+    section_params -- see NetworkParser.JunctionPort). `position` is taken
+    as-is here -- the caller is responsible for translating it to the
+    actual physical connection point (see TaskPanelEditInlineComponents.
+    _highlightCurrentPort), since a raw connected_ports position is only
+    the pre-fitting shared anchor point, not where a duct wall / existing
+    inline device chain actually ends.
+    """
+    position = port.get("position") or (0.0, 0.0, 0.0)
+    direction = port.get("direction") or (0.0, 0.0, 1.0)
+    preferred_x = port.get("profile_x_axis")
+    section_params = port.get("section_params", {}) or {}
+
+    width, height = hvaclib.get_section_extents(section_params)
+    if width <= 0.0 or height <= 0.0:
+        # Section params missing/degenerate -- fall back to a fixed size
+        # rather than drawing a zero-area (invisible) highlight.
+        width = height = 100.0
+    half_w = width  # half of 2x the full width
+    half_h = height
+
+    origin = FreeCAD.Vector(*position)
+    _, x_dir, y_dir, _ = hvaclib.make_profile_frame(direction, preferred_x, origin)
+
+    p1 = origin - x_dir * half_w - y_dir * half_h
+    p2 = origin + x_dir * half_w - y_dir * half_h
+    p3 = origin + x_dir * half_w + y_dir * half_h
+    p4 = origin - x_dir * half_w + y_dir * half_h
+
+    root = coin.SoSeparator()
+
+    mat = coin.SoMaterial()
+    mat.diffuseColor.setValue(0.2, 0.6, 1.0)
+    mat.transparency.setValue(0.5)
+    root.addChild(mat)
+
+    coords = coin.SoCoordinate3()
+    coords.point.setValues(0, 4, [
+        (p1.x, p1.y, p1.z),
+        (p2.x, p2.y, p2.z),
+        (p3.x, p3.y, p3.z),
+        (p4.x, p4.y, p4.z),
+    ])
+    root.addChild(coords)
+
+    face = coin.SoFaceSet()
+    face.numVertices.setValue(4)
+    root.addChild(face)
+
+    return root
+
 def iter_line_segments_from_shape(obj, tol=1e-9):
     """
     Yield per-edge path records for supported shape edges.
