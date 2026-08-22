@@ -1261,6 +1261,47 @@ def _spreadsheet_cell(col, row):
     return "{}{}".format(letters, row + 1)
 
 
+def _resolveSelectableObject(obj):
+    """
+    A DuctJunction has no Shape of its own and can't be highlighted in the
+    3D view -- retarget to its Primary DuctComponent (the actual visible
+    fitting), same convention CommandEditType/CommandEditMaterial already
+    use for junction selections.
+    """
+    if obj is None:
+        return None
+    if hvaclib.isDuctJunction(obj):
+        proxy = getattr(obj, "Proxy", None)
+        primary = proxy.getPrimaryComponent() if proxy is not None else None
+        return primary if primary is not None else obj
+    return obj
+
+
+def _wireTableRowSelection(table, objs):
+    """
+    Select the corresponding document object(s) in the 3D view whenever a
+    row of `table` is selected -- `objs[row]` is that row's own object
+    (used by TaskPanelAirflowResults/TaskPanelSizeDucts' results tables).
+    Row-based (not per-cell) selection, so clicking any cell picks the
+    whole row's object.
+    """
+    table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+
+    def _onSelectionChanged():
+        Gui.Selection.clearSelection()
+        rows = {index.row() for index in table.selectedIndexes()}
+        for row in rows:
+            if 0 <= row < len(objs):
+                target = _resolveSelectableObject(objs[row])
+                if target is not None:
+                    try:
+                        Gui.Selection.addSelection(target.Document.Name, target.Name)
+                    except Exception:
+                        pass
+
+    table.itemSelectionChanged.connect(_onSelectionChanged)
+
+
 class TaskPanelAirflowResults:
     """Read-only report panel showing the results of an airflow/pressure-drop calculation."""
 
@@ -1388,6 +1429,7 @@ class TaskPanelAirflowResults:
             for col, value in enumerate(values):
                 seg_table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
         seg_table.resizeColumnsToContents()
+        _wireTableRowSelection(seg_table, [seg.obj for seg in comp.segments])
         layout.addWidget(QtWidgets.QLabel(translate("HVAC_CalculateAirflow", "Segments")))
         layout.addWidget(seg_table)
 
@@ -1406,6 +1448,7 @@ class TaskPanelAirflowResults:
             for col, value in enumerate(values):
                 junc_table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
         junc_table.resizeColumnsToContents()
+        _wireTableRowSelection(junc_table, [junc.obj for junc in comp.junctions])
         layout.addWidget(QtWidgets.QLabel(translate("HVAC_CalculateAirflow", "Junctions")))
         layout.addWidget(junc_table)
 
@@ -1752,6 +1795,7 @@ class TaskPanelSizeDucts:
             for col, value in enumerate(values):
                 table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
         table.resizeColumnsToContents()
+        _wireTableRowSelection(table, [sres.obj for sres in result.segments])
         self.results_layout.addWidget(table)
 
     def _formatSize(self, profile, diameter_mm, width_mm, height_mm):
