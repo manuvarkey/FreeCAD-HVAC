@@ -77,8 +77,8 @@ class HVAC(Gui.Workbench):
                                 # 'HVAC_ReverseGeometryDirection',
                                 "Separator",
                                 'HVAC_EditType',
-                                'HVAC_EditInlineComponents',
                                 'HVAC_EditPlacement',
+                                'HVAC_EditInlineComponents',
                                 'HVAC_EditMaterial',
                                 'HVAC_ResetTypesToDefaults'
                                 ]
@@ -100,8 +100,8 @@ class HVAC(Gui.Workbench):
                                 # 'HVAC_ReverseGeometryDirection',
                                 "Separator",
                                 'HVAC_EditType',
-                                'HVAC_EditInlineComponents',
                                 'HVAC_EditPlacement',
+                                'HVAC_EditInlineComponents',
                                 'HVAC_EditMaterial',
                                 'HVAC_ResetTypesToDefaults'
                                 ]
@@ -123,8 +123,8 @@ class HVAC(Gui.Workbench):
                                 # 'HVAC_ReverseGeometryDirection',
                                 "Separator",
                                 'HVAC_EditType',
-                                'HVAC_EditInlineComponents',
                                 'HVAC_EditPlacement',
+                                'HVAC_EditInlineComponents',
                                 'HVAC_EditMaterial',
                                 'HVAC_ResetTypesToDefaults'
                                 ]

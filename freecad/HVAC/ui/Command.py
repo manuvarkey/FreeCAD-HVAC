@@ -985,7 +985,7 @@ class CommandEditMaterial:
 
     def GetResources(self):
         return {
-            'Pixmap': hvaclib.get_icon_path("EditPlacement.svg"),
+            'Pixmap': hvaclib.get_icon_path("EditMaterial.svg"),
             'MenuText': QT_TRANSLATE_NOOP('HVAC_EditMaterial', 'Edit Material'),
             'ToolTip': QT_TRANSLATE_NOOP(
                 'HVAC_EditMaterial',
@@ -1071,7 +1071,7 @@ class CommandEditInlineComponents:
 
     def GetResources(self):
         return {
-            'Pixmap': hvaclib.get_icon_path("DuctsIcon.svg"),
+            'Pixmap': hvaclib.get_icon_path("EditInlineComponent.svg"),
             'MenuText': QT_TRANSLATE_NOOP('HVAC_EditInlineComponents', 'Edit Inline Components'),
             'ToolTip': QT_TRANSLATE_NOOP(
                 'HVAC_EditInlineComponents',
@@ -1178,7 +1178,7 @@ class CommandCalculateAirflow:
 
     def GetResources(self):
         return {
-            'Pixmap': hvaclib.get_icon_path("Defaults.svg"),
+            'Pixmap': hvaclib.get_icon_path("CalculateAirflow.svg"),
             'MenuText': QT_TRANSLATE_NOOP('HVAC_CalculateAirflow', 'Calculate Airflow'),
             'ToolTip': QT_TRANSLATE_NOOP(
                 'HVAC_CalculateAirflow',
@@ -1230,7 +1230,7 @@ class CommandSizeDucts:
 
     def GetResources(self):
         return {
-            'Pixmap': hvaclib.get_icon_path("Defaults.svg"),
+            'Pixmap': hvaclib.get_icon_path("SizeDucts.svg"),
             'MenuText': QT_TRANSLATE_NOOP('HVAC_SizeDucts', 'Size Ducts'),
             'ToolTip': QT_TRANSLATE_NOOP(
                 'HVAC_SizeDucts',
