@@ -1216,7 +1216,14 @@ class CommandCalculateAirflow:
 
 
 class CommandSizeDucts:
-    """Compute proposed duct sizes for the active network (preview before applying)."""
+    """
+    Compute proposed duct sizes for the active network (preview before
+    applying). Opens one task panel covering both the network's own sizing
+    parameters (SizingMethod/TargetVelocity/etc -- previously only
+    reachable through the raw property editor) and the results/warnings of
+    the last "Run Duct Sizing" click -- see
+    ui/TaskPanel.py:TaskPanelSizeDucts.
+    """
 
     def __init__(self):
         self.task_panel = None
@@ -1238,24 +1245,13 @@ class CommandSizeDucts:
         return hvaclib.activeHVACNetwork() is not None
 
     def Activated(self):
-        from ..core.DuctSizer import DuctSizer
-        from ..ui.TaskPanel import TaskPanelDuctSizingResults
+        from ..ui.TaskPanel import TaskPanelSizeDucts
 
         net = hvaclib.activeHVACNetwork()
         if net is None:
             return
 
-        sizer = DuctSizer(net)
-        try:
-            result = sizer.solve()
-        except Exception as e:
-            FreeCAD.Console.PrintWarning(
-                "HVAC - SizeDucts - Error sizing network '{}': {}\n".format(net.Label, e)
-            )
-            FreeCAD.Console.PrintMessage(traceback.format_exc())
-            return
-
-        self.task_panel = TaskPanelDuctSizingResults(net, sizer, result)
+        self.task_panel = TaskPanelSizeDucts(net)
         Gui.Control.showDialog(self.task_panel)
 
 

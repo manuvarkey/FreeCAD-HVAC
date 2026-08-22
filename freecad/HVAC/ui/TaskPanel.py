@@ -24,6 +24,7 @@
 """This module implements HVAC duct description classes."""
 
 import json
+import traceback
 
 import FreeCAD
 import FreeCADGui as Gui
@@ -1382,20 +1383,215 @@ class TaskPanelAirflowResults:
         return True
 
 
-class TaskPanelDuctSizingResults:
-    """Preview panel for a duct-sizing pass. OK applies the proposed sizes; Cancel discards them."""
+class TaskPanelSizeDucts:
+    """
+    Combined duct-sizing task panel: an editable "Sizing Parameters"
+    section (the network's own SizingMethod/TargetVelocity/etc -- the same
+    "HVAC Duct Sizing" group properties otherwise only reachable through
+    the raw property editor) with a "Run Duct Sizing" button, followed by
+    the results/warnings section built fresh each time that button is
+    clicked. OK applies the last computed proposed sizes; Cancel discards
+    them (parameter edits already written to the network by a Run are
+    kept either way, same as editing them directly in the property editor
+    would be).
+    """
 
     HEADERS = ["Segment", "Profile", "Current Size", "Proposed Size", "Velocity (m/s)",
                "Friction Rate (Pa/m)", "Balanced"]
 
-    def __init__(self, network_obj, sizer, result):
+    SIZING_METHODS = [
+        ("ConstantVelocity", "Constant Velocity"),
+        ("ConstantFrictionRate", "Constant Friction Rate"),
+        ("StaticRegain", "Static Regain"),
+    ]
+    RECTANGULAR_SIZING_MODES = [
+        ("FixedAspectRatio", "Fixed Aspect Ratio"),
+        ("FixedHeight", "Fixed Height"),
+        ("FixedWidth", "Fixed Width"),
+    ]
+
+    def __init__(self, network_obj):
         self.network_obj = network_obj
-        self.sizer = sizer
-        self.result = result
+        self.sizer = None
+        self.result = None
 
         self.form = QtWidgets.QWidget()
-        self.form.setWindowTitle(translate("HVAC_SizeDucts", "Duct Sizing Results"))
-        layout = QtWidgets.QVBoxLayout(self.form)
+        self.form.setWindowTitle(translate("HVAC_SizeDucts", "Size Ducts"))
+        self.layout = QtWidgets.QVBoxLayout(self.form)
+
+        self.layout.addWidget(QtWidgets.QLabel(
+            translate("HVAC_SizeDucts", "Network: {}").format(network_obj.Label)
+        ))
+
+        self.layout.addWidget(self._buildParametersGroup())
+
+        self.run_button = QtWidgets.QPushButton(translate("HVAC_SizeDucts", "Run Duct Sizing"))
+        self.run_button.clicked.connect(self._runSizing)
+        self.layout.addWidget(self.run_button)
+
+        # Populated by _showResults() each time Run is clicked -- empty
+        # until the first run.
+        self.results_container = QtWidgets.QWidget()
+        self.results_layout = QtWidgets.QVBoxLayout(self.results_container)
+        self.results_layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.addWidget(self.results_container)
+
+        self._loadFromNetwork()
+        self.sizing_method_combo.currentIndexChanged.connect(self._refreshParameterVisibility)
+        self.rectangular_sizing_mode_combo.currentIndexChanged.connect(self._refreshParameterVisibility)
+        self._refreshParameterVisibility()
+
+    def _buildParametersGroup(self):
+        group = QtWidgets.QGroupBox(translate("HVAC_SizeDucts", "Sizing Parameters"))
+        grid = QtWidgets.QGridLayout(group)
+        row = 0
+
+        grid.addWidget(QtWidgets.QLabel(translate("HVAC_SizeDucts", "Sizing method:")), row, 0)
+        self.sizing_method_combo = QtWidgets.QComboBox()
+        for value, label in self.SIZING_METHODS:
+            self.sizing_method_combo.addItem(translate("HVAC_SizeDucts", label), value)
+        grid.addWidget(self.sizing_method_combo, row, 1)
+        row += 1
+
+        self.target_velocity_label = QtWidgets.QLabel(translate("HVAC_SizeDucts", "Target velocity:"))
+        grid.addWidget(self.target_velocity_label, row, 0)
+        self.target_velocity = QtWidgets.QDoubleSpinBox()
+        self.target_velocity.setDecimals(2)
+        self.target_velocity.setRange(0.0, 1e6)
+        self.target_velocity.setSingleStep(0.5)
+        self.target_velocity.setSuffix(" m/s")
+        grid.addWidget(self.target_velocity, row, 1)
+        row += 1
+
+        self.target_friction_rate_label = QtWidgets.QLabel(translate("HVAC_SizeDucts", "Target friction rate:"))
+        grid.addWidget(self.target_friction_rate_label, row, 0)
+        self.target_friction_rate = QtWidgets.QDoubleSpinBox()
+        self.target_friction_rate.setDecimals(3)
+        self.target_friction_rate.setRange(0.0, 1e6)
+        self.target_friction_rate.setSingleStep(0.1)
+        self.target_friction_rate.setSuffix(" Pa/m")
+        grid.addWidget(self.target_friction_rate, row, 1)
+        row += 1
+
+        self.static_regain_factor_label = QtWidgets.QLabel(translate("HVAC_SizeDucts", "Static regain factor:"))
+        grid.addWidget(self.static_regain_factor_label, row, 0)
+        self.static_regain_factor = QtWidgets.QDoubleSpinBox()
+        self.static_regain_factor.setDecimals(2)
+        self.static_regain_factor.setRange(0.0, 1.0)
+        self.static_regain_factor.setSingleStep(0.05)
+        grid.addWidget(self.static_regain_factor, row, 1)
+        row += 1
+
+        self.minimum_velocity_label = QtWidgets.QLabel(translate("HVAC_SizeDucts", "Minimum velocity:"))
+        grid.addWidget(self.minimum_velocity_label, row, 0)
+        self.minimum_velocity = QtWidgets.QDoubleSpinBox()
+        self.minimum_velocity.setDecimals(2)
+        self.minimum_velocity.setRange(0.0, 1e6)
+        self.minimum_velocity.setSingleStep(0.5)
+        self.minimum_velocity.setSuffix(" m/s")
+        grid.addWidget(self.minimum_velocity, row, 1)
+        row += 1
+
+        grid.addWidget(QtWidgets.QLabel(translate("HVAC_SizeDucts", "Rectangular sizing mode:")), row, 0)
+        self.rectangular_sizing_mode_combo = QtWidgets.QComboBox()
+        for value, label in self.RECTANGULAR_SIZING_MODES:
+            self.rectangular_sizing_mode_combo.addItem(translate("HVAC_SizeDucts", label), value)
+        grid.addWidget(self.rectangular_sizing_mode_combo, row, 1)
+        row += 1
+
+        self.target_aspect_ratio_label = QtWidgets.QLabel(translate("HVAC_SizeDucts", "Target aspect ratio:"))
+        grid.addWidget(self.target_aspect_ratio_label, row, 0)
+        self.target_aspect_ratio = QtWidgets.QDoubleSpinBox()
+        self.target_aspect_ratio.setDecimals(2)
+        self.target_aspect_ratio.setRange(0.1, 100.0)
+        self.target_aspect_ratio.setSingleStep(0.1)
+        grid.addWidget(self.target_aspect_ratio, row, 1)
+        row += 1
+
+        grid.addWidget(QtWidgets.QLabel(translate("HVAC_SizeDucts", "Size rounding increment:")), row, 0)
+        self.size_rounding_increment = QtWidgets.QDoubleSpinBox()
+        self.size_rounding_increment.setDecimals(1)
+        self.size_rounding_increment.setRange(0.1, 1e6)
+        self.size_rounding_increment.setSingleStep(5.0)
+        self.size_rounding_increment.setSuffix(" mm")
+        grid.addWidget(self.size_rounding_increment, row, 1)
+
+        return group
+
+    def _loadFromNetwork(self):
+        net = self.network_obj
+
+        method = str(getattr(net, "SizingMethod", "ConstantVelocity") or "ConstantVelocity")
+        idx = self.sizing_method_combo.findData(method)
+        self.sizing_method_combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+        self.target_velocity.setValue(float(getattr(net, "TargetVelocity", 5.0) or 5.0))
+        self.target_friction_rate.setValue(float(getattr(net, "TargetFrictionRate", 1.0) or 1.0))
+        self.static_regain_factor.setValue(float(getattr(net, "StaticRegainFactor", 0.75) or 0.75))
+        self.minimum_velocity.setValue(float(getattr(net, "MinimumVelocity", 2.5) or 2.5))
+
+        mode = str(getattr(net, "RectangularSizingMode", "FixedAspectRatio") or "FixedAspectRatio")
+        idx = self.rectangular_sizing_mode_combo.findData(mode)
+        self.rectangular_sizing_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+        self.target_aspect_ratio.setValue(float(getattr(net, "TargetAspectRatio", 2.0) or 2.0))
+        self.size_rounding_increment.setValue(float(getattr(net, "SizeRoundingIncrement", 10.0) or 10.0))
+
+    def _refreshParameterVisibility(self):
+        """Only show the parameters relevant to the currently-picked SizingMethod/RectangularSizingMode."""
+        method = self.sizing_method_combo.currentData()
+        for widget in (self.target_velocity_label, self.target_velocity):
+            widget.setVisible(method in ("ConstantVelocity", "StaticRegain"))
+        for widget in (self.target_friction_rate_label, self.target_friction_rate):
+            widget.setVisible(method == "ConstantFrictionRate")
+        for widget in (self.static_regain_factor_label, self.static_regain_factor):
+            widget.setVisible(method == "StaticRegain")
+        for widget in (self.minimum_velocity_label, self.minimum_velocity):
+            widget.setVisible(method == "StaticRegain")
+
+        show_aspect_ratio = self.rectangular_sizing_mode_combo.currentData() == "FixedAspectRatio"
+        for widget in (self.target_aspect_ratio_label, self.target_aspect_ratio):
+            widget.setVisible(show_aspect_ratio)
+
+    def _applyParametersToNetwork(self):
+        net = self.network_obj
+        net.SizingMethod = self.sizing_method_combo.currentData()
+        net.TargetVelocity = self.target_velocity.value()
+        net.TargetFrictionRate = self.target_friction_rate.value()
+        net.StaticRegainFactor = self.static_regain_factor.value()
+        net.MinimumVelocity = self.minimum_velocity.value()
+        net.RectangularSizingMode = self.rectangular_sizing_mode_combo.currentData()
+        net.TargetAspectRatio = self.target_aspect_ratio.value()
+        net.SizeRoundingIncrement = self.size_rounding_increment.value()
+
+    def _runSizing(self):
+        from ..core.DuctSizer import DuctSizer
+
+        self._applyParametersToNetwork()
+
+        sizer = DuctSizer(self.network_obj)
+        try:
+            result = sizer.solve()
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(
+                "HVAC - SizeDucts - Error sizing network '{}': {}\n".format(self.network_obj.Label, e)
+            )
+            FreeCAD.Console.PrintMessage(traceback.format_exc())
+            return
+
+        self.sizer = sizer
+        self.result = result
+        self._showResults(result)
+
+    def _clearResults(self):
+        while self.results_layout.count():
+            item = self.results_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _showResults(self, result):
+        self._clearResults()
 
         if result.warnings:
             warn_box = QtWidgets.QGroupBox(translate("HVAC_SizeDucts", "Warnings"))
@@ -1403,7 +1599,7 @@ class TaskPanelDuctSizingResults:
             warn_label = QtWidgets.QLabel("\n".join(result.warnings))
             warn_label.setWordWrap(True)
             warn_layout.addWidget(warn_label)
-            layout.addWidget(warn_box)
+            self.results_layout.addWidget(warn_box)
 
         info = QtWidgets.QLabel(
             translate(
@@ -1413,7 +1609,7 @@ class TaskPanelDuctSizingResults:
             )
         )
         info.setWordWrap(True)
-        layout.addWidget(info)
+        self.results_layout.addWidget(info)
 
         table = QtWidgets.QTableWidget(len(result.segments), len(self.HEADERS))
         table.setHorizontalHeaderLabels(self.HEADERS)
@@ -1436,7 +1632,7 @@ class TaskPanelDuctSizingResults:
             for col, value in enumerate(values):
                 table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
         table.resizeColumnsToContents()
-        layout.addWidget(table)
+        self.results_layout.addWidget(table)
 
     def _formatSize(self, profile, diameter_mm, width_mm, height_mm):
         if profile == "Circular":
@@ -1444,9 +1640,10 @@ class TaskPanelDuctSizingResults:
         return "{:.0f} x {:.0f} mm".format(width_mm, height_mm)
 
     def accept(self):
-        changed_count = self.sizer.apply(self.result)
-        if changed_count and getattr(self.network_obj, "Document", None):
-            self.network_obj.Document.recompute()
+        if self.sizer is not None and self.result is not None:
+            changed_count = self.sizer.apply(self.result)
+            if changed_count and getattr(self.network_obj, "Document", None):
+                self.network_obj.Document.recompute()
         return True
 
     def reject(self):
