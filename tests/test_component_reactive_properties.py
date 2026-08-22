@@ -10,6 +10,7 @@ DuctComponent.
 import json
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
+import pytest
 
 from freecad.HVAC.core import Component as component_mod
 from freecad.HVAC.library.Library import HVACPropertyDef
@@ -78,6 +79,7 @@ def _patch_registry(monkeypatch, registry):
 def _bare_component(obj):
     dc = component_mod.DuctComponent.__new__(component_mod.DuctComponent)
     dc.Object = obj
+    dc._mirroring_design_flow_rate = False
     return dc
 
 
@@ -351,3 +353,105 @@ def test_execute_context_includes_parent_analysis(monkeypatch):
     dc.execute(obj)
 
     assert registry.last_context["analysis"] == analysis_dict
+
+
+# ----------------------------------------------------------------------
+# DesignFlowRate: two-way proxy for the parent junction's own property
+# (see Junction.py's DesignFlowRate/onChanged) -- a junction has no Shape
+# and can't be selected in the 3D view, so a terminal's design flow rate is
+# exposed here on its visible Primary fitting instead.
+# ----------------------------------------------------------------------
+
+class _FakeParentJunction:
+    def __init__(self, topology, design_flow_rate=0.0):
+        self.Topology = topology
+        self.DesignFlowRate = design_flow_rate
+
+
+class _FakeParentDoc:
+    def __init__(self, parent):
+        self._parent = parent
+
+    def getObject(self, name):
+        return self._parent if name == "Junc0" else None
+
+
+@pytest.mark.parametrize("role,topology,expected_mode", [
+    ("Primary", "end", 0),
+    ("Primary", "through", 2),
+    ("Primary", "branch", 2),
+    ("Inline", "end", 2),
+])
+def test_sync_design_flow_rate_editable_only_for_end_topology_primary(role, topology, expected_mode):
+    obj = FakeDuctObj()
+    obj.addProperty("App::PropertyFloat", "DesignFlowRate", "Airflow", "")
+    obj.ComponentRole = role
+    obj.ParentJunctionName = "Junc0"
+    obj.Document = _FakeParentDoc(_FakeParentJunction(topology))
+
+    dc = _bare_component(obj)
+    dc._syncDesignFlowRate(obj)
+
+    assert obj._editor_modes["DesignFlowRate"] == expected_mode
+
+
+def test_sync_design_flow_rate_pulls_down_current_parent_value():
+    obj = FakeDuctObj()
+    obj.addProperty("App::PropertyFloat", "DesignFlowRate", "Airflow", "")
+    obj.DesignFlowRate = 0.0
+    obj.ComponentRole = "Primary"
+    obj.ParentJunctionName = "Junc0"
+    obj.Document = _FakeParentDoc(_FakeParentJunction("end", design_flow_rate=250.0))
+
+    dc = _bare_component(obj)
+    dc._syncDesignFlowRate(obj)
+
+    assert obj.DesignFlowRate == 250.0
+
+
+def test_on_changed_pushes_primary_edit_up_to_parent_junction():
+    parent = _FakeParentJunction("end", design_flow_rate=0.0)
+    obj = FakeDuctObj()
+    obj.addProperty("App::PropertyFloat", "DesignFlowRate", "Airflow", "")
+    obj.ComponentRole = "Primary"
+    obj.ParentJunctionName = "Junc0"
+    obj.Document = _FakeParentDoc(parent)
+    obj.DesignFlowRate = 500.0
+
+    dc = _bare_component(obj)
+    dc.onChanged(obj, "DesignFlowRate")
+
+    assert parent.DesignFlowRate == 500.0
+
+
+def test_on_changed_ignores_properties_other_than_design_flow_rate():
+    parent = _FakeParentJunction("end", design_flow_rate=0.0)
+    obj = FakeDuctObj()
+    obj.addProperty("App::PropertyFloat", "DesignFlowRate", "Airflow", "")
+    obj.ComponentRole = "Primary"
+    obj.ParentJunctionName = "Junc0"
+    obj.Document = _FakeParentDoc(parent)
+    obj.DesignFlowRate = 500.0
+
+    dc = _bare_component(obj)
+    dc.onChanged(obj, "TypeId")
+
+    assert parent.DesignFlowRate == 0.0
+
+
+def test_on_changed_never_pushes_an_inline_components_own_edit():
+    """An Inline component (e.g. a damper) is never a terminal -- its own
+    DesignFlowRate has no meaning and must never overwrite the parent
+    junction's value."""
+    parent = _FakeParentJunction("end", design_flow_rate=0.0)
+    obj = FakeDuctObj()
+    obj.addProperty("App::PropertyFloat", "DesignFlowRate", "Airflow", "")
+    obj.ComponentRole = "Inline"
+    obj.ParentJunctionName = "Junc0"
+    obj.Document = _FakeParentDoc(parent)
+    obj.DesignFlowRate = 999.0
+
+    dc = _bare_component(obj)
+    dc.onChanged(obj, "DesignFlowRate")
+
+    assert parent.DesignFlowRate == 0.0

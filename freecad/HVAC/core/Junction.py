@@ -83,6 +83,7 @@ class DuctJunction:
         obj.Proxy = self
         self.Object = obj
         self._allow_delete = False
+        self._mirroring_design_flow_rate = False
         self.setProperties(obj)
         self.updateMetadata(
             owner=owner,
@@ -97,6 +98,7 @@ class DuctJunction:
         obj.Proxy = self
         self.Object = obj
         self._allow_delete = False
+        self._mirroring_design_flow_rate = False
         self.setProperties(obj)
 
     def dumps(self):
@@ -110,6 +112,27 @@ class DuctJunction:
         # fitting is generated independently by its DuctComponent children
         # (see Component.py's own execute()). Nothing to do here.
         pass
+
+    def onChanged(self, obj, prop):
+        # DesignFlowRate has a two-way mirror onto the Primary component's
+        # own DesignFlowRate (see Component.py's onChanged) -- a junction
+        # has no Shape and can't be picked in the 3D view, so a user needs
+        # to be able to set/see this from the visible terminal fitting too.
+        # The guard flag stops the two onChanged handlers from bouncing the
+        # same edit back and forth forever.
+        if prop != "DesignFlowRate" or self._mirroring_design_flow_rate:
+            return
+        primary = self.getPrimaryComponent()
+        if primary is None or "DesignFlowRate" not in primary.PropertiesList:
+            return
+        value = float(getattr(obj, "DesignFlowRate", 0.0) or 0.0)
+        if float(getattr(primary, "DesignFlowRate", 0.0) or 0.0) == value:
+            return
+        self._mirroring_design_flow_rate = True
+        try:
+            primary.DesignFlowRate = value
+        finally:
+            self._mirroring_design_flow_rate = False
 
     def setProperties(self, obj):
         self._addProperty(obj, "App::PropertyString", "OwnerNetworkName", "HVAC", "Owning duct network")

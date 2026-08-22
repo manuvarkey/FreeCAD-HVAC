@@ -58,6 +58,7 @@ class FakeComponentObj:
 def _bare_junction(obj):
     dj = junction_mod.DuctJunction.__new__(junction_mod.DuctJunction)
     dj.Object = obj
+    dj._mirroring_design_flow_rate = False
     return dj
 
 
@@ -532,3 +533,51 @@ def test_compose_independent_chains_on_two_edges_of_same_branch(monkeypatch):
 
     lengths = {item["edge_key"]: item["length"] for item in json.loads(junction.ConnectionLengthsJson)}
     assert lengths == {"B": 30.0, "C": 30.0}
+
+
+# ----------------------------------------------------------------------
+# onChanged: DesignFlowRate two-way mirror onto the Primary component
+# (see Component.py's own onChanged/_syncDesignFlowRate for the reverse
+# direction) -- DuctJunction has no Shape and can't be selected in the 3D
+# view, so a terminal's design flow rate needs to be settable from its
+# visible Primary fitting too.
+# ----------------------------------------------------------------------
+
+def test_on_changed_pushes_design_flow_rate_down_to_primary_component(monkeypatch):
+    junction = FakeJunctionObj(topology="end")
+    junction.DesignFlowRate = 350.0
+    primary = FakeComponentObj("C0", "Junc0", "Primary")
+    primary.PropertiesList = ["DesignFlowRate"]
+    primary.DesignFlowRate = 0.0
+    net = FakeNetworkObj([primary])
+    _patch_component_lookup(monkeypatch, net)
+
+    dj = _bare_junction(junction)
+    dj.onChanged(junction, "DesignFlowRate")
+
+    assert primary.DesignFlowRate == 350.0
+
+
+def test_on_changed_ignores_properties_other_than_design_flow_rate(monkeypatch):
+    junction = FakeJunctionObj(topology="end")
+    junction.DesignFlowRate = 350.0
+    primary = FakeComponentObj("C0", "Junc0", "Primary")
+    primary.PropertiesList = ["DesignFlowRate"]
+    primary.DesignFlowRate = 0.0
+    net = FakeNetworkObj([primary])
+    _patch_component_lookup(monkeypatch, net)
+
+    dj = _bare_junction(junction)
+    dj.onChanged(junction, "NodeKey")
+
+    assert primary.DesignFlowRate == 0.0
+
+
+def test_on_changed_is_a_noop_without_a_primary_component(monkeypatch):
+    junction = FakeJunctionObj(topology="end")
+    junction.DesignFlowRate = 350.0
+    net = FakeNetworkObj([])
+    _patch_component_lookup(monkeypatch, net)
+
+    dj = _bare_junction(junction)
+    dj.onChanged(junction, "DesignFlowRate")  # must not raise

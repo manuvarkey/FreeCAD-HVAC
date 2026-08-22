@@ -140,6 +140,18 @@ results (`CalcFlowRate`/`CalcVelocity`/`CalcLossCoefficient`/
 pass) is untouched — those always have exactly one component, so behave
 identically to before this split.
 
+`DuctJunction` has no `Shape` and so can't be picked in the 3D view — its
+own `DesignFlowRate` (the terminal solve target `FlowNetwork`/`AirflowSolver`
+read directly off the junction) is therefore also mirrored onto its Primary
+`DuctComponent`'s own `DesignFlowRate` property, via a two-way `onChanged`
+hook on both `Junction.py` and `Component.py` (each guarded by an
+`_mirroring_design_flow_rate` flag so the two handlers don't bounce an edit
+back and forth). The mirror is editable only on a Primary component whose
+parent is an `"end"` (terminal) node — hidden (editor mode 2) everywhere
+else — and is also pulled down from the parent every sync
+(`DuctComponent.execute()`'s `_syncDesignFlowRate`), so a document reopen or
+a topology change always leaves it consistent, not just a live edit.
+
 ## Component geometry & materials
 
 Every `DuctSegment`/`DuctComponent` is one physical HVAC element, but that

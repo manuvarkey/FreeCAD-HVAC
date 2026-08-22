@@ -1100,61 +1100,6 @@ class CommandEditInlineComponents:
         Gui.Control.showDialog(self.task_panel)
 
 
-class CommandSelectParentJunction:
-    """Select the parent DuctJunction of a selected fitting (DuctComponent).
-
-    A junction has no Shape any more, so it can't be picked in the 3D view
-    -- users naturally select the fitting itself there. Junction-level
-    properties (DesignFlowRate, NodeKey, Topology, ...) only ever show in
-    the property editor once the junction itself is selected, so this
-    provides a quick way to jump from "the thing I clicked in 3D" to "the
-    node it belongs to" without having to find it in the tree.
-    """
-
-    @staticmethod
-    def _selectedComponents():
-        selected_geom = hvaclib.selectedGeometryObjects() or []
-        return [o for o in selected_geom if hvaclib.isDuctComponent(o)]
-
-    def GetResources(self):
-        return {
-            'Pixmap': hvaclib.get_icon_path("DuctsIcon.svg"),
-            'MenuText': QT_TRANSLATE_NOOP('HVAC_SelectParentJunction', 'Select Parent Junction'),
-            'ToolTip': QT_TRANSLATE_NOOP(
-                'HVAC_SelectParentJunction',
-                'Select the parent junction of the selected fitting, to edit junction-level '
-                'properties (e.g. Design Flow Rate) in the property editor'
-            ),
-            'CmdType': 'ForEdit',
-        }
-
-    def IsActive(self):
-        if Gui.ActiveDocument is None:
-            return False
-        return bool(self._selectedComponents())
-
-    def Activated(self):
-        components = self._selectedComponents()
-        if not components:
-            return
-
-        junctions = []
-        for comp in components:
-            parent_name = getattr(comp, "ParentJunctionName", "")
-            parent = comp.Document.getObject(parent_name) if parent_name else None
-            if parent is not None and parent not in junctions:
-                junctions.append(parent)
-        if not junctions:
-            return
-
-        Gui.Selection.clearSelection()
-        for junction in junctions:
-            try:
-                Gui.Selection.addSelection(junction)
-            except TypeError:
-                Gui.Selection.addSelection(junction.Document.Name, junction.Name)
-
-
 class CommandEditPlacement:
     """Edit attachment, offset and profile X axis of selected duct segments."""
 
@@ -1384,7 +1329,6 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_EditType', CommandEditType())
     FreeCAD.Gui.addCommand('HVAC_EditMaterial', CommandEditMaterial())
     FreeCAD.Gui.addCommand('HVAC_EditInlineComponents', CommandEditInlineComponents())
-    FreeCAD.Gui.addCommand('HVAC_SelectParentJunction', CommandSelectParentJunction())
     FreeCAD.Gui.addCommand('HVAC_EditPlacement', CommandEditPlacement())
     FreeCAD.Gui.addCommand('HVAC_EditNetworkTypeDefaults', CommandEditNetworkTypeDefaults())
     FreeCAD.Gui.addCommand('HVAC_CalculateAirflow', CommandCalculateAirflow())

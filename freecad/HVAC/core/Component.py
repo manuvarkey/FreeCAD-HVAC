@@ -63,6 +63,7 @@ class DuctComponent:
         obj.Proxy = self
         self.Object = obj
         self._allow_delete = False
+        self._mirroring_design_flow_rate = False
         self.setProperties(obj)
         self.applyOwnerDefaults(obj, parent_junction)
         self.updateMetadata(
@@ -78,6 +79,7 @@ class DuctComponent:
         obj.Proxy = self
         self.Object = obj
         self._allow_delete = False
+        self._mirroring_design_flow_rate = False
         self.setProperties(obj)
 
     def dumps(self):
@@ -94,6 +96,8 @@ class DuctComponent:
         # recomputes placement, so it stays decoupled from FreeCAD's
         # automatic recompute ordering (same reasoning as DuctJunction/
         # DuctSegment not using Placement/Link-based dependencies).
+        self._syncDesignFlowRate(obj)
+
         library_id = getattr(obj, "LibraryId", "")
         type_id = getattr(obj, "TypeId", "")
         if not library_id or not type_id:
@@ -196,6 +200,66 @@ class DuctComponent:
         parent = doc.getObject(parent_name)
         return getattr(parent, name, default) if parent is not None else default
 
+    def _parentObj(self, obj):
+        """This component's parent DuctJunction document object, or None if unresolvable."""
+        parent_name = getattr(obj, "ParentJunctionName", "")
+        doc = getattr(obj, "Document", None)
+        if not parent_name or doc is None:
+            return None
+        return doc.getObject(parent_name)
+
+    def _syncDesignFlowRate(self, obj):
+        """
+        Keep DesignFlowRate's editor mode and value in step with the parent
+        junction every sync (see the property's own comment in
+        setProperties()): editable only on a Primary component whose parent
+        is an "end" (terminal) node, hidden everywhere else, and always
+        pulled down from the parent's current value here -- any edit made
+        directly on this component was already pushed up to the parent by
+        onChanged() before this runs, so this is a no-op in that case and
+        only actually does something when the parent changed some other way
+        (a fresh sync, a document restore, or an edit on the parent itself).
+        """
+        if "DesignFlowRate" not in obj.PropertiesList:
+            return
+
+        is_primary = getattr(obj, "ComponentRole", "") == "Primary"
+        parent = self._parentObj(obj)
+        topology = getattr(parent, "Topology", "") if (is_primary and parent is not None) else ""
+        editable = is_primary and topology == "end"
+        try:
+            obj.setEditorMode("DesignFlowRate", 0 if editable else 2)
+        except Exception:
+            pass
+
+        if parent is None or self._mirroring_design_flow_rate:
+            return
+        parent_value = float(getattr(parent, "DesignFlowRate", 0.0) or 0.0)
+        if float(getattr(obj, "DesignFlowRate", 0.0) or 0.0) == parent_value:
+            return
+        self._mirroring_design_flow_rate = True
+        try:
+            obj.DesignFlowRate = parent_value
+        finally:
+            self._mirroring_design_flow_rate = False
+
+    def onChanged(self, obj, prop):
+        if prop != "DesignFlowRate" or self._mirroring_design_flow_rate:
+            return
+        if getattr(obj, "ComponentRole", "") != "Primary":
+            return
+        parent = self._parentObj(obj)
+        if parent is None:
+            return
+        value = float(getattr(obj, "DesignFlowRate", 0.0) or 0.0)
+        if float(getattr(parent, "DesignFlowRate", 0.0) or 0.0) == value:
+            return
+        self._mirroring_design_flow_rate = True
+        try:
+            parent.DesignFlowRate = value
+        finally:
+            self._mirroring_design_flow_rate = False
+
     @classmethod
     def _parentAnalysis(cls, obj):
         """This component's parent DuctJunction's full topology analysis dict (see NetworkParser.JunctionAnalysis), or {} if unresolvable."""
@@ -237,6 +301,29 @@ class DuctComponent:
         for prop in ("CasingShape", "InsulationShape"):
             try:
                 obj.setEditorMode(prop, 1)
+            except Exception:
+                pass
+
+        # Two-way proxy for the parent junction's own DesignFlowRate (see
+        # Junction.py's DesignFlowRate/onChanged) -- a junction has no Shape
+        # and can't be picked in the 3D view, so a terminal's design flow
+        # rate needs to be settable from its visible Primary fitting too.
+        # Editor mode/value are kept in sync with the parent every sync, from
+        # execute()'s _syncDesignFlowRate -- editable only for a Primary
+        # component whose parent junction is an "end" (terminal) node,
+        # hidden everywhere else since it has no meaning there. Starts
+        # hidden (mode 2) here purely as this property's one-time initial
+        # default when first added to an object; _syncDesignFlowRate
+        # corrects it on the very next sync.
+        if "DesignFlowRate" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyFloat", "DesignFlowRate", "Airflow",
+                "User-specified design flow rate for this terminal (L/s), mirrored to/from the parent "
+                "junction. Leave blank/0 on exactly one terminal per sub-network to solve it as the "
+                "balancing terminal."
+            )
+            try:
+                obj.setEditorMode("DesignFlowRate", 2)
             except Exception:
                 pass
 

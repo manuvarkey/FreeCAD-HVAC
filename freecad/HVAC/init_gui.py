@@ -78,7 +78,6 @@ class HVAC(Gui.Workbench):
                                 "Separator",
                                 'HVAC_EditType',
                                 'HVAC_EditInlineComponents',
-                                'HVAC_SelectParentJunction',
                                 'HVAC_EditPlacement',
                                 'HVAC_EditMaterial',
                                 'HVAC_ResetTypesToDefaults'
@@ -102,7 +101,6 @@ class HVAC(Gui.Workbench):
                                 "Separator",
                                 'HVAC_EditType',
                                 'HVAC_EditInlineComponents',
-                                'HVAC_SelectParentJunction',
                                 'HVAC_EditPlacement',
                                 'HVAC_EditMaterial',
                                 'HVAC_ResetTypesToDefaults'
@@ -126,7 +124,6 @@ class HVAC(Gui.Workbench):
                                 "Separator",
                                 'HVAC_EditType',
                                 'HVAC_EditInlineComponents',
-                                'HVAC_SelectParentJunction',
                                 'HVAC_EditPlacement',
                                 'HVAC_EditMaterial',
                                 'HVAC_ResetTypesToDefaults'
@@ -244,7 +241,6 @@ class HVAC(Gui.Workbench):
                 super().__init__()
                 self.commands = ['HVAC_EditType',
                                  'HVAC_EditInlineComponents',
-                                 'HVAC_SelectParentJunction',
                                  'HVAC_EditPlacement',
                                  'HVAC_EditMaterial',
                                  'HVAC_ResetTypesToDefaults']
