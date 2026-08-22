@@ -259,6 +259,11 @@ these onto a newly-created segment/component whenever it doesn't already
 have its own value (never overwrites a manual choice or a value restored
 from an existing document) -- so every new duct object is fully materialed
 out of the box without the user having to visit `HVAC_EditMaterial` for it.
+`DuctNetwork.resetObjectsToNetworkDefaults()` (the "Reset to Defaults"
+command) is the opposite convention -- like it already does for
+`LibraryId`/`TypeId`, an explicit reset always re-applies the network's
+*current* default materials, discarding whatever `CasingMaterial`/
+`InsulationMaterial` the object already had.
 
 `DuctJunction` itself stays geometry-free: it never gets `CasingShape`/
 `InsulationShape`/materials of its own, only its `DuctComponent` children do.

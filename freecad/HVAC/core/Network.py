@@ -733,6 +733,30 @@ class DuctNetwork:
                     obj.TypeId = default_type_id
                     changed = True
 
+            # Explicit reset always re-applies the network's current default
+            # materials -- unlike applyOwnerDefaults() (only fills in a
+            # material a *new* object doesn't have yet), this discards
+            # whatever CasingMaterial/InsulationMaterial the object already
+            # had, same "reset always wins" convention as LibraryId/TypeId
+            # above.
+            default_casing_material = getattr(net, "DefaultCasingMaterial", None)
+            if (
+                hasattr(obj, "CasingMaterial")
+                and default_casing_material is not None
+                and getattr(default_casing_material, "Name", "")
+            ):
+                obj.CasingMaterial = default_casing_material
+                changed = True
+
+            default_insulation_material = getattr(net, "DefaultInsulationMaterial", None)
+            if (
+                hasattr(obj, "InsulationMaterial")
+                and default_insulation_material is not None
+                and getattr(default_insulation_material, "Name", "")
+            ):
+                obj.InsulationMaterial = default_insulation_material
+                changed = True
+
             if proxy and hasattr(proxy, "applyTypeSchema"):
                 try:
                     changed = proxy.applyTypeSchema() or changed
