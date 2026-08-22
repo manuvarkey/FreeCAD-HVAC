@@ -36,7 +36,7 @@ translate = FreeCAD.Qt.translate
 
 from ..utils import hvaclib
 from ..utils import materials as hvac_materials
-from ..ui.Observer import buildPortHighlightCoinNode
+from ..ui.Observer import buildPortHighlightCoinNode, TerminalFlowRateObserver
 
 
 class TaskPanelActivate:
@@ -954,37 +954,12 @@ class TaskPanelEditInlineComponents:
 
     def _translatedPort(self, port):
         """
-        A connected_ports entry's own "position" is the raw, pre-fitting
-        anchor point every port on this junction shares before any
-        geometry backend pushes its own port outward (see Junction.py's
-        composeComponents() docstring) -- highlighting it as-is would
-        always land on the junction's shared center, not on the physical
-        duct wall / existing inline device chain a new component would
-        actually attach to. junction.ConnectionLengthsJson already holds
-        each real edge's current total push-out length (kept up to date by
-        composeComponents()/aggregateConnectionLengths() on every sync), so
-        translate the port that far along its own direction before
-        drawing the highlight.
+        Highlighting a port's raw AnalysisJson position would always land
+        on the junction's shared pre-fitting anchor, not the physical duct
+        wall / existing inline device chain a new component would actually
+        attach to -- see hvaclib.translated_port_position().
         """
-        edge_key = port.get("edge_key", "")
-        try:
-            lengths = json.loads(getattr(self.junction, "ConnectionLengthsJson", "") or "[]")
-        except Exception:
-            lengths = []
-        length = 0.0
-        for item in lengths:
-            if item.get("edge_key") == edge_key:
-                length = float(item.get("length", 0.0) or 0.0)
-                break
-
-        position = hvaclib.vec(port.get("position"))
-        direction = hvaclib.vec(port.get("direction"))
-        if position is None or direction is None:
-            return port
-
-        translated = dict(port)
-        translated["position"] = hvaclib.vec_to_xyz(position + direction * length)
-        return translated
+        return hvaclib.translated_port_position(self.junction, port)
 
     def _highlightCurrentPort(self):
         """Show a semi-transparent plane over the port picked in "Attach to
@@ -1295,11 +1270,43 @@ class TaskPanelAirflowResults:
 
     def __init__(self, network_obj, result):
         self.network_obj = network_obj
-        self.result = result
+
+        # Terminal design-flow-rate arrow overlay, active for this panel's
+        # whole lifetime -- see Observer.py:TerminalFlowRateObserver.
+        self.flow_arrow_observer = TerminalFlowRateObserver(network_obj)
+        self.flow_arrow_observer.start()
 
         self.form = QtWidgets.QWidget()
         self.form.setWindowTitle(translate("HVAC_CalculateAirflow", "Airflow Calculation Results"))
-        layout = QtWidgets.QVBoxLayout(self.form)
+        self.layout = QtWidgets.QVBoxLayout(self.form)
+
+        self.results_container = QtWidgets.QWidget()
+        self.results_layout = QtWidgets.QVBoxLayout(self.results_container)
+        self.results_layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.addWidget(self.results_container)
+
+        self.run_button = QtWidgets.QPushButton(
+            translate("HVAC_CalculateAirflow", "Run Revised Calculation")
+        )
+        self.run_button.clicked.connect(self._runRevisedCalculation)
+        self.layout.addWidget(self.run_button)
+
+        self.export_button = QtWidgets.QPushButton(translate("HVAC_CalculateAirflow", "Export to Spreadsheet"))
+        self.export_button.clicked.connect(self._exportToSpreadsheets)
+        self.layout.addWidget(self.export_button)
+
+        self._showResults(result)
+
+    def _clearResults(self):
+        while self.results_layout.count():
+            item = self.results_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _showResults(self, result):
+        self.result = result
+        self._clearResults()
 
         if result.warnings:
             warn_box = QtWidgets.QGroupBox(translate("HVAC_CalculateAirflow", "Warnings"))
@@ -1307,27 +1314,43 @@ class TaskPanelAirflowResults:
             warn_label = QtWidgets.QLabel("\n".join(result.warnings))
             warn_label.setWordWrap(True)
             warn_layout.addWidget(warn_label)
-            layout.addWidget(warn_box)
+            self.results_layout.addWidget(warn_box)
 
         if not result.components:
             empty_label = QtWidgets.QLabel(
                 translate("HVAC_CalculateAirflow", "No sub-network could be solved. See warnings above.")
             )
             empty_label.setWordWrap(True)
-            layout.addWidget(empty_label)
+            self.results_layout.addWidget(empty_label)
         elif len(result.components) == 1:
-            layout.addWidget(self._buildComponentWidget(result.components[0]))
+            self.results_layout.addWidget(self._buildComponentWidget(result.components[0]))
         else:
             tabs = QtWidgets.QTabWidget()
             for i, comp in enumerate(result.components):
                 tabs.addTab(self._buildComponentWidget(comp), "{} {}".format(
                     translate("HVAC_CalculateAirflow", "Sub-network"), i + 1
                 ))
-            layout.addWidget(tabs)
+            self.results_layout.addWidget(tabs)
 
-        export_button = QtWidgets.QPushButton(translate("HVAC_CalculateAirflow", "Export to Spreadsheet"))
-        export_button.clicked.connect(self._exportToSpreadsheets)
-        layout.addWidget(export_button)
+        self.export_button.setEnabled(bool(result.components))
+
+    def _runRevisedCalculation(self):
+        from ..core.AirflowSolver import AirflowSolver
+
+        try:
+            result = AirflowSolver(self.network_obj).solve()
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(
+                "HVAC - CalculateAirflow - Error solving network '{}': {}\n".format(self.network_obj.Label, e)
+            )
+            FreeCAD.Console.PrintMessage(traceback.format_exc())
+            return
+
+        doc = getattr(self.network_obj, "Document", None)
+        if doc is not None:
+            doc.recompute()
+
+        self._showResults(result)
 
     def _buildComponentWidget(self, comp):
         widget = QtWidgets.QWidget()
@@ -1450,6 +1473,9 @@ class TaskPanelAirflowResults:
         FreeCAD.Console.PrintMessage(
             "HVAC - Exported airflow results to '{}' and '{}'.\n".format(seg_sheet.Label, junc_sheet.Label)
         )
+        # Export closes the dialog directly (not via accept()/reject()), so
+        # the arrow overlay must be torn down here too.
+        self.flow_arrow_observer.stop()
         Gui.Control.closeDialog()
 
     @staticmethod
@@ -1464,9 +1490,11 @@ class TaskPanelAirflowResults:
         return sheet
 
     def accept(self):
+        self.flow_arrow_observer.stop()
         return True
 
     def reject(self):
+        self.flow_arrow_observer.stop()
         return True
 
 
@@ -1501,6 +1529,11 @@ class TaskPanelSizeDucts:
         self.network_obj = network_obj
         self.sizer = None
         self.result = None
+
+        # Terminal design-flow-rate arrow overlay, active for this panel's
+        # whole lifetime -- see Observer.py:TerminalFlowRateObserver.
+        self.flow_arrow_observer = TerminalFlowRateObserver(network_obj)
+        self.flow_arrow_observer.start()
 
         self.form = QtWidgets.QWidget()
         self.form.setWindowTitle(translate("HVAC_SizeDucts", "Size Ducts"))
@@ -1727,6 +1760,7 @@ class TaskPanelSizeDucts:
         return "{:.0f} x {:.0f} mm".format(width_mm, height_mm)
 
     def accept(self):
+        self.flow_arrow_observer.stop()
         if self.sizer is not None and self.result is not None:
             changed_count = self.sizer.apply(self.result)
             if changed_count and getattr(self.network_obj, "Document", None):
@@ -1734,4 +1768,5 @@ class TaskPanelSizeDucts:
         return True
 
     def reject(self):
+        self.flow_arrow_observer.stop()
         return True

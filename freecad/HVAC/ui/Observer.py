@@ -23,6 +23,7 @@
 
 """This module implements HVAC duct description classes."""
 
+import json
 import math
 import FreeCAD
 import FreeCADGui as Gui
@@ -678,6 +679,185 @@ class DuctNetworkChangeObserver:
             FreeCAD.ActiveDocument.recompute()
 
 
+class TerminalFlowRateObserver:
+    """
+    Session-scoped 3D overlay, active while a Calculate Airflow / Size
+    Ducts task panel is open: draws one colored flow-direction arrow plus
+    one colored port plane at every terminal ("end" topology) junction in
+    the network -- green if that terminal's DesignFlowRate is set
+    (non-zero), red otherwise -- and lets a user click an arrow to set
+    that terminal's DesignFlowRate from a dialog. Purely visual/
+    interactive -- like buildArrowCoinNodes'/buildPortHighlightCoinNode's
+    own overlays, this never touches the document or undo stack except
+    for the one property write a user explicitly makes through the
+    dialog.
+
+    Both the arrow's length and its separation from the terminal scale
+    with that terminal's own duct dimension (the larger of width/height,
+    or diameter) -- length equal to that dimension, separation 20% of it
+    -- rather than a fixed size, so it reads sensibly against ducts of any
+    size. The port plane reuses buildPortHighlightCoinNode's own "2x port
+    dimension, translated to the port's real (post-fitting) position"
+    convention, exactly like TaskPanelEditInlineComponents' own port
+    highlight.
+
+    Clicking is handled with a plain Coin3D SoEventCallback + its own
+    built-in pick, checked against each arrow's own SoSeparator -- these
+    arrows are never real FreeCAD document objects, so FreeCAD's normal
+    Gui.Selection mechanism can't see them on its own. Only arrows are
+    pickable -- the port planes are decorative only.
+    """
+
+    FALLBACK_DIMENSION_MM = 100.0
+    SEPARATION_FRACTION = 0.2
+    COLOR_SET = (0.0, 0.7, 0.0)
+    COLOR_UNSET = (0.85, 0.0, 0.0)
+    TRANSPARENCY = 0.5
+
+    def __init__(self, network_obj):
+        self.network_obj = network_obj
+        self._root = None
+        self._event_callback_node = None
+        self._arrows = []  # [(SoSeparator, junction_obj), ...] -- pickable
+        self._planes = []  # [SoSeparator, ...] -- decorative only
+
+    def start(self):
+        vobj = getattr(self.network_obj, "ViewObject", None)
+        if vobj is None:
+            return
+        self._root = coin.SoSeparator()
+        self._event_callback_node = coin.SoEventCallback()
+        self._event_callback_node.addEventCallback(
+            coin.SoMouseButtonEvent.getClassTypeId(), self._onMouseClick
+        )
+        self._root.addChild(self._event_callback_node)
+        vobj.RootNode.addChild(self._root)
+        self.refresh()
+
+    def stop(self):
+        if self._root is not None:
+            try:
+                vobj = getattr(self.network_obj, "ViewObject", None)
+                if vobj is not None:
+                    vobj.RootNode.removeChild(self._root)
+            except Exception:
+                pass
+        self._root = None
+        self._event_callback_node = None
+        self._arrows = []
+        self._planes = []
+
+    def refresh(self):
+        """Rebuild every terminal's arrow/plane from the junctions' current DesignFlowRate/geometry."""
+        if self._root is None:
+            return
+        # Child 0 is the event callback node -- keep it, drop only the arrows/planes.
+        while self._root.getNumChildren() > 1:
+            self._root.removeChild(self._root.getNumChildren() - 1)
+        self._arrows = []
+        self._planes = []
+
+        for junction in self._terminalJunctions():
+            self._buildOverlayForJunction(junction)
+
+    def _terminalJunctions(self):
+        geometry = getattr(self.network_obj, "Geometry", None)
+        if geometry is None:
+            return []
+        return [
+            obj for obj in geometry.OutList
+            if hvaclib.isDuctJunction(obj) and getattr(obj, "Topology", "") == "end"
+        ]
+
+    def _buildOverlayForJunction(self, junction):
+        center = getattr(junction, "CenterPoint", None)
+        if center is None:
+            return
+        try:
+            analysis = json.loads(getattr(junction, "AnalysisJson", "") or "{}")
+        except Exception:
+            analysis = {}
+        ports = analysis.get("connected_ports") or []
+        if not ports:
+            return
+
+        port = ports[0]
+        direction = port.get("direction")
+        flow_into_junction = port.get("flow_into_junction")
+        if not direction or flow_into_junction is None:
+            return
+
+        width, height = hvaclib.get_section_extents(port.get("section_params", {}) or {})
+        dimension = max(width, height) if (width > 0.0 and height > 0.0) else self.FALLBACK_DIMENSION_MM
+        separation = dimension * self.SEPARATION_FRACTION
+
+        design_flow_rate = float(getattr(junction, "DesignFlowRate", 0.0) or 0.0)
+        color = self.COLOR_SET if design_flow_rate != 0.0 else self.COLOR_UNSET
+
+        arrow_node = buildTerminalFlowArrowCoinNode(
+            center, direction, bool(flow_into_junction), separation, dimension, color, self.TRANSPARENCY,
+        )
+        if arrow_node is not None:
+            self._root.addChild(arrow_node)
+            self._arrows.append((arrow_node, junction))
+
+        plane_port = hvaclib.translated_port_position(junction, port)
+        plane_node = buildPortHighlightCoinNode(plane_port, color=color, transparency=self.TRANSPARENCY)
+        if plane_node is not None:
+            self._root.addChild(plane_node)
+            self._planes.append(plane_node)
+
+    def _onMouseClick(self, user_data, event_callback):
+        event = event_callback.getEvent()
+        if not (
+            isinstance(event, coin.SoMouseButtonEvent)
+            and event.getButton() == coin.SoMouseButtonEvent.BUTTON1
+        ):
+            return
+
+        picked = event_callback.getPickedPoint()
+        if picked is None:
+            return
+
+        junction = self._junctionForPickedPath(picked.getPath())
+        if junction is None:
+            return
+
+        # Consume both the press AND the release for this click -- opening
+        # a modal dialog on DOWN means the matching BUTTON1 UP event
+        # arrives as a separate callback invocation afterwards; leaving
+        # that one unhandled let FreeCAD's own selection logic treat it as
+        # a stray click and pop its Object/Face/Edge/Other picker menu.
+        event_callback.setHandled()
+
+        if event.getState() != coin.SoButtonEvent.DOWN:
+            return
+        self._openFlowRateDialog(junction)
+
+    def _junctionForPickedPath(self, path):
+        for arrow_node, junction in self._arrows:
+            if path.containsNode(arrow_node):
+                return junction
+        return None
+
+    def _openFlowRateDialog(self, junction):
+        current = float(getattr(junction, "DesignFlowRate", 0.0) or 0.0)
+        value, ok = QtWidgets.QInputDialog.getDouble(
+            Gui.getMainWindow(),
+            translate("HVAC", "Design Flow Rate"),
+            translate("HVAC", "Design flow rate for '{}' (L/s):").format(junction.Label),
+            current, 0.0, 1.0e6, 2,
+        )
+        if not ok:
+            return
+        if float(getattr(junction, "DesignFlowRate", 0.0) or 0.0) != value:
+            junction.DesignFlowRate = value
+            doc = getattr(junction, "Document", None)
+            if doc is not None:
+                doc.recompute()
+        self.refresh()
+
+
 def buildArrowCoinNodes(lines, size_scale=1.0):
     """
     Build one Coin3D node containing all direction arrows as 3D cones.
@@ -760,21 +940,23 @@ def buildArrowCoinNodes(lines, size_scale=1.0):
 
     return root
 
-def buildPortHighlightCoinNode(port):
+def buildPortHighlightCoinNode(port, color=(0.2, 0.6, 1.0), transparency=0.5):
     """
     Build one Coin node: a semi-transparent quad marking a junction port's
     connection plane, centered on the port and sized to ~2x its own
     section extents. Used by TaskPanelEditInlineComponents so a user can
     see which physical port "Attach to edge" currently refers to, before
-    committing to it.
+    committing to it -- and by TerminalFlowRateObserver for its own
+    terminal-port plane, colored to match that terminal's flow arrow.
 
     port: a connected_ports-style dict (position, direction, profile_x_axis,
     section_params -- see NetworkParser.JunctionPort). `position` is taken
     as-is here -- the caller is responsible for translating it to the
     actual physical connection point (see TaskPanelEditInlineComponents.
-    _highlightCurrentPort), since a raw connected_ports position is only
-    the pre-fitting shared anchor point, not where a duct wall / existing
-    inline device chain actually ends.
+    _highlightCurrentPort / hvaclib.translated_port_position()), since a
+    raw connected_ports position is only the pre-fitting shared anchor
+    point, not where a duct wall / existing inline device chain actually
+    ends.
     """
     position = port.get("position") or (0.0, 0.0, 0.0)
     direction = port.get("direction") or (0.0, 0.0, 1.0)
@@ -800,8 +982,8 @@ def buildPortHighlightCoinNode(port):
     root = coin.SoSeparator()
 
     mat = coin.SoMaterial()
-    mat.diffuseColor.setValue(0.2, 0.6, 1.0)
-    mat.transparency.setValue(0.5)
+    mat.diffuseColor.setValue(*color)
+    mat.transparency.setValue(transparency)
     root.addChild(mat)
 
     coords = coin.SoCoordinate3()
@@ -816,6 +998,95 @@ def buildPortHighlightCoinNode(port):
     face = coin.SoFaceSet()
     face.numVertices.setValue(4)
     root.addChild(face)
+
+    return root
+
+def buildTerminalFlowArrowCoinNode(
+    center, direction, flow_into_junction, offset_mm, length_mm, color, transparency=0.0,
+):
+    """
+    Build one Coin node: a colored cone-and-shaft arrow marking a terminal
+    junction's design flow rate, offset into the open space beyond the
+    terminal (not overlapping the duct itself) -- see
+    TerminalFlowRateObserver.
+
+    center: the junction's own CenterPoint.
+    direction: the terminal's single real port's own direction (points
+    away from the junction, into the duct network -- see
+    NetworkParser.JunctionPort) -- the arrow is drawn on the opposite side,
+    in the open space the terminal faces.
+    flow_into_junction: True if flow enters the junction from the duct
+    (a supply outlet -- air continues on outward past the terminal, into
+    the room), False if flow leaves the junction into the duct (a return/
+    extract inlet -- air is drawn in from the room). Standard HVAC
+    drafting convention: a supply arrow points away from the duct (tail
+    near, head far); a return arrow points toward the duct (head near,
+    tail far).
+    """
+    away_dir = FreeCAD.Vector(direction) * -1.0
+    if away_dir.Length <= 1e-9:
+        return None
+    away_dir.normalize()
+
+    near_point = FreeCAD.Vector(center) + away_dir * offset_mm
+    far_point = near_point + away_dir * length_mm
+
+    head_len = length_mm * 0.5
+    head_radius = head_len * 0.35
+    shaft_radius = head_radius * 0.5
+
+    if flow_into_junction:
+        # Supply: arrow points away from the duct -- head at the far end.
+        tip, tail, head_dir = far_point, near_point, away_dir
+    else:
+        # Return/extract: arrow points toward the duct -- head at the near end.
+        tip, tail, head_dir = near_point, far_point, away_dir * -1.0
+
+    cone_base_point = tip - head_dir * head_len
+    cone_center = tip - head_dir * (head_len * 0.5)
+    shaft_len = (cone_base_point - tail).Length
+    shaft_center = tail + head_dir * (shaft_len * 0.5)
+
+    # Coin SoCone/SoCylinder align to +Y by default -- rotate Y to head_dir.
+    y_axis = FreeCAD.Vector(0, 1, 0)
+    rot_axis = y_axis.cross(head_dir)
+    dot = max(-1.0, min(1.0, y_axis.dot(head_dir)))
+    if rot_axis.Length > 1e-9:
+        rot_axis.normalize()
+        rot_angle = math.acos(dot)
+    elif dot > 0:
+        rot_axis, rot_angle = FreeCAD.Vector(1, 0, 0), 0.0
+    else:
+        rot_axis, rot_angle = FreeCAD.Vector(1, 0, 0), math.pi
+
+    def make_transform(point, rot_ax, angle):
+        xf = coin.SoTransform()
+        xf.translation.setValue(point.x, point.y, point.z)
+        xf.rotation.setValue(coin.SbVec3f(rot_ax.x, rot_ax.y, rot_ax.z), angle)
+        return xf
+
+    root = coin.SoSeparator()
+
+    mat = coin.SoMaterial()
+    mat.diffuseColor.setValue(*color)
+    mat.transparency.setValue(transparency)
+    root.addChild(mat)
+
+    cone_sep = coin.SoSeparator()
+    cone_sep.addChild(make_transform(cone_center, rot_axis, rot_angle))
+    cone = coin.SoCone()
+    cone.bottomRadius.setValue(head_radius)
+    cone.height.setValue(head_len)
+    cone_sep.addChild(cone)
+    root.addChild(cone_sep)
+
+    shaft_sep = coin.SoSeparator()
+    shaft_sep.addChild(make_transform(shaft_center, rot_axis, rot_angle))
+    cyl = coin.SoCylinder()
+    cyl.radius.setValue(shaft_radius)
+    cyl.height.setValue(shaft_len)
+    shaft_sep.addChild(cyl)
+    root.addChild(shaft_sep)
 
     return root
 

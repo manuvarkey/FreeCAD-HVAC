@@ -21,6 +21,7 @@
 #                                                                              #
 ################################################################################
 
+import json
 import os
 import platform
 import sys
@@ -576,7 +577,46 @@ def get_section_extents(section_params):
         return d, d
     # fallback
     return 0.0, 0.0
-    
+
+def translated_port_position(junction_obj, port):
+    """
+    A connected_ports entry's own "position" is the raw, pre-fitting
+    shared anchor point every port on a junction shares before any
+    geometry backend independently pushes its own port outward (see
+    core/Junction.py's composeComponents() docstring). junction_obj's own
+    ConnectionLengthsJson (kept current every sync by composeComponents()/
+    aggregateConnectionLengths()) holds each real edge's current total
+    push-out length, so this translates the port that far along its own
+    direction to get where it actually, physically ends -- used wherever
+    a port needs to be drawn/highlighted at its real location rather than
+    the shared anchor (e.g. TaskPanelEditInlineComponents' port highlight,
+    TerminalFlowRateObserver's outlet plane).
+
+    Returns a copy of port with "position" replaced; the input is never
+    mutated. Falls back to returning an unchanged copy if position/
+    direction can't be resolved.
+    """
+    edge_key = port.get("edge_key", "")
+    try:
+        lengths = json.loads(getattr(junction_obj, "ConnectionLengthsJson", "") or "[]")
+    except Exception:
+        lengths = []
+    length = 0.0
+    for item in lengths:
+        if item.get("edge_key") == edge_key:
+            length = float(item.get("length", 0.0) or 0.0)
+            break
+
+    position = vec(port.get("position"))
+    direction = vec(port.get("direction"))
+    if position is None or direction is None:
+        return dict(port)
+
+    translated = dict(port)
+    translated["position"] = vec_to_xyz(position + direction * length)
+    return translated
+
+
 def parse_edge_info(edge):
     """
     Parse edge information into a dictionary.
