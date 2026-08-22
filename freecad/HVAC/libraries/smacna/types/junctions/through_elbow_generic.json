@@ -54,6 +54,13 @@
       "group": "Options",
       "description": "Include the flange at port 2",
       "default": true
+    },
+    {
+      "name": "InsulationThickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Parameters",
+      "description": "Insulation thickness wrapped around the outside of the elbow; 0 disables insulation",
+      "default": 0.0
     }
   ],
   "generator": {

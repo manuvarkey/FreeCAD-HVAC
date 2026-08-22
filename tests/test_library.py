@@ -114,7 +114,12 @@ def test_build_geometry_dispatches_legacy_generator_and_aliases_params_as_proper
 
         result = reg.build_geometry("lib", type_def, {"params": {"Diameter": 100.0}})
 
-        assert result == {"shape": "SHAPE"}
+        # build_geometry always normalizes a backend's raw return value into
+        # a GeometryResult -- a legacy {"shape": ...} generator's shape
+        # becomes the "casing" component, with "insulation" defaulted to no
+        # shape (see library/geometry_result.py).
+        assert result.casing.shape == "SHAPE"
+        assert result.insulation.shape is None
         assert captured["params"] == {"Diameter": 100.0}
         assert captured["properties"] is captured["params"]
     finally:

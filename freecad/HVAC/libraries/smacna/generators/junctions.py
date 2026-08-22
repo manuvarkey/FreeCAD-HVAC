@@ -368,7 +368,8 @@ def build_elbow(context):
     inner_wire_2 = api.make_section_wire_from_port(inner_sweep_port_1)
     inner_shape = api.make_pipe_shell(path_wire, [inner_wire_1, inner_wire_2])
 
-    parts = [outer_shape.cut(inner_shape)]
+    casing_shape = outer_shape.cut(inner_shape)
+    parts = [casing_shape]
 
     # Flanges are extruded inward from each tangent plane, into the elbow's
     # own body (overlapping the wall). port_direction() points *away* from
@@ -386,8 +387,28 @@ def build_elbow(context):
 
     shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
+    # Insulation, when enabled, wraps around the outside of the bare casing
+    # tube (not the flanges -- same convention as a real insulated elbow):
+    # a second sweep along the same centerline arc, with each cross-section
+    # grown outward by InsulationThickness, minus the casing's own outer
+    # sweep.
+    insulation_thickness = float(props.get("InsulationThickness", 0.0) or 0.0)
+    insulation_shape = None
+    if insulation_thickness > 0.0:
+        grown_wire_1 = api.make_section_wire_from_port(
+            api.grow_port_section(sweep_port_0, insulation_thickness)
+        )
+        grown_wire_2 = api.make_section_wire_from_port(
+            api.grow_port_section(sweep_port_1, insulation_thickness)
+        )
+        insulation_outer_shape = api.make_pipe_shell(path_wire, [grown_wire_1, grown_wire_2])
+        insulation_shape = insulation_outer_shape.cut(outer_shape)
+
     return {
-        "shape": shape,
+        "components": {
+            "casing": {"shape": shape},
+            "insulation": {"shape": insulation_shape},
+        },
         "connection_lengths": api.build_trim_rec_from_port_lengths(
             [
                 (ports[0], trim0),

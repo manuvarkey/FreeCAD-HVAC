@@ -15,6 +15,7 @@ import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 import pytest
 
 from freecad.HVAC.core import Junction as junction_mod
+from freecad.HVAC.library import geometry_result as geometry_result_mod
 
 
 class FakeGeometryFolder:
@@ -292,13 +293,13 @@ class _ChainFakeRegistry:
 
     def build_geometry(self, lib_id, type_def, context):
         ports = context["connected_ports"]
-        return {
+        return geometry_result_mod.normalize({
             "shape": None,
             "connection_lengths": [
                 {"edge_key": ports[0]["edge_key"], "segment_end": ports[0]["segment_end"], "length": self._trim_left},
                 {"edge_key": ports[1]["edge_key"], "segment_end": ports[1]["segment_end"], "length": self._trim_right},
             ],
-        }
+        })
 
 
 def test_compose_chain_on_single_edge_of_through_node(monkeypatch):
@@ -428,13 +429,13 @@ class _UniformFakeRegistry:
 
     def build_geometry(self, lib_id, type_def, context):
         ports = context["connected_ports"]
-        return {
+        return geometry_result_mod.normalize({
             "shape": None,
             "connection_lengths": [
                 {"edge_key": p["edge_key"], "segment_end": p["segment_end"], "length": self._trim}
                 for p in ports
             ],
-        }
+        })
 
 
 def _branch_ports():

@@ -30,9 +30,16 @@ from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
 
 from .utils import hvaclib
+from .utils import materials as hvac_materials
 
 Gui.addLanguagePath(hvaclib.get_language_base_path())
 Gui.updateLocale()
+
+# Register this addon's own native FreeCAD material cards (see
+# freecad/HVAC/Resources/Materials/) with FreeCAD's Material subsystem, so
+# they appear in the normal material browser/editor alongside built-in,
+# user, and other addons' materials.
+hvac_materials.register_material_resources()
 
 
 class HVAC(Gui.Workbench):
@@ -74,6 +81,8 @@ class HVAC(Gui.Workbench):
                                 'HVAC_RemoveInlineComponent',
                                 'HVAC_SelectParentJunction',
                                 'HVAC_EditPlacement',
+                                'HVAC_EditCasingMaterial',
+                                'HVAC_EditInsulationMaterial',
                                 'HVAC_ResetTypesToDefaults'
                                 ]
 
@@ -98,6 +107,8 @@ class HVAC(Gui.Workbench):
                                 'HVAC_RemoveInlineComponent',
                                 'HVAC_SelectParentJunction',
                                 'HVAC_EditPlacement',
+                                'HVAC_EditCasingMaterial',
+                                'HVAC_EditInsulationMaterial',
                                 'HVAC_ResetTypesToDefaults'
                                 ]
 
@@ -122,6 +133,8 @@ class HVAC(Gui.Workbench):
                                 'HVAC_RemoveInlineComponent',
                                 'HVAC_SelectParentJunction',
                                 'HVAC_EditPlacement',
+                                'HVAC_EditCasingMaterial',
+                                'HVAC_EditInsulationMaterial',
                                 'HVAC_ResetTypesToDefaults'
                                 ]
 
@@ -240,6 +253,8 @@ class HVAC(Gui.Workbench):
                                  'HVAC_RemoveInlineComponent',
                                  'HVAC_SelectParentJunction',
                                  'HVAC_EditPlacement',
+                                 'HVAC_EditCasingMaterial',
+                                 'HVAC_EditInsulationMaterial',
                                  'HVAC_ResetTypesToDefaults']
                 self.title = translate("HVAC", "Edit Tools")
                 

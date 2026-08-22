@@ -31,6 +31,8 @@ translate = FreeCAD.Qt.translate
 
 from ..utils import hvaclib
 from . import _type_schema
+from . import _geometry_apply
+from . import _component_appearance
 
 
 class DuctSegment:
@@ -141,15 +143,13 @@ class DuctSegment:
             }
     
             result = reg.build_geometry(library_id, type_def, context)
-            shape = result.get("shape", None)
-            if shape is not None:
-                obj.Shape = shape
-    
+            _geometry_apply.apply_geometry_result(obj, result)
+
             # Optional trim plane overrides from generator
-            if "start_trim_plane_json" in result:
-                obj.StartTrimPlaneJson = result["start_trim_plane_json"] or ""
-            if "end_trim_plane_json" in result:
-                obj.EndTrimPlaneJson = result["end_trim_plane_json"] or ""
+            if result.start_trim_plane_json is not None:
+                obj.StartTrimPlaneJson = result.start_trim_plane_json or ""
+            if result.end_trim_plane_json is not None:
+                obj.EndTrimPlaneJson = result.end_trim_plane_json or ""
     
         except Exception as e:
             FreeCAD.Console.PrintWarning(
@@ -198,6 +198,26 @@ class DuctSegment:
         self._addProperty(obj, "App::PropertyLength", "InsulationThickness", "Parameters", "Insulation thickness")
         self._addProperty(obj, "App::PropertyLength", "Roughness", "Parameters", "Wall roughness; 0 uses the network's DefaultRoughness")
         self._addProperty(obj, "App::PropertyFloat", "Velocity", "Parameters", "Target velocity (m/s) override for duct sizing on this segment only; 0 uses the network's SizingMethod/TargetVelocity")
+
+        # Per-component shapes (see library/geometry_result.py) -- Shape
+        # itself is only the aggregate compound of these, derived each
+        # execute() by core/_geometry_apply.py; never the other way around.
+        self._addProperty(obj, "Part::PropertyPartShape", "CasingShape", "Geometry", "Duct wall/casing solid")
+        self._addProperty(obj, "Part::PropertyPartShape", "InsulationShape", "Geometry", "Insulation solid (empty if insulation is disabled for this type)")
+        # Materials::PropertyMaterial -- a native FreeCAD material (see
+        # utils/materials.py), not a link to a per-object material document
+        # object: FreeCAD's own Material subsystem is authoritative for
+        # storage, the browser/editor UI, and appearance. Prop_NoRecompute
+        # (16) since picking a material never changes this object's own
+        # geometry -- only its ViewProvider's rendered appearance.
+        self._addProperty(obj, "Materials::PropertyMaterial", "CasingMaterial", "Materials", "Native FreeCAD material for the casing", attr=16)
+        self._addProperty(obj, "Materials::PropertyMaterial", "InsulationMaterial", "Materials", "Native FreeCAD material for the insulation", attr=16)
+
+        for prop in ("CasingShape", "InsulationShape"):
+            try:
+                obj.setEditorMode(prop, 1)
+            except Exception:
+                pass
 
         if "RectangularSizingMode" not in obj.PropertiesList:
             obj.addProperty(
@@ -313,13 +333,17 @@ class DuctSegment:
                 
     def applyTypeSchema(self):
         obj = self.Object
-        # Diameter/Width/Height are permanent core dimensional properties
-        # (see setProperties) shared across every segment type regardless of
-        # whether the active type's schema declares them -- never removed by
-        # the shared helper; their editor mode alone tracks relevance.
+        # Diameter/Width/Height/InsulationThickness are permanent core
+        # properties (see setProperties) shared across every segment type
+        # regardless of whether the active type's schema declares them --
+        # never removed by the shared helper; their editor mode alone
+        # tracks relevance. A type-def (e.g. circular_straight) may still
+        # dual-declare one of these in its own `properties` list purely to
+        # pull its current value into build_geometry's `params`, exactly
+        # like Diameter already does.
         return _type_schema.apply_type_schema(
             obj, getattr(obj, "LibraryId", ""), getattr(obj, "TypeId", ""),
-            protected_names=("Diameter", "Width", "Height"),
+            protected_names=("Diameter", "Width", "Height", "InsulationThickness"),
         )
     
     def resolveSourceEdge(self):
@@ -734,9 +758,9 @@ class DuctSegment:
         return "{} [{}]".format(source_obj.Label if source_obj else "Segment", int(source_index))
 
     @staticmethod
-    def _addProperty(obj, prop_type, prop_name, group, description):
+    def _addProperty(obj, prop_type, prop_name, group, description, attr=0):
         if prop_name not in obj.PropertiesList:
-            obj.addProperty(prop_type, prop_name, group, description)
+            obj.addProperty(prop_type, prop_name, group, description, attr)
 
     def _unit(self, v, fallback=None):
         vv = hvaclib.vec(v)
@@ -760,12 +784,22 @@ class DuctSegmentViewProvider:
 
     def attach(self, vobj):
         self.Object = vobj.Object
+        self.ViewObject = vobj
 
     def dumps(self):
         return None
 
     def loads(self, state):
         pass
+
+    def updateData(self, obj, prop):
+        # Re-render CasingShape/InsulationShape from their own linked
+        # materials whenever the shapes or the material links themselves
+        # change -- see core/_component_appearance.py.
+        if prop in _component_appearance.TRIGGER_PROPERTIES:
+            vobj = getattr(self, "ViewObject", None)
+            if vobj is not None:
+                _component_appearance.apply_component_appearance(vobj)
 
     def getIcon(self):
         return hvaclib.get_icon_path("DuctsIcon.svg")

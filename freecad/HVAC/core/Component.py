@@ -41,6 +41,8 @@ translate = FreeCAD.Qt.translate
 from ..utils import hvaclib
 from ..library.library_api import HVACLibraryAPI
 from . import _type_schema
+from . import _geometry_apply
+from . import _component_appearance
 
 
 class DuctComponent:
@@ -157,12 +159,9 @@ class DuctComponent:
             }
 
             result = reg.build_geometry(library_id, type_def, context)
-            shape = result.get("shape", None)
-            lengths = result.get("connection_lengths", [])
-            computed = result.get("computed_properties", {}) or {}
-
-            if shape is not None:
-                obj.Shape = shape
+            _geometry_apply.apply_geometry_result(obj, result)
+            lengths = result.connection_lengths
+            computed = result.computed_properties
 
             lengths_json = json.dumps(lengths)
             if getattr(obj, "ConnectionLengthsJson", "") != lengths_json:
@@ -223,6 +222,22 @@ class DuctComponent:
         self._addProperty(obj, "App::PropertyStringList", "TypeSchemaPropertyNames", "HVAC", "Internal: property names added by the last-applied type schema (for stale cleanup)")
         self._addProperty(obj, "App::PropertyString", "LocalPortsJson", "HVAC", "Internal: this component's local inlet/outlet port geometry, written by the parent junction's composer")
         self._addProperty(obj, "App::PropertyString", "ConnectionLengthsJson", "HVAC", "This component's own per-port connection (trim) lengths")
+
+        # Per-component shapes (see library/geometry_result.py) -- Shape
+        # itself is only the aggregate compound of these, derived each
+        # execute() by core/_geometry_apply.py; never the other way around.
+        self._addProperty(obj, "Part::PropertyPartShape", "CasingShape", "Geometry", "Fitting wall/casing solid")
+        self._addProperty(obj, "Part::PropertyPartShape", "InsulationShape", "Geometry", "Insulation solid (empty if insulation is disabled for this type)")
+        # Materials::PropertyMaterial -- see the matching comment in
+        # Segment.py's own setProperties().
+        self._addProperty(obj, "Materials::PropertyMaterial", "CasingMaterial", "Materials", "Native FreeCAD material for the casing", attr=16)
+        self._addProperty(obj, "Materials::PropertyMaterial", "InsulationMaterial", "Materials", "Native FreeCAD material for the insulation", attr=16)
+
+        for prop in ("CasingShape", "InsulationShape"):
+            try:
+                obj.setEditorMode(prop, 1)
+            except Exception:
+                pass
 
         self._addProperty(obj, "App::PropertyFloat", "CalcFlowRate", "Airflow", "Computed flow rate through this component (L/s)")
         self._addProperty(obj, "App::PropertyFloat", "CalcVelocity", "Airflow", "Computed reference velocity used for this component's pressure drop (m/s)")
@@ -334,9 +349,9 @@ class DuctComponent:
         return "{} [{}]".format(label, role)
 
     @staticmethod
-    def _addProperty(obj, prop_type, prop_name, group, description):
+    def _addProperty(obj, prop_type, prop_name, group, description, attr=0):
         if prop_name not in obj.PropertiesList:
-            obj.addProperty(prop_type, prop_name, group, description)
+            obj.addProperty(prop_type, prop_name, group, description, attr)
 
 
 class DuctComponentViewProvider:
@@ -347,12 +362,22 @@ class DuctComponentViewProvider:
 
     def attach(self, vobj):
         self.Object = vobj.Object
+        self.ViewObject = vobj
 
     def dumps(self):
         return None
 
     def loads(self, state):
         pass
+
+    def updateData(self, obj, prop):
+        # Re-render CasingShape/InsulationShape from their own linked
+        # materials whenever the shapes or the material links themselves
+        # change -- see core/_component_appearance.py.
+        if prop in _component_appearance.TRIGGER_PROPERTIES:
+            vobj = getattr(self, "ViewObject", None)
+            if vobj is not None:
+                _component_appearance.apply_component_appearance(vobj)
 
     def getIcon(self):
         return hvaclib.get_icon_path("DuctsIcon.svg")

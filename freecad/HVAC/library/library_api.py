@@ -781,6 +781,41 @@ class HVACLibraryAPI:
         return out
     
     @staticmethod
+    def grow_port_section(port, delta):
+        """
+        Copy of `port` with its cross-section grown by `delta` (uniformly,
+        on every side) -- position/direction/profile are unchanged, only
+        section_params grows. Shared helper for building an insulation (or
+        any other wrap-around) shape's own outer profile from a casing
+        port's profile, without duplicating this per fitting generator.
+        Inverse of shrinking a port's section by a wall thickness (see
+        e.g. smacna/generators/junctions.py's own private _inset_port,
+        which this does not replace -- that one shrinks to build a hollow
+        casing wall, this one grows to wrap something around the outside).
+        """
+        profile = HVACLibraryAPI.port_profile(port)
+        params = HVACLibraryAPI.port_section_params(port)
+        delta = float(delta)
+
+        if profile == "Circular":
+            diameter = float(params.get("Diameter", 0.0) or 0.0) + 2.0 * delta
+            if diameter <= 0.0:
+                raise ValueError("Grown Diameter must be positive")
+            new_params = dict(params, Diameter=diameter)
+        elif profile in ("Rectangular", "Oval"):
+            width = float(params.get("Width", 0.0) or 0.0) + 2.0 * delta
+            height = float(params.get("Height", 0.0) or 0.0) + 2.0 * delta
+            if width <= 0.0 or height <= 0.0:
+                raise ValueError("Grown Width/Height must be positive")
+            new_params = dict(params, Width=width, Height=height)
+        else:
+            raise ValueError("Unsupported profile '{}' for grow_port_section".format(profile))
+
+        out = HVACLibraryAPI.copy_port(port)
+        out["section_params"] = new_params
+        return out
+
+    @staticmethod
     def build_trim_rec_from_port_lengths(port_lengths):
         """
         Build the connection_lengths a generator returns from a list of

@@ -42,7 +42,7 @@ class FakeFCObj:
         self._editor_modes = {}
         self.ViewObject = FakeViewObject()
 
-    def addProperty(self, prop_type, name, group, description):
+    def addProperty(self, prop_type, name, group, description, attr=0):
         if name not in self.PropertiesList:
             self.PropertiesList.append(name)
             setattr(self, name, None)

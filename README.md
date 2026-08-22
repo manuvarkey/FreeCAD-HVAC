@@ -26,6 +26,11 @@ Once a network is modeled, built-in tools can calculate airflow pressure
 drop across it and propose duct sizes (constant velocity, constant friction
 rate, or static regain).
 
+Each generated segment/fitting can also carry a casing and an insulation
+material, assigned from FreeCAD's own native material database (built-in
+materials, this addon's own SMACNA-relevant cards, other addons', or
+user-defined) — there is no separate HVAC material list.
+
 ## Screenshots
 <img width="1418" height="815" alt="Screenshot from 2026-03-27 03-37-15" src="https://github.com/user-attachments/assets/70b94757-0161-4c5d-b9fd-5b85a57cfde7" />
 <img width="1418" height="815" alt="Screenshot from 2026-03-27 03-35-18" src="https://github.com/user-attachments/assets/052a4662-84c8-417a-a198-d021a9b4eba3" />
@@ -53,6 +58,7 @@ Basic duct creation functionality is now reasonably in place. The project alread
 - organizing library-based element definitions
 - calculating airflow pressure drop across a network
 - automatic duct sizing by constant velocity, constant friction rate, or static regain
+- assigning casing/insulation materials from FreeCAD's native material database
 
 This provides a solid base for further development, including richer fitting logic, validation tools, and future analysis capabilities.
 

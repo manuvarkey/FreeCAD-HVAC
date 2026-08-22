@@ -97,8 +97,11 @@ established groups are `"Dimensions"` (sizes/thicknesses) and `"Options"`
 
 See `samples/README.md` for the three geometry backends (`partscript`,
 `static`, and the legacy `generator` function -- including its use as a
-FCStd-template loader via `HVACLibraryAPI.shape_from_fcstd`) and how to
-choose between them.
+FCStd-template loader via `HVACLibraryAPI.shape_from_fcstd`), how to choose
+between them, and the `{"shape": ...}`/`{"components": {...}}` result
+contract every backend's return value is normalized into (see
+`freecad/HVAC/library/geometry_result.py` and ARCHITECTURE.md's "Component
+geometry & materials").
 
 ## Type selection (automatic matching)
 

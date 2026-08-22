@@ -13,6 +13,7 @@ import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 
 from freecad.HVAC.core import Component as component_mod
 from freecad.HVAC.library.Library import HVACPropertyDef
+from freecad.HVAC.library import geometry_result as geometry_result_mod
 
 
 class FakeDuctObj:
@@ -23,7 +24,7 @@ class FakeDuctObj:
         self._editor_modes = {}
         self.Document = None
 
-    def addProperty(self, prop_type, name, group, description):
+    def addProperty(self, prop_type, name, group, description, attr=0):
         if name not in self.PropertiesList:
             self.PropertiesList.append(name)
             setattr(self, name, None)
@@ -59,7 +60,11 @@ class _FakeRegistry:
 
     def build_geometry(self, lib_id, type_def, context):
         self.last_context = context
-        return self._geometry_result
+        # Mirrors the real HVACLibraryRegistry.build_geometry(): normalize
+        # whatever raw dict the test supplied into a real GeometryResult, so
+        # DuctComponent.execute() sees exactly the same contract it would in
+        # production (see library/geometry_result.py).
+        return geometry_result_mod.normalize(self._geometry_result)
 
 
 def _patch_registry(monkeypatch, registry):
@@ -120,7 +125,7 @@ def test_execute_applies_computed_properties_to_matching_object_property(monkeyp
 
     assert obj.angle == 42.0
     assert not hasattr(obj, "not_a_real_property")
-    assert obj.Shape is geometry_result["shape"]
+    assert obj.CasingShape is geometry_result["shape"]
 
 
 def test_execute_writes_connection_lengths(monkeypatch):
@@ -197,7 +202,7 @@ def test_execute_builds_shape_for_a_non_two_port_primary(monkeypatch):
         dc = _bare_component(obj)
         dc.execute(obj)
 
-        assert obj.Shape is geometry_result["shape"]
+        assert obj.CasingShape is geometry_result["shape"]
 
 
 def test_execute_context_family_resolved_from_parent_for_primary_only(monkeypatch):

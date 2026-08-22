@@ -9,10 +9,24 @@ ship the types actually meant for day-to-day use.
 There are three ways to wire geometry to a type-def. All three receive the same
 `context` dict (`hvac_api`, `library_id`, `start_point`/`end_point` for segments
 or `connected_ports` for junctions, `params`/`properties`, ...) and must return
-`{"shape": <Part.Shape>}`, optionally with `"connection_lengths"` for junctions
-that trim the connected segments. See `freecad/HVAC/library/Library.py:build_geometry`
-for the exact dispatch and `freecad/HVAC/library/library_api.py` for the full
-`HVACLibraryAPI` surface available as `context["hvac_api"]`.
+one of:
+
+- `{"shape": <Part.Shape>}` -- the legacy, single-shape form. Fine for a type
+  that doesn't model insulation (most shipped types); `build_geometry()`
+  normalizes it to a `"casing"` component with no `"insulation"` shape.
+- `{"components": {"casing": {"shape": <Part.Shape>}, "insulation": {"shape": <Part.Shape or None>}}}`
+  -- for a type that builds its own insulation solid alongside its casing
+  (e.g. `smacna/models/circular_straight.py`, `smacna/generators/junctions.py:build_elbow`).
+
+Either form may also include `"connection_lengths"` for junctions that trim
+the connected segments, exactly as before. See
+`freecad/HVAC/library/geometry_result.py` for the full `GeometryResult`/
+`ComponentGeometry` contract every backend's return value is normalized
+into, `freecad/HVAC/library/Library.py:build_geometry` for the exact
+dispatch, and `freecad/HVAC/library/library_api.py` for the full
+`HVACLibraryAPI` surface available as `context["hvac_api"]` (including
+`grow_port_section`, a shared helper for building an insulation cross-
+section from a casing port).
 
 ## 1. PartScript (`"geometry": {"backend": "partscript", "file": "..."}`)
 

@@ -30,6 +30,7 @@ def generate(context):
     flange_thickness = float(params.get("FlangeThickness", 1.0) or 1.0)
     show_flange1 = bool(params.get("ShowFlange1", True))
     show_flange2 = bool(params.get("ShowFlange2", True))
+    insulation_thickness = float(params.get("InsulationThickness", 0.0) or 0.0)
 
     start = api.vec(sp)
     end = api.vec(ep)
@@ -53,5 +54,20 @@ def generate(context):
     if show_flange2 and flange_height > 0.0 and flange_thickness > 0.0:
         parts.append(_make_flange(end, direction * -1.0, flange_thickness, diameter, flange_height))
 
-    shape = api.fuse_shapes(parts)
-    return {"shape": shape}
+    casing_shape = api.fuse_shapes(parts)
+
+    # Insulation, when enabled, is a second tube wrapped around the outside
+    # of the casing -- same span, from the casing's own outer diameter out
+    # to outer diameter + 2*InsulationThickness.
+    insulation_shape = None
+    if insulation_thickness > 0.0:
+        insulation_shape = _make_tube(
+            start, direction, length, diameter + 2.0 * insulation_thickness, diameter
+        )
+
+    return {
+        "components": {
+            "casing": {"shape": casing_shape},
+            "insulation": {"shape": insulation_shape},
+        }
+    }

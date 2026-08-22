@@ -53,6 +53,13 @@
       "group": "Options",
       "description": "Include the flange at port 2 (end)",
       "default": false
+    },
+    {
+      "name": "InsulationThickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Parameters",
+      "description": "Insulation thickness wrapped around the outside of the duct wall; 0 disables insulation",
+      "default": 0.0
     }
   ],
   "geometry": {

@@ -708,6 +708,10 @@ def get_default_library_search_paths():
         get_file_path("libraries"),
     ]
 
+def get_materials_base_path():
+    """Path to this addon's shipped native FreeCAD material cards (.FCMat) -- see utils/materials.py."""
+    return get_file_path(os.path.join("Resources", "Materials"))
+
 
 #------------------------------------------------------------------------------
 # Miscellaneous

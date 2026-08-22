@@ -419,3 +419,42 @@ def test_inline_device_loss_zero_coefficient_returns_none():
 def test_inline_device_loss_negative_coefficient_returns_none():
     context = {"properties": {"LossCoefficient": -1.0}}
     assert api.inline_device_loss(context) is None
+
+
+# ----------------------------------------------------------------------------
+# grow_port_section
+# ----------------------------------------------------------------------------
+
+def test_grow_port_section_circular_grows_diameter_by_twice_delta():
+    port = _port("A", (1, 0, 0), False, profile="Circular", diameter=200.0)
+    grown = api.grow_port_section(port, 25.0)
+    assert grown["section_params"]["Diameter"] == pytest.approx(250.0)
+    # Position/direction/profile/edge_key are otherwise unchanged.
+    assert grown["profile"] == "Circular"
+    assert grown["edge_key"] == "A"
+
+
+def test_grow_port_section_rectangular_grows_width_and_height_by_twice_delta():
+    port = _port("A", (1, 0, 0), False, profile="Rectangular", width=300.0, height=150.0)
+    grown = api.grow_port_section(port, 50.0)
+    assert grown["section_params"]["Width"] == pytest.approx(400.0)
+    assert grown["section_params"]["Height"] == pytest.approx(250.0)
+
+
+def test_grow_port_section_oval_grows_width_and_height_by_twice_delta():
+    port = _port("A", (1, 0, 0), False, profile="Oval", width=300.0, height=150.0)
+    grown = api.grow_port_section(port, 50.0)
+    assert grown["section_params"]["Width"] == pytest.approx(400.0)
+    assert grown["section_params"]["Height"] == pytest.approx(250.0)
+
+
+def test_grow_port_section_unsupported_profile_raises():
+    port = _port("A", (1, 0, 0), False, profile="Weird")
+    with pytest.raises(ValueError):
+        api.grow_port_section(port, 10.0)
+
+
+def test_grow_port_section_does_not_mutate_original_port():
+    port = _port("A", (1, 0, 0), False, profile="Circular", diameter=200.0)
+    api.grow_port_section(port, 25.0)
+    assert port["section_params"]["Diameter"] == 200.0

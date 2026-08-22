@@ -48,6 +48,7 @@ import FreeCAD
 
 from .library_api import HVACLibraryAPI
 from . import validation
+from . import geometry_result
 
 
 @dataclass
@@ -590,11 +591,15 @@ class HVACLibraryRegistry:
 
     def build_geometry(self, library_id: str, type_def: HVACTypeDef, context: dict):
         """
-        Build a type's shape by dispatching to whichever of the three
+        Build a type's geometry by dispatching to whichever of the three
         supported geometry backends it declares: "partscript" (a Python
         script under the library), "static" (a pre-built BREP/STEP file
         plus a placement descriptor), or -- if neither is set -- the legacy
-        generator_module/generator_function pair.
+        generator_module/generator_function pair. Whatever the backend
+        returns (a legacy {"shape": ...} dict or a new-style
+        {"components": {...}} dict) is normalized here, once, into a real
+        GeometryResult -- every caller downstream (DuctSegment/DuctComponent/
+        DuctJunction) only ever sees a GeometryResult, never a raw dict.
         """
         context = self._prepare_geometry_context(type_def, context)
         geometry = getattr(type_def, "geometry", None)
@@ -603,25 +608,24 @@ class HVACLibraryRegistry:
         if backend == "partscript":
             from . import partscript_shapes
             script_path = self.resolve_library_file(library_id, geometry.file)
-            return partscript_shapes.execute_partscript(script_path, context)
-
-        if backend == "static":
+            raw = partscript_shapes.execute_partscript(script_path, context)
+        elif backend == "static":
             from . import static_shapes
             descriptor_path = self.resolve_library_file(library_id, geometry.descriptor)
-            return static_shapes.build_static_geometry(descriptor_path, context)
-
-        if backend:
+            raw = static_shapes.build_static_geometry(descriptor_path, context)
+        elif backend:
             raise ValueError(
                 "Type '{}' uses unsupported geometry backend '{}'".format(type_def.id, backend)
             )
-
-        # Legacy generator backend.
-        if type_def.generator_module and type_def.generator_function:
+        elif type_def.generator_module and type_def.generator_function:
+            # Legacy generator backend.
             module = self.import_generator(library_id, type_def.generator_module)
             func = getattr(module, type_def.generator_function)
-            return func(context)
+            raw = func(context)
+        else:
+            raise ValueError("Type '{}' has no geometry definition".format(type_def.id))
 
-        raise ValueError("Type '{}' has no geometry definition".format(type_def.id))
+        return geometry_result.normalize(raw)
 
     def call_generator(self, library_id: str, type_def: HVACTypeDef, context: dict):
         return self.build_geometry(library_id, type_def, context)

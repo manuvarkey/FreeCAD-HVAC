@@ -477,7 +477,7 @@ class DuctJunction:
             return {}
 
         out = {}
-        for item in result.get("connection_lengths", []) or []:
+        for item in result.connection_lengths or []:
             key = (item.get("edge_key"), item.get("segment_end"))
             try:
                 out[key] = max(0.0, float(item.get("length", 0.0) or 0.0))

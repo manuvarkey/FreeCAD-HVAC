@@ -108,11 +108,21 @@ def execute_partscript(script_path, context):
             "PartScript '{}' must return Part.Shape or dict".format(script_path)
         )
 
-    # Step 4: the result must contain a real, non-empty shape.
-    shape = result.get("shape")
+    # Step 4: the result must contain a real, non-empty shape -- either the
+    # legacy result["shape"], or result["components"]["casing"]["shape"]
+    # (the new components contract; see library/geometry_result.py).
+    if "components" in result:
+        components = dict(result.get("components") or {})
+        casing = components.get("casing")
+        shape = casing.get("shape") if isinstance(casing, dict) else getattr(casing, "shape", None)
+        shape_source = "result['components']['casing']['shape']"
+    else:
+        shape = result.get("shape")
+        shape_source = "result['shape']"
+
     if shape is None or not hasattr(shape, "isNull"):
         raise PartScriptSchemaError(
-            "PartScript '{}' did not return a Part.Shape in result['shape']".format(script_path)
+            "PartScript '{}' did not return a Part.Shape in {}".format(script_path, shape_source)
         )
     if shape.isNull():
         raise PartScriptSchemaError("PartScript '{}' returned an empty shape".format(script_path))
