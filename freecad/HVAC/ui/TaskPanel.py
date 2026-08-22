@@ -1274,6 +1274,18 @@ class TaskPanelSegmentPlacementEditor:
         return True
 
 
+def _spreadsheet_cell(col, row):
+    """0-based (col, row) -> a Spreadsheet::Sheet cell address, e.g. (0, 0) -> "A1", (27, 1) -> "AB2"."""
+    letters = ""
+    n = col
+    while True:
+        letters = chr(ord('A') + (n % 26)) + letters
+        n = n // 26 - 1
+        if n < 0:
+            break
+    return "{}{}".format(letters, row + 1)
+
+
 class TaskPanelAirflowResults:
     """Read-only report panel showing the results of an airflow/pressure-drop calculation."""
 
@@ -1313,9 +1325,9 @@ class TaskPanelAirflowResults:
                 ))
             layout.addWidget(tabs)
 
-        close_button = QtWidgets.QPushButton(translate("HVAC_CalculateAirflow", "Close"))
-        close_button.clicked.connect(lambda: Gui.Control.closeDialog())
-        layout.addWidget(close_button)
+        export_button = QtWidgets.QPushButton(translate("HVAC_CalculateAirflow", "Export to Spreadsheet"))
+        export_button.clicked.connect(self._exportToSpreadsheets)
+        layout.addWidget(export_button)
 
     def _buildComponentWidget(self, comp):
         widget = QtWidgets.QWidget()
@@ -1375,6 +1387,81 @@ class TaskPanelAirflowResults:
         layout.addWidget(junc_table)
 
         return widget
+
+    def _exportToSpreadsheets(self):
+        """
+        Write every sub-network's segment/junction results into two
+        Spreadsheet::Sheet document objects (one row per segment/junction,
+        same columns as the on-screen tables) -- lets a user take the
+        numbers into a report without retyping them. A "Sub-network"
+        column is added only when there's more than one component, mirroring
+        when the on-screen view itself splits into per-sub-network tabs.
+        """
+        doc = getattr(self.network_obj, "Document", None)
+        if doc is None:
+            return
+
+        multi = len(self.result.components) > 1
+        segment_headers = list(self.SEGMENT_HEADERS)
+        junction_headers = list(self.JUNCTION_HEADERS)
+        if multi:
+            segment_headers = [translate("HVAC_CalculateAirflow", "Sub-network")] + segment_headers
+            junction_headers = [translate("HVAC_CalculateAirflow", "Sub-network")] + junction_headers
+
+        segment_rows = []
+        junction_rows = []
+        for i, comp in enumerate(self.result.components):
+            sub_network_label = "{} {}".format(translate("HVAC_CalculateAirflow", "Sub-network"), i + 1)
+
+            for seg in comp.segments:
+                row = [
+                    seg.obj.Label,
+                    "{:.2f}".format(seg.flow_lps),
+                    "{:.2f}".format(seg.velocity_ms),
+                    "{:.2f}".format(seg.friction_loss_pa),
+                    "{:.2f}".format(seg.fitting_loss_pa),
+                    "{:.2f}".format(seg.total_loss_pa),
+                    "{:.1f}".format(seg.cumulative_pressure_pa),
+                ]
+                segment_rows.append([sub_network_label] + row if multi else row)
+
+            for junc in comp.junctions:
+                row = [
+                    junc.obj.Label,
+                    "{:.2f}".format(junc.total_flow_lps),
+                    "{:.1f}".format(junc.static_pressure_pa),
+                    translate("HVAC_CalculateAirflow", "Yes") if junc.is_source else "",
+                    junc.warning,
+                ]
+                junction_rows.append([sub_network_label] + row if multi else row)
+
+        seg_sheet = self._writeSheet(
+            doc, "AirflowSegments",
+            translate("HVAC_CalculateAirflow", "Airflow - Segments"),
+            segment_headers, segment_rows,
+        )
+        junc_sheet = self._writeSheet(
+            doc, "AirflowJunctions",
+            translate("HVAC_CalculateAirflow", "Airflow - Junctions"),
+            junction_headers, junction_rows,
+        )
+        doc.recompute()
+
+        FreeCAD.Console.PrintMessage(
+            "HVAC - Exported airflow results to '{}' and '{}'.\n".format(seg_sheet.Label, junc_sheet.Label)
+        )
+        Gui.Control.closeDialog()
+
+    @staticmethod
+    def _writeSheet(doc, base_name, label, headers, rows):
+        sheet = doc.addObject("Spreadsheet::Sheet", doc.getUniqueObjectName(base_name))
+        sheet.Label = label
+        for col, header in enumerate(headers):
+            sheet.set(_spreadsheet_cell(col, 0), str(header))
+        for row_index, row in enumerate(rows, start=1):
+            for col, value in enumerate(row):
+                sheet.set(_spreadsheet_cell(col, row_index), str(value))
+        return sheet
 
     def accept(self):
         return True
