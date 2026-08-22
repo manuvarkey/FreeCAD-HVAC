@@ -327,9 +327,22 @@ class DuctSegment:
     
         if not getattr(obj, "Height", 0):
             obj.Height = float(getattr(owner, "DefaultHeight", 100.0))
-    
+
+        if not getattr(obj, "InsulationThickness", 0):
+            obj.InsulationThickness = float(getattr(owner, "DefaultInsulationThickness", 0.0))
+
         if not getattr(obj, "ProfileXAxis", None):
             obj.ProfileXAxis = FreeCAD.Vector(0, 0, 0)
+
+        if not getattr(obj.CasingMaterial, "Name", ""):
+            default_material = getattr(owner, "DefaultCasingMaterial", None)
+            if default_material is not None and getattr(default_material, "Name", ""):
+                obj.CasingMaterial = default_material
+
+        if not getattr(obj.InsulationMaterial, "Name", ""):
+            default_material = getattr(owner, "DefaultInsulationMaterial", None)
+            if default_material is not None and getattr(default_material, "Name", ""):
+                obj.InsulationMaterial = default_material
                 
     def applyTypeSchema(self):
         obj = self.Object

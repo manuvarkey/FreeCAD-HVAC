@@ -27,11 +27,14 @@ import json
 
 import FreeCAD
 import FreeCADGui as Gui
+import Materials
+import MatGui  # registers MatGui::MaterialTreeWidget with Gui.UiLoader -- see MaterialPickerDialog
 from PySide import QtWidgets, QtCore
 from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
 
 from ..utils import hvaclib
+from ..utils import materials as hvac_materials
 
 
 class TaskPanelActivate:
@@ -233,6 +236,149 @@ class TaskPanelDirectionEditMode:
         return True
 
 
+class MaterialPickerDialog(QtWidgets.QDialog):
+    """
+    Modal "pick any FreeCAD material" dialog, built from FreeCAD's own
+    native Material browser widget (MatGui::MaterialTreeWidget) -- the same
+    tree used by the Material workbench/editor and by other addons (e.g.
+    CAM's own "Assign Material" dialog in Path/Main/Gui/Job.py). No HVAC-
+    specific material list: every material known to FreeCAD (built-in, this
+    addon's own, other addons', user-defined) shows up here unfiltered.
+    """
+
+    def __init__(self, title, parent=None):
+        super(MaterialPickerDialog, self).__init__(parent)
+        self.uuid = None
+
+        self.setWindowTitle(title)
+
+        self.materialTree = Gui.UiLoader().createWidget("MatGui::MaterialTreeWidget")
+        self.materialTreeWidget = MatGui.MaterialTreeWidget(self.materialTree)
+
+        self.okButton = QtWidgets.QPushButton(translate("HVAC", "OK"))
+        self.cancelButton = QtWidgets.QPushButton(translate("HVAC", "Cancel"))
+        self.okButton.clicked.connect(self.accept)
+        self.cancelButton.clicked.connect(self.reject)
+
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(self.materialTree)
+
+        button_layout = QtWidgets.QHBoxLayout()
+        button_layout.addStretch()
+        button_layout.addWidget(self.okButton)
+        button_layout.addWidget(self.cancelButton)
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+        self.materialTree.onMaterial.connect(self._onMaterial)
+
+    def _onMaterial(self, uuid):
+        self.uuid = uuid
+
+
+class MaterialPickerRow(QtWidgets.QWidget):
+    """
+    One "<current material name> [Browse...]" row, reused by
+    TaskPanelEditMaterial (per-object casing/insulation) and
+    TaskPanelNetworkTypeDefaults (network-level defaults) -- both just need
+    "show what's currently set, let the user replace it via
+    MaterialPickerDialog." `touched` is False until the user actually picks
+    something, so a caller can tell "left alone" apart from "re-picked the
+    same material" and skip re-applying anything unnecessarily.
+    """
+
+    def __init__(self, dialog_title, initial_label, parent=None):
+        super(MaterialPickerRow, self).__init__(parent)
+        self.material = None
+        self.touched = False
+        self._dialog_title = dialog_title
+
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.name_label = QtWidgets.QLabel(initial_label)
+        self.browse_button = QtWidgets.QPushButton(translate("HVAC", "Browse..."))
+        self.browse_button.clicked.connect(self._browse)
+        layout.addWidget(self.name_label, 1)
+        layout.addWidget(self.browse_button)
+
+    def _browse(self):
+        dialog = MaterialPickerDialog(self._dialog_title, parent=self)
+        if dialog.exec_() == QtWidgets.QDialog.Accepted and dialog.uuid:
+            material = hvac_materials.get_material_by_uuid(dialog.uuid)
+            if material is not None:
+                self.material = material
+                self.touched = True
+                self.name_label.setText(material.Name)
+
+
+def _common_material_label(objects, prop_name):
+    """
+    "(none)" if no object has this material set, the shared material's own
+    Name if every object agrees, else "(multiple)" -- same convention
+    TaskPanelTypeEditor uses for a mixed-selection combo box.
+    """
+    names = set()
+    for obj in objects:
+        material = getattr(obj, prop_name, None)
+        names.add(material.Name if material is not None and getattr(material, "Name", "") else "")
+    if len(names) == 1:
+        name = names.pop()
+        return name if name else translate("HVAC_EditMaterial", "(none)")
+    return translate("HVAC_EditMaterial", "(multiple)")
+
+
+class TaskPanelEditMaterial:
+    """
+    Task panel to assign native FreeCAD casing/insulation materials to
+    selected duct segment(s)/component(s) -- one panel covering both
+    properties (see CommandEditMaterial), instead of two separate commands.
+    """
+
+    def __init__(self, objects, apply_callback=None):
+        self.objects = [o for o in (objects or []) if o is not None]
+        self.apply_callback = apply_callback
+
+        self.form = QtWidgets.QWidget()
+        self.form.setWindowTitle(translate("HVAC_EditMaterial", "Edit Material"))
+
+        layout = QtWidgets.QVBoxLayout(self.form)
+        layout.addWidget(QtWidgets.QLabel(
+            translate("HVAC_EditMaterial", "Selected objects: {}").format(len(self.objects))
+        ))
+
+        layout.addWidget(QtWidgets.QLabel(translate("HVAC_EditMaterial", "Casing material:")))
+        self.casing_row = MaterialPickerRow(
+            translate("HVAC_EditMaterial", "Select Casing Material"),
+            _common_material_label(self.objects, "CasingMaterial"),
+        )
+        layout.addWidget(self.casing_row)
+
+        layout.addWidget(QtWidgets.QLabel(translate("HVAC_EditMaterial", "Insulation material:")))
+        self.insulation_row = MaterialPickerRow(
+            translate("HVAC_EditMaterial", "Select Insulation Material"),
+            _common_material_label(self.objects, "InsulationMaterial"),
+        )
+        layout.addWidget(self.insulation_row)
+
+    def accept(self):
+        casing_material = self.casing_row.material if self.casing_row.touched else None
+        insulation_material = self.insulation_row.material if self.insulation_row.touched else None
+
+        if (casing_material is not None or insulation_material is not None) and self.apply_callback:
+            QtCore.QTimer.singleShot(
+                0,
+                lambda: self.apply_callback(
+                    self.objects,
+                    casing_material=casing_material,
+                    insulation_material=insulation_material,
+                )
+            )
+        return True
+
+    def reject(self):
+        return True
+
+
 class TaskPanelNetworkTypeDefaults:
     """Task panel to edit network-level type defaults."""
 
@@ -278,20 +424,40 @@ class TaskPanelNetworkTypeDefaults:
         # )
         # note.setWordWrap(True)
         # layout.addWidget(note)
-        
+
         layout.addWidget(self._makeSeparator())
-        
+
         layout.addWidget(QtWidgets.QLabel(
             translate("HVAC_NetworkTypeDefaults", "Default attachment:")
         ))
         layout.addLayout(self._buildAttachmentGrid())
-        
+
         layout.addWidget(self._makeSeparator())
-        
+
         layout.addWidget(QtWidgets.QLabel(
             translate("HVAC_NetworkTypeDefaults", "Default offset:")
         ))
         layout.addLayout(self._buildOffsetEditors())
+
+        layout.addWidget(self._makeSeparator())
+
+        layout.addWidget(QtWidgets.QLabel(
+            translate("HVAC_NetworkTypeDefaults", "Default casing material:")
+        ))
+        self.casing_material_row = MaterialPickerRow(
+            translate("HVAC_NetworkTypeDefaults", "Select Casing Material"),
+            _common_material_label([network_obj], "DefaultCasingMaterial"),
+        )
+        layout.addWidget(self.casing_material_row)
+
+        layout.addWidget(QtWidgets.QLabel(
+            translate("HVAC_NetworkTypeDefaults", "Default insulation material:")
+        ))
+        self.insulation_material_row = MaterialPickerRow(
+            translate("HVAC_NetworkTypeDefaults", "Select Insulation Material"),
+            _common_material_label([network_obj], "DefaultInsulationMaterial"),
+        )
+        layout.addWidget(self.insulation_material_row)
 
         self._populateLibraries()
         self._loadFromNetwork()
@@ -311,22 +477,26 @@ class TaskPanelNetworkTypeDefaults:
         self.default_diameter = QtWidgets.QDoubleSpinBox()
         self.default_height = QtWidgets.QDoubleSpinBox()
         self.default_width = QtWidgets.QDoubleSpinBox()
-    
-        for w in (self.default_diameter, self.default_width, self.default_height):
+        self.default_insulation_thickness = QtWidgets.QDoubleSpinBox()
+
+        for w in (self.default_diameter, self.default_width, self.default_height, self.default_insulation_thickness):
             w.setDecimals(3)
             w.setRange(0.0, 1e9)
             w.setSingleStep(10.0)
             w.setSuffix(" mm")
-    
+
         row.addWidget(QtWidgets.QLabel("Diameter"), 0, 0)
         row.addWidget(self.default_diameter, 0, 1)
-    
+
         row.addWidget(QtWidgets.QLabel("Height"), 1, 0)
         row.addWidget(self.default_height, 1, 1)
-    
+
         row.addWidget(QtWidgets.QLabel("Width"), 2, 0)
         row.addWidget(self.default_width, 2, 1)
-    
+
+        row.addWidget(QtWidgets.QLabel("Insulation thickness"), 3, 0)
+        row.addWidget(self.default_insulation_thickness, 3, 1)
+
         return row
     
     def _buildAttachmentGrid(self):
@@ -429,6 +599,7 @@ class TaskPanelNetworkTypeDefaults:
         self.default_diameter.setValue(float(getattr(self.network_obj, "DefaultDiameter", 100.0)))
         self.default_width.setValue(float(getattr(self.network_obj, "DefaultWidth", 100.0)))
         self.default_height.setValue(float(getattr(self.network_obj, "DefaultHeight", 100.0)))
+        self.default_insulation_thickness.setValue(float(getattr(self.network_obj, "DefaultInsulationThickness", 0.0)))
                 
         attachment = str(getattr(self.network_obj, "DefaultAttachment", "Center"))
         if attachment in self._attachment_buttons:
@@ -465,12 +636,19 @@ class TaskPanelNetworkTypeDefaults:
                 default_diameter=self.default_diameter.value(),
                 default_width=self.default_width.value(),
                 default_height=self.default_height.value(),
+                default_insulation_thickness=self.default_insulation_thickness.value(),
+                default_casing_material=(
+                    self.casing_material_row.material if self.casing_material_row.touched else None
+                ),
+                default_insulation_material=(
+                    self.insulation_material_row.material if self.insulation_material_row.touched else None
+                ),
             )
         return True
 
     def reject(self):
         return True
-        
+
 
 class TaskPanelTypeEditor:
     """Task panel to edit library/type selection for selected HVAC geometry objects."""

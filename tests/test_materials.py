@@ -7,10 +7,12 @@ geometry & materials" section.
 """
 
 import math
+import os
+import re
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/Materials/PySide stubs
 
-from freecad.HVAC.utils import materials as hvac_materials
+from freecad.HVAC.utils import hvaclib, materials as hvac_materials
 
 
 class FakeParam:
@@ -86,6 +88,55 @@ def test_register_material_resources_is_a_noop_if_resources_dir_missing(monkeypa
     hvac_materials.register_material_resources()
 
     assert called == []
+
+
+# ----------------------------------------------------------------------
+# get_material_by_uuid / default-material UUID constants
+# ----------------------------------------------------------------------
+
+def _card_uuid(relative_path):
+    path = os.path.join(hvaclib.get_materials_base_path(), relative_path)
+    with open(path, "r", encoding="utf-8") as handle:
+        text = handle.read()
+    match = re.search(r'UUID:\s*"([0-9a-fA-F-]+)"', text)
+    return match.group(1)
+
+
+def test_default_material_uuids_match_the_shipped_cards():
+    # These constants are hand-copied from the .FCMat files' own UUIDs (see
+    # Network.py's DefaultCasingMaterial/DefaultInsulationMaterial) -- if a
+    # card's UUID ever changes, this must fail loudly rather than silently
+    # defaulting new networks to no material.
+    assert hvac_materials.GALVANIZED_STEEL_UUID == _card_uuid("Metal/Galvanized-Steel.FCMat")
+    assert hvac_materials.NITRILE_RUBBER_UUID == _card_uuid("Insulation/Nitrile-Rubber.FCMat")
+
+
+def test_get_material_by_uuid_returns_manager_lookup(monkeypatch):
+    import sys
+    from unittest.mock import MagicMock
+
+    fake_material = object()
+    fake_manager = MagicMock()
+    fake_manager.getMaterial.return_value = fake_material
+    fake_materials_module = MagicMock()
+    fake_materials_module.MaterialManager.return_value = fake_manager
+    monkeypatch.setitem(sys.modules, "Materials", fake_materials_module)
+
+    result = hvac_materials.get_material_by_uuid("some-uuid")
+
+    assert result is fake_material
+    fake_manager.getMaterial.assert_called_once_with("some-uuid")
+
+
+def test_get_material_by_uuid_returns_none_on_any_failure(monkeypatch):
+    import sys
+    from unittest.mock import MagicMock
+
+    fake_materials_module = MagicMock()
+    fake_materials_module.MaterialManager.side_effect = RuntimeError("registry not ready")
+    monkeypatch.setitem(sys.modules, "Materials", fake_materials_module)
+
+    assert hvac_materials.get_material_by_uuid("some-uuid") is None
 
 
 # ----------------------------------------------------------------------

@@ -48,6 +48,27 @@ import FreeCAD
 
 from . import hvaclib
 
+# UUIDs of this addon's own shipped cards used as network-level defaults
+# (see Network.py's DefaultCasingMaterial/DefaultInsulationMaterial) --
+# must match freecad/HVAC/Resources/Materials/Metal/Galvanized-Steel.FCMat
+# and .../Insulation/Nitrile-Rubber.FCMat's own General.UUID.
+GALVANIZED_STEEL_UUID = "7d01e7c6-c1b7-4374-b361-a00232c94d20"
+NITRILE_RUBBER_UUID = "4f16dfeb-1bc6-41a8-8a40-30942e30cd2a"
+
+
+def get_material_by_uuid(uuid):
+    """
+    Look up a material by UUID via FreeCAD's own Material subsystem, or
+    None if it isn't (yet) known -- e.g. register_material_resources()
+    hasn't run yet, or the UUID belongs to a card that no longer exists.
+    Never raises.
+    """
+    try:
+        import Materials
+        return Materials.MaterialManager().getMaterial(str(uuid))
+    except Exception:
+        return None
+
 
 def register_material_resources():
     """

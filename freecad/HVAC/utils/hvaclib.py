@@ -709,8 +709,14 @@ def get_default_library_search_paths():
     ]
 
 def get_materials_base_path():
-    """Path to this addon's shipped native FreeCAD material cards (.FCMat) -- see utils/materials.py."""
-    return get_file_path(os.path.join("Resources", "Materials"))
+    """
+    Path to this addon's shipped native FreeCAD material cards (.FCMat) --
+    see utils/materials.py. Resolved (no "..") before being registered as a
+    Material subsystem ModuleDir, since that value is echoed back verbatim
+    in a few places (e.g. Materials.Material.LibraryRoot) and an unresolved
+    path is needlessly harder to read there.
+    """
+    return os.path.realpath(get_file_path(os.path.join("Resources", "Materials")))
 
 
 #------------------------------------------------------------------------------

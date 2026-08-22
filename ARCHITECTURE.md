@@ -190,10 +190,14 @@ object's own geometry, only its ViewProvider's rendered appearance, so it
 shouldn't force a recompute.
 
 `freecad/HVAC/Resources/Materials/` ships a handful of HVAC-domain `.FCMat`
-cards (galvanized steel casing, glass/rock wool and nitrile rubber
-insulation) built entirely from FreeCAD's own standard models (`Father`,
-`Density`, `Thermal`, `BasicRendering`) -- no HVAC-specific material
-schema. `utils/materials.register_material_resources()` (called once from
+cards -- casing metals (galvanized steel, aluminium, stainless steel) and
+insulation (glass wool, rock wool, nitrile rubber, polyurethane foam,
+expanded polystyrene) -- built entirely from FreeCAD's own standard models
+(`Father`, `Density`, `Thermal`, `BasicRendering`) -- no HVAC-specific
+material schema. Every insulation card's `BasicRendering.Transparency` is
+`0.6` so a duct's base casing stays visible through its insulation wrap
+while modeling; metal casing cards are opaque (`0.0`).
+`utils/materials.register_material_resources()` (called once from
 `init_gui.py`) registers that folder with FreeCAD's Material subsystem the
 same way FreeCAD's own Supplemental-Materials addon does (a `ModuleDir` key
 under `.../Mod/Material/Resources/Modules/FreeCAD-HVAC`), so these cards
@@ -228,14 +232,33 @@ FreeCAD's generic property editor has no interactive picker for
 `Materials::PropertyMaterial` on an arbitrary object (confirmed: no shipped
 FreeCAD workbench relies on inline editing for it either -- CAM's own
 "Assign Material" feature builds its own dialog the same way). Materials are
-assigned via two dedicated commands, `HVAC_EditCasingMaterial`/
-`HVAC_EditInsulationMaterial` (`ui/Command.py`), each opening a
-`MaterialPickerDialog` built from FreeCAD's own `MatGui::MaterialTreeWidget`
--- the same native browser widget the Material workbench and CAM use -- and
-writing the chosen material straight onto the selected object(s)'
-`CasingMaterial`/`InsulationMaterial`. `MatGui` (the Gui module that
-implements that widget) is imported once, at `ui/Command.py` module scope,
-since it isn't loaded automatically just by activating the HVAC workbench.
+assigned via one command, `HVAC_EditMaterial` (`ui/Command.py`), which opens
+`ui/TaskPanel.py:TaskPanelEditMaterial` -- a single panel with a
+`MaterialPickerRow` for each of Casing/Insulation, so both properties are
+edited together rather than through two separate commands. Each row's
+"Browse..." button opens a `MaterialPickerDialog` built from FreeCAD's own
+`MatGui::MaterialTreeWidget` -- the same native browser widget the Material
+workbench and CAM use. A row only reports a material back to
+`Network.applyMaterialSelection()` if the user actually picked one
+(`MaterialPickerRow.touched`) -- leaving a row alone (e.g. only changing
+Insulation across a selection with mixed Casing materials) never clobbers
+the other property with whatever the first selected object happened to
+show. `MatGui` (the Gui module that implements the tree widget) is imported
+once, at `ui/TaskPanel.py` module scope, since it isn't loaded automatically
+just by activating the HVAC workbench.
+
+`DuctNetwork` carries the same picker (embedded in
+`TaskPanelNetworkTypeDefaults`, the "Network Defaults" command) for
+`DefaultCasingMaterial`/`DefaultInsulationMaterial` -- defaulted to this
+addon's own Galvanized Steel/Nitrile Rubber cards
+(`utils/materials.GALVANIZED_STEEL_UUID`/`NITRILE_RUBBER_UUID`) the first
+time a network is created -- plus a `DefaultInsulationThickness` alongside
+the existing `DefaultDiameter`/`DefaultWidth`/`DefaultHeight`.
+`DuctSegment.applyOwnerDefaults()`/`DuctComponent.applyOwnerDefaults()` copy
+these onto a newly-created segment/component whenever it doesn't already
+have its own value (never overwrites a manual choice or a value restored
+from an existing document) -- so every new duct object is fully materialed
+out of the box without the user having to visit `HVAC_EditMaterial` for it.
 
 `DuctJunction` itself stays geometry-free: it never gets `CasingShape`/
 `InsulationShape`/materials of its own, only its `DuctComponent` children do.

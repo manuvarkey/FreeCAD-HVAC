@@ -28,12 +28,19 @@ _DENSITY_MODEL_UUID = "454661e5-265b-4320-8e6f-fcf6223ac3af"
 _THERMAL_MODEL_UUID = "9959d007-a970-4ea7-bae4-3eb1b8b883c7"
 _BASIC_RENDERING_MODEL_UUID = "f006c7e4-35b7-43d5-bbf9-c5d572309e6e"
 
-_EXPECTED_CARDS = [
+_METAL_CARDS = [
     "Metal/Galvanized-Steel.FCMat",
+    "Metal/Aluminium.FCMat",
+    "Metal/Stainless-Steel.FCMat",
+]
+_INSULATION_CARDS = [
     "Insulation/Glass-Wool.FCMat",
     "Insulation/Rock-Wool.FCMat",
     "Insulation/Nitrile-Rubber.FCMat",
+    "Insulation/Polyurethane-Foam.FCMat",
+    "Insulation/Expanded-Polystyrene.FCMat",
 ]
+_EXPECTED_CARDS = _METAL_CARDS + _INSULATION_CARDS
 
 
 def _materials_root():
@@ -89,12 +96,20 @@ def test_every_card_declares_a_basic_rendering_appearance():
         assert re.search(r"DiffuseColor:\s*\"\([^)]+\)\"", text), relative_path
 
 
-def test_metal_card_is_filed_under_metal_and_insulation_cards_under_insulation():
-    metal_text = _read("Metal/Galvanized-Steel.FCMat")
-    assert 'Father: "Metal"' in metal_text
+def test_metal_cards_are_filed_under_metal_and_insulation_cards_under_insulation():
+    for relative_path in _METAL_CARDS:
+        assert 'Father: "Metal"' in _read(relative_path), relative_path
 
-    for relative_path in ("Insulation/Glass-Wool.FCMat", "Insulation/Rock-Wool.FCMat", "Insulation/Nitrile-Rubber.FCMat"):
-        assert 'Father: "Insulation"' in _read(relative_path)
+    for relative_path in _INSULATION_CARDS:
+        assert 'Father: "Insulation"' in _read(relative_path), relative_path
+
+
+def test_insulation_cards_are_60_percent_transparent_so_ducts_show_through():
+    for relative_path in _INSULATION_CARDS:
+        assert re.search(r'Transparency:\s*"0\.6"', _read(relative_path)), relative_path
+
+    for relative_path in _METAL_CARDS:
+        assert re.search(r'Transparency:\s*"0\.0"', _read(relative_path)), relative_path
 
 
 def test_no_hvac_specific_material_schema_file_shipped_alongside_cards():

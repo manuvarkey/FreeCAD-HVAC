@@ -81,8 +81,7 @@ class HVAC(Gui.Workbench):
                                 'HVAC_RemoveInlineComponent',
                                 'HVAC_SelectParentJunction',
                                 'HVAC_EditPlacement',
-                                'HVAC_EditCasingMaterial',
-                                'HVAC_EditInsulationMaterial',
+                                'HVAC_EditMaterial',
                                 'HVAC_ResetTypesToDefaults'
                                 ]
 
@@ -107,8 +106,7 @@ class HVAC(Gui.Workbench):
                                 'HVAC_RemoveInlineComponent',
                                 'HVAC_SelectParentJunction',
                                 'HVAC_EditPlacement',
-                                'HVAC_EditCasingMaterial',
-                                'HVAC_EditInsulationMaterial',
+                                'HVAC_EditMaterial',
                                 'HVAC_ResetTypesToDefaults'
                                 ]
 
@@ -133,8 +131,7 @@ class HVAC(Gui.Workbench):
                                 'HVAC_RemoveInlineComponent',
                                 'HVAC_SelectParentJunction',
                                 'HVAC_EditPlacement',
-                                'HVAC_EditCasingMaterial',
-                                'HVAC_EditInsulationMaterial',
+                                'HVAC_EditMaterial',
                                 'HVAC_ResetTypesToDefaults'
                                 ]
 
@@ -253,8 +250,7 @@ class HVAC(Gui.Workbench):
                                  'HVAC_RemoveInlineComponent',
                                  'HVAC_SelectParentJunction',
                                  'HVAC_EditPlacement',
-                                 'HVAC_EditCasingMaterial',
-                                 'HVAC_EditInsulationMaterial',
+                                 'HVAC_EditMaterial',
                                  'HVAC_ResetTypesToDefaults']
                 self.title = translate("HVAC", "Edit Tools")
                 

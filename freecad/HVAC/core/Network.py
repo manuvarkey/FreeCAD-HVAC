@@ -34,6 +34,7 @@ from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
 
 from ..utils import hvaclib
+from ..utils import materials as hvac_materials
 from ..ui import TaskPanel
 from ..core.NetworkParser import DuctNetworkParser
 from ..core.Segment import DuctSegment
@@ -290,7 +291,38 @@ class DuctNetwork:
                 "HVAC Types",
                 "Default rectangular duct height"
             )
-        
+
+        if "DefaultInsulationThickness" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyLength",
+                "DefaultInsulationThickness",
+                "HVAC Types",
+                "Default insulation thickness for new segments"
+            )
+
+        # Materials::PropertyMaterial, not App::PropertyLinkGlobal -- see
+        # the matching comment in Segment.py's setProperties(). Applied
+        # onto new segments/components by their own applyOwnerDefaults()
+        # (Segment.py/Component.py) when they don't already have a
+        # material of their own.
+        if "DefaultCasingMaterial" not in obj.PropertiesList:
+            obj.addProperty(
+                "Materials::PropertyMaterial",
+                "DefaultCasingMaterial",
+                "HVAC Types",
+                "Default casing material for new segments/components",
+                16,  # Prop_NoRecompute
+            )
+
+        if "DefaultInsulationMaterial" not in obj.PropertiesList:
+            obj.addProperty(
+                "Materials::PropertyMaterial",
+                "DefaultInsulationMaterial",
+                "HVAC Types",
+                "Default insulation material for new segments/components",
+                16,  # Prop_NoRecompute
+            )
+
         if not getattr(obj, "DefaultLibraryId", ""):
             lib = hvaclib.HVACLibraryService.get_active_hvac_library()
             if lib:
@@ -315,6 +347,19 @@ class DuctNetwork:
         
         if not getattr(obj, "DefaultHeight", 0):
             obj.DefaultHeight = 100.0
+
+        if not getattr(obj, "DefaultInsulationThickness", 0):
+            obj.DefaultInsulationThickness = 25.0
+
+        if not getattr(obj.DefaultCasingMaterial, "Name", ""):
+            material = hvac_materials.get_material_by_uuid(hvac_materials.GALVANIZED_STEEL_UUID)
+            if material is not None:
+                obj.DefaultCasingMaterial = material
+
+        if not getattr(obj.DefaultInsulationMaterial, "Name", ""):
+            material = hvac_materials.get_material_by_uuid(hvac_materials.NITRILE_RUBBER_UUID)
+            if material is not None:
+                obj.DefaultInsulationMaterial = material
 
         # -------------------------------------------------
         # Air properties used for airflow/pressure-drop calculation
@@ -511,7 +556,7 @@ class DuctNetwork:
 
     @staticmethod
     def applyNetworkTypeDefaults(
-        network_obj, 
+        network_obj,
         library_id=None,
         segment_profile=None,
         default_attachment=None,
@@ -519,6 +564,9 @@ class DuctNetwork:
         default_diameter=None,
         default_width=None,
         default_height=None,
+        default_insulation_thickness=None,
+        default_casing_material=None,
+        default_insulation_material=None,
     ):
         """
         Apply network-level default type settings.
@@ -556,7 +604,19 @@ class DuctNetwork:
         if default_height is not None and abs(float(getattr(network_obj, "DefaultHeight", 100.0)) - float(default_height)) > 1e-9:
             network_obj.DefaultHeight = float(default_height)
             changed = True
-    
+
+        if default_insulation_thickness is not None and abs(float(getattr(network_obj, "DefaultInsulationThickness", 0.0)) - float(default_insulation_thickness)) > 1e-9:
+            network_obj.DefaultInsulationThickness = float(default_insulation_thickness)
+            changed = True
+
+        if default_casing_material is not None:
+            network_obj.DefaultCasingMaterial = default_casing_material
+            changed = True
+
+        if default_insulation_material is not None:
+            network_obj.DefaultInsulationMaterial = default_insulation_material
+            changed = True
+
         if changed:
             network_obj.touch()
             if network_obj.Document:
@@ -1857,8 +1917,26 @@ class DuctNetwork:
             for net in nets_to_sync:
                 proxy = getattr(net, "Proxy", None)
                 if proxy:
-                    proxy.requestSync(force_recompute=True)       
-    
+                    proxy.requestSync(force_recompute=True)
+
+    @staticmethod
+    def applyMaterialSelection(objects, casing_material=None, insulation_material=None):
+        """
+        Set CasingMaterial/InsulationMaterial on selected duct segment(s)/
+        component(s) (used as callback for HVAC_EditMaterial). Unlike
+        applyPlacementSelection, this never touches the object or re-syncs
+        the owner network -- CasingMaterial/InsulationMaterial are
+        Prop_NoRecompute, since picking a material never changes an
+        object's own geometry, only its ViewProvider's rendered appearance.
+        """
+        for obj in objects or []:
+            if obj is None:
+                continue
+            if casing_material is not None and hasattr(obj, "CasingMaterial"):
+                obj.CasingMaterial = casing_material
+            if insulation_material is not None and hasattr(obj, "InsulationMaterial"):
+                obj.InsulationMaterial = insulation_material
+
     ## Trim map generation from junctions
     
     def collectSegmentTrimMap(self):

@@ -27,8 +27,6 @@ import traceback
 
 import FreeCAD
 import FreeCADGui as Gui
-import Materials
-import MatGui  # registers MatGui::MaterialTreeWidget with UiLoader -- see MaterialPickerDialog below
 from PySide import QtWidgets, QtCore
 from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
@@ -954,64 +952,38 @@ class CommandEditType:
         Gui.Control.showDialog(self.task_panel)
 
 
-class MaterialPickerDialog(QtWidgets.QDialog):
+class CommandEditMaterial:
     """
-    Modal "pick any FreeCAD material" dialog, built from FreeCAD's own
-    native Material browser widget (MatGui::MaterialTreeWidget) -- the same
-    tree used by the Material workbench/editor and by other addons (e.g.
-    CAM's own "Assign Material" dialog in Path/Main/Gui/Job.py). No HVAC-
-    specific material list: every material known to FreeCAD (built-in, this
-    addon's own, other addons', user-defined) shows up here unfiltered.
-    """
-
-    def __init__(self, title, parent=None):
-        super(MaterialPickerDialog, self).__init__(parent)
-        self.uuid = None
-
-        self.setWindowTitle(title)
-
-        self.materialTree = Gui.UiLoader().createWidget("MatGui::MaterialTreeWidget")
-        self.materialTreeWidget = MatGui.MaterialTreeWidget(self.materialTree)
-
-        self.okButton = QtWidgets.QPushButton(translate("HVAC", "OK"))
-        self.cancelButton = QtWidgets.QPushButton(translate("HVAC", "Cancel"))
-        self.okButton.clicked.connect(self.accept)
-        self.cancelButton.clicked.connect(self.reject)
-
-        layout = QtWidgets.QVBoxLayout()
-        layout.addWidget(self.materialTree)
-
-        button_layout = QtWidgets.QHBoxLayout()
-        button_layout.addStretch()
-        button_layout.addWidget(self.okButton)
-        button_layout.addWidget(self.cancelButton)
-        layout.addLayout(button_layout)
-        self.setLayout(layout)
-
-        self.materialTree.onMaterial.connect(self._onMaterial)
-
-    def _onMaterial(self, uuid):
-        self.uuid = uuid
-
-
-class _CommandAssignMaterial:
-    """
-    Shared base for HVAC_EditCasingMaterial/HVAC_EditInsulationMaterial:
-    open a MaterialPickerDialog and write the chosen native FreeCAD material
-    onto every selected duct segment/component's CasingMaterial/
-    InsulationMaterial property. Subclasses only need to set PROPERTY_NAME/
-    DIALOG_TITLE and provide their own GetResources().
+    Assign native FreeCAD casing/insulation materials to selected duct
+    segment(s)/component(s), via one TaskPanel covering both properties
+    (see ui/TaskPanel.py:TaskPanelEditMaterial) -- FreeCAD's generic
+    property editor has no interactive picker for Materials::PropertyMaterial
+    on an arbitrary object (confirmed: no shipped FreeCAD workbench relies
+    on inline editing for it either -- CAM's own "Assign Material" feature
+    builds its own dialog the same way).
     """
 
-    PROPERTY_NAME = ""
-    DIALOG_TITLE = ""
+    def __init__(self):
+        self.task_panel = None
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("EditPlacement.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_EditMaterial', 'Edit Material'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_EditMaterial',
+                'Assign native FreeCAD casing/insulation materials to selected duct segment(s)/component(s)'
+            ),
+            'CmdType': 'ForEdit',
+        }
 
     def IsActive(self):
         if Gui.ActiveDocument is None:
             return False
         return bool(self._resolveTargets())
 
-    def _resolveTargets(self):
+    @staticmethod
+    def _resolveTargets():
         # A DuctJunction has no material of its own -- retarget to its
         # Primary DuctComponent, same convention as CommandEditType.
         selected_geom = hvaclib.selectedGeometryObjects() or []
@@ -1027,57 +999,17 @@ class _CommandAssignMaterial:
         return targets
 
     def Activated(self):
+        from ..ui.TaskPanel import TaskPanelEditMaterial
+
         targets = self._resolveTargets()
         if not targets:
             return
 
-        dialog = MaterialPickerDialog(translate("HVAC", self.DIALOG_TITLE))
-        if dialog.exec_() != QtWidgets.QDialog.Accepted or not dialog.uuid:
-            return
-
-        material = Materials.MaterialManager().getMaterial(dialog.uuid)
-        for obj in targets:
-            setattr(obj, self.PROPERTY_NAME, material)
-
-        FreeCAD.Console.PrintMessage(
-            "HVAC - Assigned material '{}' to {} object(s).\n".format(material.Name, len(targets))
+        self.task_panel = TaskPanelEditMaterial(
+            targets,
+            apply_callback=Network.DuctNetwork.applyMaterialSelection,
         )
-
-
-class CommandEditCasingMaterial(_CommandAssignMaterial):
-    """Assign a native FreeCAD material to selected duct segment(s)/component(s)' casing."""
-
-    PROPERTY_NAME = "CasingMaterial"
-    DIALOG_TITLE = "Select Casing Material"
-
-    def GetResources(self):
-        return {
-            'Pixmap': hvaclib.get_icon_path("EditPlacement.svg"),
-            'MenuText': QT_TRANSLATE_NOOP('HVAC_EditCasingMaterial', 'Edit Casing Material'),
-            'ToolTip': QT_TRANSLATE_NOOP(
-                'HVAC_EditCasingMaterial',
-                'Assign a native FreeCAD material to the casing of selected duct segment(s)/component(s)'
-            ),
-            'CmdType': 'ForEdit',
-        }
-
-
-class CommandEditInsulationMaterial(_CommandAssignMaterial):
-    """Assign a native FreeCAD material to selected duct segment(s)/component(s)' insulation."""
-
-    PROPERTY_NAME = "InsulationMaterial"
-    DIALOG_TITLE = "Select Insulation Material"
-
-    def GetResources(self):
-        return {
-            'Pixmap': hvaclib.get_icon_path("EditPlacement.svg"),
-            'MenuText': QT_TRANSLATE_NOOP('HVAC_EditInsulationMaterial', 'Edit Insulation Material'),
-            'ToolTip': QT_TRANSLATE_NOOP(
-                'HVAC_EditInsulationMaterial',
-                'Assign a native FreeCAD material to the insulation of selected duct segment(s)/component(s)'
-            ),
-            'CmdType': 'ForEdit',
-        }
+        Gui.Control.showDialog(self.task_panel)
 
 
 class CommandAddInlineComponent:
@@ -1471,8 +1403,7 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand("HVAC_CreateLine", CommandCreateLine())
     FreeCAD.Gui.addCommand("HVAC_CreateSpline", CommandCreateSpline())
     FreeCAD.Gui.addCommand('HVAC_EditType', CommandEditType())
-    FreeCAD.Gui.addCommand('HVAC_EditCasingMaterial', CommandEditCasingMaterial())
-    FreeCAD.Gui.addCommand('HVAC_EditInsulationMaterial', CommandEditInsulationMaterial())
+    FreeCAD.Gui.addCommand('HVAC_EditMaterial', CommandEditMaterial())
     FreeCAD.Gui.addCommand('HVAC_AddInlineComponent', CommandAddInlineComponent())
     FreeCAD.Gui.addCommand('HVAC_RemoveInlineComponent', CommandRemoveInlineComponent())
     FreeCAD.Gui.addCommand('HVAC_SelectParentJunction', CommandSelectParentJunction())

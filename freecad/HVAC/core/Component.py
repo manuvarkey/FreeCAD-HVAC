@@ -64,6 +64,7 @@ class DuctComponent:
         self.Object = obj
         self._allow_delete = False
         self.setProperties(obj)
+        self.applyOwnerDefaults(obj, parent_junction)
         self.updateMetadata(
             parent_junction=parent_junction,
             role=role,
@@ -281,6 +282,28 @@ class DuctComponent:
         return _type_schema.apply_type_schema(
             obj, getattr(obj, "LibraryId", ""), getattr(obj, "TypeId", "")
         )
+
+    def applyOwnerDefaults(self, obj, parent_junction):
+        """
+        Assign the owning network's default casing/insulation materials
+        onto a newly-created component, same convention as
+        Segment.applyOwnerDefaults() -- only fills in a material the
+        component doesn't already have (never overwrites a manual choice
+        or a value restored from an existing document).
+        """
+        owner = hvaclib.getOwnerNetwork(parent_junction) if parent_junction is not None else None
+        if owner is None:
+            return
+
+        if not getattr(obj.CasingMaterial, "Name", ""):
+            default_material = getattr(owner, "DefaultCasingMaterial", None)
+            if default_material is not None and getattr(default_material, "Name", ""):
+                obj.CasingMaterial = default_material
+
+        if not getattr(obj.InsulationMaterial, "Name", ""):
+            default_material = getattr(owner, "DefaultInsulationMaterial", None)
+            if default_material is not None and getattr(default_material, "Name", ""):
+                obj.InsulationMaterial = default_material
 
     def updateMetadata(
         self,

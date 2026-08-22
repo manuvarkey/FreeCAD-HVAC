@@ -28,4 +28,4 @@ AppearanceModels:
     EmissiveColor: "(0.0000, 0.0000, 0.0000, 1.0)"
     Shininess: "0.1000"
     SpecularColor: "(0.2000, 0.2000, 0.2000, 1.0)"
-    Transparency: "0.0"
+    Transparency: "0.6"
