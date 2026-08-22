@@ -229,7 +229,17 @@ class DuctNetwork:
                 obj.Topology.OwnerNetworkName = obj.Name
             if getattr(obj.Topology, "FolderRole", "") != self.FOLDER_TOPOLOGY_NAME:
                 obj.Topology.FolderRole = self.FOLDER_TOPOLOGY_NAME
-                
+
+        # Internal bookkeeping links to the managed folders above -- kept
+        # (never removed) for the addon's own use, just hidden from the
+        # property editor since a user never needs to read or edit them
+        # directly (the folders themselves are still visible in the tree).
+        for prop in ("Base", "Geometry", "Topology"):
+            try:
+                obj.setEditorMode(prop, 2)
+            except Exception:
+                pass
+
         # -------------------------------------------------
         # Library/type defaults for this network
         # -------------------------------------------------

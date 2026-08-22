@@ -83,6 +83,33 @@ def _bare_component(obj):
     return dc
 
 
+def test_setproperties_hides_internal_bookkeeping_and_json_properties(monkeypatch):
+    """
+    Internal bookkeeping fields and JSON blobs are kept (never removed) for
+    the addon's own use, but hidden from the property editor -- a user
+    never needs to read or edit them directly. ComponentRole/Profile stay
+    visible read-only, and PortSequence stays visible AND editable -- it's
+    a documented user-facing reordering mechanism for an edge's own Inline
+    chain (see Network.py's applyAddInlineComponent).
+    """
+    monkeypatch.setattr(
+        component_mod.hvaclib.HVACLibraryService, "get_active_hvac_library", staticmethod(lambda: None)
+    )
+    obj = FakeDuctObj()
+    _bare_component(obj).setProperties(obj)
+
+    for name in (
+        "OwnerNetworkName", "ParentJunctionName", "AttachedEdgeKey",
+        "TypeSchemaPropertyNames", "LocalPortsJson", "ConnectionLengthsJson",
+    ):
+        assert obj._editor_modes[name] == 2, name
+
+    for name in ("ComponentRole", "Profile"):
+        assert obj._editor_modes[name] == 1, name
+
+    assert "PortSequence" not in obj._editor_modes
+
+
 def _port(edge_key, segment_end, flow_into_junction):
     return {
         "edge_key": edge_key,

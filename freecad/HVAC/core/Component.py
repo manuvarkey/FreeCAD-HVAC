@@ -349,18 +349,28 @@ class DuctComponent:
         if not getattr(obj, "ConnectionLengthsJson", ""):
             obj.ConnectionLengthsJson = "[]"
 
+        for prop in ("ComponentRole", "Profile"):
+            try:
+                obj.setEditorMode(prop, 1)
+            except Exception:
+                pass
+
+        # Internal bookkeeping/JSON blobs -- kept (never removed) for the
+        # addon's own use, just hidden from the property editor since a
+        # user never needs to read or edit them directly. PortSequence is
+        # deliberately NOT hidden here -- it's a documented user-facing
+        # reordering mechanism for an edge's own Inline chain (see
+        # Network.py's applyAddInlineComponent).
         for prop in (
             "OwnerNetworkName",
             "ParentJunctionName",
-            "ComponentRole",
             "AttachedEdgeKey",
-            "Profile",
             "TypeSchemaPropertyNames",
             "LocalPortsJson",
             "ConnectionLengthsJson",
         ):
             try:
-                obj.setEditorMode(prop, 1)
+                obj.setEditorMode(prop, 2)
             except Exception:
                 pass
 

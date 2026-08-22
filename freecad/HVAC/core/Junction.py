@@ -166,19 +166,29 @@ class DuctJunction:
             obj.AnalysisJson = "{}"
 
         for prop in (
-            "OwnerNetworkName",
-            "NodeId",
             "NodeKey",
             "CenterPoint",
             "Degree",
             "Topology",
             "Family",
+        ):
+            try:
+                obj.setEditorMode(prop, 1)
+            except Exception:
+                pass
+
+        # Internal bookkeeping/JSON blobs -- kept (never removed) for the
+        # addon's own use, just hidden from the property editor since a
+        # user never needs to read or edit them directly.
+        for prop in (
+            "OwnerNetworkName",
+            "NodeId",
             "ConnectedEdgeKeys",
             "ConnectionLengthsJson",
             "AnalysisJson",
         ):
             try:
-                obj.setEditorMode(prop, 1)
+                obj.setEditorMode(prop, 2)
             except Exception:
                 pass
 

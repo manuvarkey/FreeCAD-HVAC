@@ -67,6 +67,41 @@ def _patch_component_lookup(monkeypatch, net, is_component=lambda o: isinstance(
     monkeypatch.setattr(junction_mod.hvaclib, "isDuctComponent", is_component)
 
 
+class _FakeSetPropertiesObj:
+    """Minimal stand-in supporting DuctJunction.setProperties()'s dynamic-property API."""
+
+    def __init__(self):
+        self.PropertiesList = []
+        self._editor_modes = {}
+
+    def addProperty(self, prop_type, name, group, description, attr=0):
+        if name not in self.PropertiesList:
+            self.PropertiesList.append(name)
+            setattr(self, name, None)
+        return self
+
+    def setEditorMode(self, name, mode):
+        self._editor_modes[name] = mode
+
+
+def test_setproperties_hides_internal_bookkeeping_and_json_properties():
+    """
+    Internal bookkeeping fields and JSON blobs are kept (never removed) for
+    the addon's own use, but hidden from the property editor -- a user
+    never needs to read or edit them directly. Human-meaningful identity
+    labels (NodeKey/Topology/Family/Degree) and CenterPoint stay visible
+    read-only.
+    """
+    obj = _FakeSetPropertiesObj()
+    _bare_junction(obj).setProperties(obj)
+
+    for name in ("OwnerNetworkName", "NodeId", "ConnectedEdgeKeys", "ConnectionLengthsJson", "AnalysisJson"):
+        assert obj._editor_modes[name] == 2, name
+
+    for name in ("NodeKey", "CenterPoint", "Degree", "Topology", "Family"):
+        assert obj._editor_modes[name] == 1, name
+
+
 def _port(edge_key, segment_end, position, direction, profile, section_params, flow_into_junction):
     return {
         "edge_key": edge_key,

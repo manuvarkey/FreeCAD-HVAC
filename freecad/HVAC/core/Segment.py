@@ -284,22 +284,35 @@ class DuctSegment:
             obj.AnalysisJson = "{}"
 
         for prop in (
+            "StartPoint",
+            "EndPoint",
+            "CenterlineLength",
+            "Family",
+            "Profile",
+        ):
+            try:
+                obj.setEditorMode(prop, 1)
+            except Exception:
+                pass
+
+        # Internal bookkeeping/JSON blobs -- kept (never removed) for the
+        # addon's own use, just hidden from the property editor since a
+        # user never needs to read or edit them directly.
+        for prop in (
             "OwnerNetworkName",
             "SegmentKey",
             "SourceObjectName",
             "SourceIndex",
             "StartNode",
             "EndNode",
-            "StartPoint",
-            "EndPoint",
-            "CenterlineLength",
-            "Family",
-            "Profile",
+            "PathKind",
             "AnalysisJson",
             "TypeSchemaPropertyNames",
+            "StartTrimPlaneJson",
+            "EndTrimPlaneJson",
         ):
             try:
-                obj.setEditorMode(prop, 1)
+                obj.setEditorMode(prop, 2)
             except Exception:
                 pass
 

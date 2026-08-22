@@ -114,6 +114,24 @@ def test_setproperties_defaults_missing_material_gracefully(monkeypatch):
     assert obj.DefaultCasingMaterial is None
 
 
+def test_setproperties_hides_internal_managed_folder_links(monkeypatch):
+    """
+    Base/Geometry/Topology are plain App::PropertyLink pointers to this
+    network's own internal managed folders (see DuctManagedFolder) -- kept
+    (never removed) so the addon's own code can still reach them, but
+    hidden from the property editor since a user never needs to read or
+    edit them directly (the folders themselves stay visible in the tree).
+    """
+    _patch_library_lookups(monkeypatch)
+
+    obj = FakeNetworkObj()
+    _bare_network().setProperties(obj)
+
+    assert obj._editor_modes["Base"] == 2
+    assert obj._editor_modes["Geometry"] == 2
+    assert obj._editor_modes["Topology"] == 2
+
+
 def test_apply_network_type_defaults_writes_insulation_thickness_and_materials():
     obj = FakeNetworkObj()
     obj.DefaultInsulationThickness = 0.0

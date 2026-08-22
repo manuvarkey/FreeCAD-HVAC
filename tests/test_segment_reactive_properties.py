@@ -63,6 +63,30 @@ def _bare_segment(obj):
     return ds
 
 
+def test_setproperties_hides_internal_bookkeeping_and_json_properties(monkeypatch):
+    """
+    Internal bookkeeping fields and JSON blobs are kept (never removed) for
+    the addon's own use, but hidden from the property editor -- a user
+    never needs to read or edit them directly. Geometric diagnostics and
+    human-meaningful identity labels stay visible read-only.
+    """
+    monkeypatch.setattr(
+        segment_mod.hvaclib.HVACLibraryService, "get_active_hvac_library", staticmethod(lambda: None)
+    )
+    obj = FakeSegmentObj()
+    _bare_segment(obj).setProperties(obj)
+
+    for name in (
+        "OwnerNetworkName", "SegmentKey", "SourceObjectName", "SourceIndex",
+        "StartNode", "EndNode", "PathKind", "AnalysisJson",
+        "TypeSchemaPropertyNames", "StartTrimPlaneJson", "EndTrimPlaneJson",
+    ):
+        assert obj._editor_modes[name] == 2, name
+
+    for name in ("StartPoint", "EndPoint", "CenterlineLength", "Family", "Profile"):
+        assert obj._editor_modes[name] == 1, name
+
+
 def test_apply_type_schema_removes_stale_non_core_properties(monkeypatch):
     circular_properties = [
         HVACPropertyDef(name="Diameter", prop_type="App::PropertyLength", group="Dimensions", description="", default=100.0),
