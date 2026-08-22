@@ -713,6 +713,8 @@ class TerminalFlowRateObserver:
     COLOR_SET = (0.0, 0.7, 0.0)
     COLOR_UNSET = (0.85, 0.0, 0.0)
     TRANSPARENCY = 0.5
+    DIALOG_DELAY_MS = 200
+    SELECTION_CLEAR_DELAY_MS = 250
 
     def __init__(self, network_obj):
         self.network_obj = network_obj
@@ -832,7 +834,17 @@ class TerminalFlowRateObserver:
 
         if event.getState() != coin.SoButtonEvent.DOWN:
             return
-        self._openFlowRateDialog(junction)
+
+        # The dialog has to open asynchronously -- opening it straight from
+        # this callback keeps the mouse button looking "held" for as long
+        # as the modal dialog is up, which FreeCAD reads as a long-press
+        # and pops its own Object/Face/Edge/Other clarify-selection menu.
+        # But going async means this click still completes as an ordinary
+        # FreeCAD selection before our dialog opens, so clear that stray
+        # selection shortly after -- nothing should stay highlighted just
+        # from clicking a flow arrow.
+        QtCore.QTimer.singleShot(self.DIALOG_DELAY_MS, lambda j=junction: self._openFlowRateDialog(j))
+        QtCore.QTimer.singleShot(self.SELECTION_CLEAR_DELAY_MS, Gui.Selection.clearSelection)
 
     def _junctionForPickedPath(self, path):
         for arrow_node, junction in self._arrows:
