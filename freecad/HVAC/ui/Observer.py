@@ -712,6 +712,7 @@ class TerminalFlowRateObserver:
     SEPARATION_FRACTION = 0.2
     COLOR_SET = (0.0, 0.7, 0.0)
     COLOR_UNSET = (0.85, 0.0, 0.0)
+    COLOR_TEXT = (0, 0, 0)
     TRANSPARENCY = 0.5
     DIALOG_DELAY_MS = 200
     SELECTION_CLEAR_DELAY_MS = 250
@@ -722,6 +723,7 @@ class TerminalFlowRateObserver:
         self._event_callback_node = None
         self._arrows = []  # [(SoSeparator, junction_obj), ...] -- pickable
         self._planes = []  # [SoSeparator, ...] -- decorative only
+        self._labels = []  # [SoSeparator, ...] -- decorative only
 
     def start(self):
         vobj = getattr(self.network_obj, "ViewObject", None)
@@ -748,16 +750,18 @@ class TerminalFlowRateObserver:
         self._event_callback_node = None
         self._arrows = []
         self._planes = []
+        self._labels = []
 
     def refresh(self):
-        """Rebuild every terminal's arrow/plane from the junctions' current DesignFlowRate/geometry."""
+        """Rebuild every terminal's arrow/plane/label from the junctions' current DesignFlowRate/geometry."""
         if self._root is None:
             return
-        # Child 0 is the event callback node -- keep it, drop only the arrows/planes.
+        # Child 0 is the event callback node -- keep it, drop only the arrows/planes/labels.
         while self._root.getNumChildren() > 1:
             self._root.removeChild(self._root.getNumChildren() - 1)
         self._arrows = []
         self._planes = []
+        self._labels = []
 
         for junction in self._terminalJunctions():
             self._buildOverlayForJunction(junction)
@@ -808,6 +812,12 @@ class TerminalFlowRateObserver:
         if plane_node is not None:
             self._root.addChild(plane_node)
             self._planes.append(plane_node)
+
+        label_text = "{:.0f} L/s".format(design_flow_rate) if design_flow_rate != 0.0 else "Not set"
+        label_node = buildFlowRateLabelCoinNode(plane_port, label_text, self.COLOR_TEXT)
+        if label_node is not None:
+            self._root.addChild(label_node)
+            self._labels.append(label_node)
 
     def _onMouseClick(self, user_data, event_callback):
         event = event_callback.getEvent()
@@ -1010,6 +1020,98 @@ def buildPortHighlightCoinNode(port, color=(0.2, 0.6, 1.0), transparency=0.5):
     face = coin.SoFaceSet()
     face.numVertices.setValue(4)
     root.addChild(face)
+
+    return root
+
+# Approximate glyph aspect ratio (width:height) -- used to estimate a
+# string's rendered width from font size alone, since SoText3 has no
+# built-in "measure this string" query. Just an approximation (the actual
+# default font isn't necessarily this exact width), good enough to keep
+# long strings from visibly overflowing the plane.
+MONOSPACE_CHAR_WIDTH_RATIO = 0.6
+
+def buildFlowRateLabelCoinNode(port, text, color):
+    """
+    Build one Coin node: a world-space text label lying flat in the same
+    plane as the port's own highlight plane (see buildPortHighlightCoinNode
+    -- same port dict), sized to 20% of that plane's own height (shrunk
+    further if needed so it can't overflow past the plane's own edges) and
+    anchored just inside its top-right corner, as seen by a viewer facing
+    the terminal (standing in the open space the terminal faces, looking
+    toward the duct). Used by TerminalFlowRateObserver to print a
+    terminal's design flow rate value right on its port plane, so the
+    value itself is readable at a glance instead of only being implied by
+    the plane/arrow color.
+
+    port: a connected_ports-style dict (position, direction, profile_x_axis,
+    section_params -- see NetworkParser.JunctionPort). `position` must
+    already be the port's real (translated) location, not the raw
+    pre-fitting anchor -- see hvaclib.translated_port_position().
+
+    Uses SoText3 (real 3D, world-sized text), not SoText2 (fixed-size,
+    screen-facing) -- the whole point is a height measured in real mm
+    against the plane's own size, which only SoText3 supports.
+    """
+    position = port.get("position")
+    if not position:
+        return None
+    direction = port.get("direction") or (0.0, 0.0, 1.0)
+    preferred_x = port.get("profile_x_axis")
+    section_params = port.get("section_params", {}) or {}
+
+    width, height = hvaclib.get_section_extents(section_params)
+    if width <= 0.0 or height <= 0.0:
+        width = height = 100.0
+    half_w = width  # half of the plane's own 2x-port-dimension full size
+    half_h = height
+    plane_width = 2.0 * half_w
+    plane_height = 2.0 * half_h
+    text_height = plane_height * 0.15
+
+    origin = FreeCAD.Vector(*position)
+    # Face the frame toward a viewer standing in the open space the
+    # terminal faces and looking toward the duct (i.e. looking along the
+    # port's own direction) -- passing `direction` itself here would face
+    # the frame's normal (and so its text) AWAY from that viewer, which is
+    # exactly why it used to render as its own mirror image.
+    placement, x_dir, y_dir, _ = hvaclib.make_profile_frame(
+        FreeCAD.Vector(direction) * -1.0, preferred_x, origin
+    )
+
+    # Shrink the text, if needed, so a long string can't overflow past the
+    # plane's own left edge -- SoText3 has no auto-fit, so estimate the
+    # rendered width from an approximate glyph width.
+    margin = plane_height * 0.05  # inward padding from the plane's own edges
+    available_width = plane_width - 2.0 * margin
+    text_str = str(text)
+    estimated_width = len(text_str) * text_height * MONOSPACE_CHAR_WIDTH_RATIO
+    if available_width > 0.0 and estimated_width > available_width:
+        text_height *= available_width / estimated_width
+
+    # Anchor just inside the plane's own top-right corner (from the
+    # viewer's own point of view) so the label reads inward, within the
+    # plane's bounds, rather than drifting past its edges.
+    anchor = origin + x_dir * (half_w - margin) + y_dir * (half_h - margin - text_height)
+
+    root = coin.SoSeparator()
+
+    mat = coin.SoMaterial()
+    mat.diffuseColor.setValue(*color)
+    root.addChild(mat)
+
+    transform = coin.SoTransform()
+    transform.translation.setValue(anchor.x, anchor.y, anchor.z)
+    transform.rotation.setValue(*placement.Rotation.Q)
+    root.addChild(transform)
+
+    font = coin.SoFont()
+    font.size.setValue(text_height)
+    root.addChild(font)
+
+    text_node = coin.SoText3()
+    text_node.string.setValue(text_str)
+    text_node.justification = coin.SoText3.RIGHT
+    root.addChild(text_node)
 
     return root
 
