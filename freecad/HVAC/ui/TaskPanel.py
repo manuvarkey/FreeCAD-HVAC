@@ -36,7 +36,7 @@ translate = FreeCAD.Qt.translate
 
 from ..utils import hvaclib
 from ..utils import materials as hvac_materials
-from ..ui.Observer import buildPortHighlightCoinNode, TerminalFlowRateObserver
+from ..ui.Observer import buildPortHighlightCoinNode, TerminalFlowRateObserver, AirflowResultObserver
 
 
 class TaskPanelActivate:
@@ -1397,9 +1397,19 @@ class TaskPanelAirflowResults:
         # table this panel builds (one pair per sub-network tab).
         self.selection_sync = _ResultsSelectionSync()
 
+        # Colored plane/overlay result visualization, active for this
+        # panel's whole lifetime -- see Observer.py:AirflowResultObserver.
+        # Off by default (both Enable checkboxes start unchecked).
+        self.airflow_result_observer = AirflowResultObserver(
+            network_obj, result, terminal_observer=self.flow_arrow_observer,
+        )
+        self.airflow_result_observer.start()
+
         self.form = QtWidgets.QWidget()
         self.form.setWindowTitle(translate("HVAC_CalculateAirflow", "Airflow Calculation Results"))
         self.layout = QtWidgets.QVBoxLayout(self.form)
+
+        self.layout.addWidget(self._buildVisualizationControls())
 
         self.results_container = QtWidgets.QWidget()
         self.results_layout = QtWidgets.QVBoxLayout(self.results_container)
@@ -1418,6 +1428,44 @@ class TaskPanelAirflowResults:
 
         self._showResults(result)
 
+    def _buildVisualizationControls(self):
+        """
+        "Enable" checkbox + "Color by" dropdown for each of the two result
+        overlays AirflowResultObserver can draw -- see its own docstring.
+        Text values on the overlays are always shown regardless of which
+        dropdown entry is picked; only the overlay's own color follows it.
+        """
+        group = QtWidgets.QGroupBox(translate("HVAC_CalculateAirflow", "Result Visualization"))
+        grid = QtWidgets.QGridLayout(group)
+
+        self.junction_viz_checkbox = QtWidgets.QCheckBox(translate("HVAC_CalculateAirflow", "Junction Ports"))
+        grid.addWidget(self.junction_viz_checkbox, 0, 0)
+        grid.addWidget(QtWidgets.QLabel(translate("HVAC_CalculateAirflow", "Color by:")), 0, 1)
+        self.junction_color_combo = QtWidgets.QComboBox()
+        self.junction_color_combo.addItem(translate("HVAC_CalculateAirflow", "Flow Rate"), "flow_rate")
+        self.junction_color_combo.addItem(translate("HVAC_CalculateAirflow", "Static Pressure"), "static_pressure")
+        grid.addWidget(self.junction_color_combo, 0, 2)
+
+        self.segment_viz_checkbox = QtWidgets.QCheckBox(translate("HVAC_CalculateAirflow", "Segments"))
+        grid.addWidget(self.segment_viz_checkbox, 1, 0)
+        grid.addWidget(QtWidgets.QLabel(translate("HVAC_CalculateAirflow", "Color by:")), 1, 1)
+        self.segment_color_combo = QtWidgets.QComboBox()
+        self.segment_color_combo.addItem(translate("HVAC_CalculateAirflow", "Velocity"), "velocity")
+        self.segment_color_combo.addItem(translate("HVAC_CalculateAirflow", "Friction Drop"), "friction_drop")
+        self.segment_color_combo.addItem(translate("HVAC_CalculateAirflow", "Pressure Loss"), "pressure_loss")
+        grid.addWidget(self.segment_color_combo, 1, 2)
+
+        self.junction_viz_checkbox.toggled.connect(self.airflow_result_observer.setJunctionEnabled)
+        self.junction_color_combo.currentIndexChanged.connect(
+            lambda: self.airflow_result_observer.setJunctionColorBy(self.junction_color_combo.currentData())
+        )
+        self.segment_viz_checkbox.toggled.connect(self.airflow_result_observer.setSegmentEnabled)
+        self.segment_color_combo.currentIndexChanged.connect(
+            lambda: self.airflow_result_observer.setSegmentColorBy(self.segment_color_combo.currentData())
+        )
+
+        return group
+
     def _clearResults(self):
         while self.results_layout.count():
             item = self.results_layout.takeAt(0)
@@ -1429,6 +1477,7 @@ class TaskPanelAirflowResults:
         self.result = result
         self._clearResults()
         self.selection_sync.clearTables()
+        self.airflow_result_observer.setResult(result)
 
         if result.warnings:
             warn_box = QtWidgets.QGroupBox(translate("HVAC_CalculateAirflow", "Warnings"))
@@ -1598,9 +1647,10 @@ class TaskPanelAirflowResults:
             "HVAC - Exported airflow results to '{}' and '{}'.\n".format(seg_sheet.Label, junc_sheet.Label)
         )
         # Export closes the dialog directly (not via accept()/reject()), so
-        # the arrow overlay/selection sync must be torn down here too.
+        # every overlay/sync helper must be torn down here too.
         self.flow_arrow_observer.stop()
         self.selection_sync.stop()
+        self.airflow_result_observer.stop()
         Gui.Control.closeDialog()
 
     @staticmethod
@@ -1617,11 +1667,13 @@ class TaskPanelAirflowResults:
     def accept(self):
         self.flow_arrow_observer.stop()
         self.selection_sync.stop()
+        self.airflow_result_observer.stop()
         return True
 
     def reject(self):
         self.flow_arrow_observer.stop()
         self.selection_sync.stop()
+        self.airflow_result_observer.stop()
         return True
 
 
