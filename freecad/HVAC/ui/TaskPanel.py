@@ -1261,45 +1261,121 @@ def _spreadsheet_cell(col, row):
     return "{}{}".format(letters, row + 1)
 
 
-def _resolveSelectableObject(obj):
+def _resolveSelectableObjects(obj):
     """
     A DuctJunction has no Shape of its own and can't be highlighted in the
-    3D view -- retarget to its Primary DuctComponent (the actual visible
-    fitting), same convention CommandEditType/CommandEditMaterial already
-    use for junction selections.
+    3D view -- retarget to every one of its DuctComponent children: the
+    Primary fitting AND any Inline devices (dampers, etc.) chained onto
+    its own edges, so a junction's whole fitting geometry gets selected,
+    not just its Primary.
     """
     if obj is None:
-        return None
+        return []
     if hvaclib.isDuctJunction(obj):
         proxy = getattr(obj, "Proxy", None)
-        primary = proxy.getPrimaryComponent() if proxy is not None else None
-        return primary if primary is not None else obj
-    return obj
+        components = list(proxy.getComponents()) if proxy is not None else []
+        return components if components else [obj]
+    return [obj]
 
 
-def _wireTableRowSelection(table, objs):
+class _ResultsSelectionSync:
     """
-    Select the corresponding document object(s) in the 3D view whenever a
-    row of `table` is selected -- `objs[row]` is that row's own object
-    (used by TaskPanelAirflowResults/TaskPanelSizeDucts' results tables).
-    Row-based (not per-cell) selection, so clicking any cell picks the
-    whole row's object.
+    Two-way sync between one or more results tables' row selection and
+    Gui.Selection, for the lifetime of a TaskPanelAirflowResults/
+    TaskPanelSizeDucts panel: selecting a row selects that row's object in
+    the 3D view, AND selecting a matching object in the 3D view (or tree)
+    selects its row back -- across every table registered via addTable()
+    (e.g. Calculate Airflow's segment AND junction tables at once).
+
+    `_updating` guards against the two directions bouncing off each other
+    forever: a table-driven Gui.Selection change would otherwise trigger
+    this same class's own Gui.Selection observer, which would try to
+    re-apply the very same table selection it just came from.
     """
-    table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
 
-    def _onSelectionChanged():
-        Gui.Selection.clearSelection()
-        rows = {index.row() for index in table.selectedIndexes()}
-        for row in rows:
-            if 0 <= row < len(objs):
-                target = _resolveSelectableObject(objs[row])
-                if target is not None:
-                    try:
-                        Gui.Selection.addSelection(target.Document.Name, target.Name)
-                    except Exception:
-                        pass
+    def __init__(self):
+        self._tables = []  # [(QTableWidget, [obj, obj, ...]), ...]
+        self._updating = False
+        Gui.Selection.addObserver(self)
 
-    table.itemSelectionChanged.connect(_onSelectionChanged)
+    def addTable(self, table, objs):
+        """
+        Row-based (not per-cell) selection, so clicking any cell picks the
+        whole row's object -- `objs[row]` is that row's own object.
+        """
+        table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self._tables.append((table, objs))
+        table.itemSelectionChanged.connect(lambda t=table, o=objs: self._onTableSelectionChanged(t, o))
+
+    def clearTables(self):
+        """Drop every registered table -- call before rebuilding results (e.g. a re-run), since
+        the old table widgets are about to be deleted and must not be referenced afterwards."""
+        self._tables = []
+
+    def stop(self):
+        try:
+            Gui.Selection.removeObserver(self)
+        except Exception:
+            pass
+        self._tables = []
+
+    def _onTableSelectionChanged(self, table, objs):
+        if self._updating:
+            return
+        self._updating = True
+        try:
+            Gui.Selection.clearSelection()
+            rows = {index.row() for index in table.selectedIndexes()}
+            for row in rows:
+                if 0 <= row < len(objs):
+                    for target in _resolveSelectableObjects(objs[row]):
+                        try:
+                            Gui.Selection.addSelection(target.Document.Name, target.Name)
+                        except Exception:
+                            pass
+        finally:
+            self._updating = False
+
+    def _syncTablesFromSelection(self):
+        if self._updating:
+            return
+        self._updating = True
+        try:
+            selected = {
+                (sel.Object.Document.Name, sel.Object.Name)
+                for sel in Gui.Selection.getSelectionEx()
+                if sel.Object is not None
+            }
+            for table, objs in self._tables:
+                table.blockSignals(True)
+                try:
+                    table.clearSelection()
+                    for row, obj in enumerate(objs):
+                        targets = _resolveSelectableObjects(obj)
+                        if any((t.Document.Name, t.Name) in selected for t in targets):
+                            table.selectRow(row)
+                finally:
+                    table.blockSignals(False)
+        finally:
+            self._updating = False
+
+    # ------------------------------------------------------------------
+    # Gui.Selection observer protocol -- react to any selection change by
+    # just re-reading the current selection fresh, rather than tracking
+    # each method's own specific (doc, obj, sub, ...) args individually.
+    # ------------------------------------------------------------------
+
+    def addSelection(self, doc, obj, sub, pnt):
+        self._syncTablesFromSelection()
+
+    def removeSelection(self, doc, obj, sub):
+        self._syncTablesFromSelection()
+
+    def setSelection(self, doc):
+        self._syncTablesFromSelection()
+
+    def clearSelection(self, doc):
+        self._syncTablesFromSelection()
 
 
 class TaskPanelAirflowResults:
@@ -1316,6 +1392,10 @@ class TaskPanelAirflowResults:
         # whole lifetime -- see Observer.py:TerminalFlowRateObserver.
         self.flow_arrow_observer = TerminalFlowRateObserver(network_obj)
         self.flow_arrow_observer.start()
+
+        # Two-way row <-> 3D-selection sync across every segment/junction
+        # table this panel builds (one pair per sub-network tab).
+        self.selection_sync = _ResultsSelectionSync()
 
         self.form = QtWidgets.QWidget()
         self.form.setWindowTitle(translate("HVAC_CalculateAirflow", "Airflow Calculation Results"))
@@ -1348,6 +1428,7 @@ class TaskPanelAirflowResults:
     def _showResults(self, result):
         self.result = result
         self._clearResults()
+        self.selection_sync.clearTables()
 
         if result.warnings:
             warn_box = QtWidgets.QGroupBox(translate("HVAC_CalculateAirflow", "Warnings"))
@@ -1429,7 +1510,7 @@ class TaskPanelAirflowResults:
             for col, value in enumerate(values):
                 seg_table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
         seg_table.resizeColumnsToContents()
-        _wireTableRowSelection(seg_table, [seg.obj for seg in comp.segments])
+        self.selection_sync.addTable(seg_table, [seg.obj for seg in comp.segments])
         layout.addWidget(QtWidgets.QLabel(translate("HVAC_CalculateAirflow", "Segments")))
         layout.addWidget(seg_table)
 
@@ -1448,7 +1529,7 @@ class TaskPanelAirflowResults:
             for col, value in enumerate(values):
                 junc_table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
         junc_table.resizeColumnsToContents()
-        _wireTableRowSelection(junc_table, [junc.obj for junc in comp.junctions])
+        self.selection_sync.addTable(junc_table, [junc.obj for junc in comp.junctions])
         layout.addWidget(QtWidgets.QLabel(translate("HVAC_CalculateAirflow", "Junctions")))
         layout.addWidget(junc_table)
 
@@ -1517,8 +1598,9 @@ class TaskPanelAirflowResults:
             "HVAC - Exported airflow results to '{}' and '{}'.\n".format(seg_sheet.Label, junc_sheet.Label)
         )
         # Export closes the dialog directly (not via accept()/reject()), so
-        # the arrow overlay must be torn down here too.
+        # the arrow overlay/selection sync must be torn down here too.
         self.flow_arrow_observer.stop()
+        self.selection_sync.stop()
         Gui.Control.closeDialog()
 
     @staticmethod
@@ -1534,10 +1616,12 @@ class TaskPanelAirflowResults:
 
     def accept(self):
         self.flow_arrow_observer.stop()
+        self.selection_sync.stop()
         return True
 
     def reject(self):
         self.flow_arrow_observer.stop()
+        self.selection_sync.stop()
         return True
 
 
@@ -1577,6 +1661,9 @@ class TaskPanelSizeDucts:
         # whole lifetime -- see Observer.py:TerminalFlowRateObserver.
         self.flow_arrow_observer = TerminalFlowRateObserver(network_obj)
         self.flow_arrow_observer.start()
+
+        # Two-way row <-> 3D-selection sync for the results table.
+        self.selection_sync = _ResultsSelectionSync()
 
         self.form = QtWidgets.QWidget()
         self.form.setWindowTitle(translate("HVAC_SizeDucts", "Size Ducts"))
@@ -1755,6 +1842,7 @@ class TaskPanelSizeDucts:
 
     def _showResults(self, result):
         self._clearResults()
+        self.selection_sync.clearTables()
 
         if result.warnings:
             warn_box = QtWidgets.QGroupBox(translate("HVAC_SizeDucts", "Warnings"))
@@ -1795,7 +1883,7 @@ class TaskPanelSizeDucts:
             for col, value in enumerate(values):
                 table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
         table.resizeColumnsToContents()
-        _wireTableRowSelection(table, [sres.obj for sres in result.segments])
+        self.selection_sync.addTable(table, [sres.obj for sres in result.segments])
         self.results_layout.addWidget(table)
 
     def _formatSize(self, profile, diameter_mm, width_mm, height_mm):
@@ -1805,6 +1893,7 @@ class TaskPanelSizeDucts:
 
     def accept(self):
         self.flow_arrow_observer.stop()
+        self.selection_sync.stop()
         if self.sizer is not None and self.result is not None:
             changed_count = self.sizer.apply(self.result)
             if changed_count and getattr(self.network_obj, "Document", None):
@@ -1813,4 +1902,5 @@ class TaskPanelSizeDucts:
 
     def reject(self):
         self.flow_arrow_observer.stop()
+        self.selection_sync.stop()
         return True
