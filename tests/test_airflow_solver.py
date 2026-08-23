@@ -34,7 +34,7 @@ from network_fixtures import (
     make_segment as _make_segment,
 )
 
-from freecad.HVAC.core import airflow
+from freecad.HVAC.analysis import physics as airflow
 from freecad.HVAC.core.AirflowSolver import AirflowSolver, AirflowSolveError, K_DEFAULT
 
 
@@ -59,7 +59,7 @@ class _FakeRegistry:
 
 @pytest.fixture(autouse=True)
 def _patch_registry(monkeypatch):
-    from freecad.HVAC.core import AirflowSolver as solver_mod
+    from freecad.HVAC.core import _analysis_adapter as solver_mod
 
     monkeypatch.setattr(
         solver_mod.hvaclib.HVACLibraryService,
@@ -141,7 +141,7 @@ def test_flow_conservation_and_sizing():
 
 
 def test_per_port_dict_loss_contract_attributes_distinct_coefficients(monkeypatch):
-    from freecad.HVAC.core import AirflowSolver as solver_mod
+    from freecad.HVAC.core import _analysis_adapter as solver_mod
 
     class _DictRegistry:
         def resolve_type(self, library_id, type_id):
@@ -234,7 +234,7 @@ def test_missing_duct_size_is_an_error():
 
     assert result.components == []
     assert len(result.warnings) == 1
-    assert "Diameter" in result.warnings[0]
+    assert "duct dimensions" in result.warnings[0]
 
 
 # ----------------------------------------------------------------------------
@@ -242,7 +242,7 @@ def test_missing_duct_size_is_an_error():
 # ----------------------------------------------------------------------------
 
 def test_terminal_component_loss_wired_contributes_to_connecting_segment(monkeypatch):
-    from freecad.HVAC.core import AirflowSolver as solver_mod
+    from freecad.HVAC.core import _analysis_adapter as solver_mod
 
     # branch_tee_generic (J2) still resolves normally (K=0.5, same as the
     # default fixture) so this test isolates the NEW behavior (the diffuser

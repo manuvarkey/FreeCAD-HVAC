@@ -48,14 +48,90 @@ it's kept accurate and up to date on purpose.
 | `core/NetworkParser.py` | `DuctNetworkParser`: builds a geometric graph from actual snapped endpoints, then an analysis graph on top (grouped "supernodes" for user-defined virtual junctions) that connectivity/degree/classification actually run on. |
 | `core/Segment.py` / `core/Component.py` | `DuctSegment`/`DuctComponent`: FreeCAD document objects. `updateMetadata()` is a pure metadata writer (no selection logic); `execute()` does an exact type lookup and builds geometry. Both use the shared `core/_type_schema.apply_type_schema()` helper for their dynamic (type-declared) properties. See "Type selection subsystem" below. |
 | `core/Junction.py` | `DuctJunction`: a logical node with no type/geometry of its own. `getComponents()`/`getPrimaryComponent()` find its `DuctComponent` children (via `ParentJunctionName`, in `Sequence` order); `composeComponents()` works out each child's local inlet/outlet ports for the current sync (a single-component junction gets the real connected ports unchanged); `aggregateConnectionLengths()` rolls each component's own trim into the external trim contract (`ConnectionLengthsJson`). See "Junction component composition" below. |
-| `core/FlowNetwork.py` | Whole-network flow-distribution solve shared by AirflowSolver and DuctSizer. Assumes each connected sub-network is a tree with exactly one "balancing terminal" (no design flow given — e.g. the AHU/fan) and every other terminal carrying a user design flow rate; solves flow magnitude per segment by mass conservation from the leaves inward. Rejects loops with a clear error instead of guessing. |
-| `core/AirflowSolver.py` | Given FlowNetwork's flow distribution and each segment's actual size: velocity, Reynolds number, and friction loss (Darcy-Weisbach + Altshul-Tsal friction factor) per segment; each junction's fitting/dynamic loss (pluggable per library type via `loss_module`/`loss_function`, generic fallback); static pressure propagated outward from the balancing terminal (0 Pa reference). |
-| `core/DuctSizer.py` | Same flow distribution/boundary conditions as AirflowSolver, but solves for duct dimensions instead of pressure drop, per the network's `SizingMethod` (constant velocity / constant friction rate / static regain). Never mutates objects itself — `solve()` returns a preview (`DuctSizingResult`); `apply()` is a separate, explicit write step. |
-| `core/airflow.py` | Pure-Python engineering formulas (areas, velocity, Reynolds number, friction factor, unit conversions). No FreeCAD dependency, strict SI units, unit-tested in isolation — see `CLAUDE.md`'s unit test policy. |
+| `core/FlowNetwork.py` | Thin FreeCAD adapter: builds a `NetworkModel` from a `DuctNetwork` (via `core/_analysis_adapter.py`) and calls `analysis/flow.py`'s pure solve — see "Analysis layer" below for the actual algorithm. Shared by AirflowSolver and DuctSizer. |
+| `core/AirflowSolver.py` | Thin FreeCAD adapter over `analysis/pressure.py`'s pure `PressureSolver`: builds the network model, solves it, writes the results back onto segment/junction/component `Calc*` properties, and returns the same `SegmentResult`/`JunctionResult`/`ComponentResult`/`AirflowSolveResult` shape it always has. |
+| `core/DuctSizer.py` | Thin FreeCAD adapter over `analysis/sizing.py`/`analysis/balancing.py`: picks the sizing strategy for the network's `SizingMethod`, maps the pure result back onto `SegmentSizeResult`/`DuctSizingResult`. Never mutates objects itself — `solve()` returns a preview; `apply()` is a separate, explicit write step. |
+| `core/_analysis_adapter.py` | The one place a real `DuctNetwork` gets read into `analysis/model.py` dataclasses: `build_network_model()`, and `build_loss_evaluator()` (resolves a component's library type once and returns a plain callable closure — the pure layer never resolves a type itself). |
 | `library/Library.py` | `HVACTypeDef`/`HVACLibrary`/`HVACLibraryRegistry`: type-def loading, per-library match indexes, `select_type`/`matches_type`/`resolve_sticky_type`, geometry-backend dispatch (`build_geometry`, normalized to a `GeometryResult` -- see `library/geometry_result.py`). |
 | `library/validation.py` | Declarative property validation (`resolve_params`) and structural constraint checking (`context_violations`) — the same rules back both geometry execution and type matching. |
 | `library/library_api.py` | `HVACLibraryAPI` — the only interface generator/PartScript authors should use: ports, geometry primitives, loss-orchestration helpers. |
 | `utils/hvaclib.py` | `HVACLibraryService`: thin FreeCAD-facing facade over the registry (search paths, active library, segment/junction type resolution), plus misc FreeCAD object/geometry helpers used throughout `core/`. |
+
+## Analysis layer
+
+`freecad/HVAC/analysis/` is a pure-Python engineering domain package: **nothing
+in it may import FreeCAD, `Part`, `pivy`, `core/`, `library/`, or
+`utils/hvaclib`** — only `math`, `dataclasses`, `typing`, and `networkx`
+(vendored under `HVAC/ext_libs`, loaded the same way `utils/hvaclib.py` does
+but without depending on that module). This is what lets
+`tests/test_physics.py`/`tests/test_analysis_*.py` run with no FreeCAD stub
+of any kind, unlike every other test in the suite.
+
+```
+DuctNetwork (FreeCAD)
+     |
+core/_analysis_adapter.py    reads the document into pure dataclasses,
+     |                       resolves library loss formulas into plain callables
+     v
+analysis/model.py            NetworkModel / NodeModel / SegmentModel / ComponentModel /
+                              PortModel / AirState / SizingSettings -- stable string
+                              ids (edge_key / node_id) relate everything back to a
+                              real FreeCAD object, never a direct reference
+     |
+analysis/physics.py          pure formulas (areas, velocity, Reynolds, friction,
+     |                       sizing-for-velocity/friction-rate/static-regain)
+     v
+analysis/flow.py             tree/loop check + mass-conservation flow solve
+     |
+     +-- analysis/pressure.py   velocity/friction/fitting loss + static pressure
+     |        |
+     |        v
+     |   analysis/paths.py      per-terminal FlowPathResult + CriticalPathResult
+     |                          (pressure_deficit_pa relative to the critical path)
+     |
+     +-- analysis/sizing.py     ConstantVelocitySizer / ConstantFrictionRateSizer /
+              |                 LocalStaticRegainSizer (today's "StaticRegain" algorithm,
+              |                 unchanged in meaning)
+              v
+         analysis/balancing.py  PressureBalanceCoordinator: iterates a base sizer +
+                                 pressure/path re-solves, shrinking the most-upstream
+                                 segment unique to whichever terminal's path has the
+                                 largest pressure_deficit_pa, until every path is
+                                 within tolerance or a segment can't shrink further --
+                                 any deficit left over becomes an explicit
+                                 BalancingRequirement (junction_id/branch_port/
+                                 pressure_deficit_pa/required_k), with no damper
+                                 FreeCAD object required to exist
+     |
+     v
+core/AirflowSolver.py / core/DuctSizer.py   map pure results back onto Calc*
+                                             properties / SegmentSizeResult.obj
+```
+
+A component's own fitting-loss formula is never resolved by `analysis/`
+itself: `core/_analysis_adapter.build_loss_evaluator()` resolves the library
+type once and returns a plain `Callable[[port_velocities], K]` closure
+(`ComponentModel.loss_evaluator`) that `analysis/pressure.py`/`sizing.py`
+call with nothing but plain floats — the same 3-shape return contract
+(`dict`/`float`/`None`) `HVACLibraryRegistry.call_loss` has always had. Each
+component's own loss is still converted to Pa **using its own reference
+velocity before being summed** onto a segment — `SegmentModel` keeps a
+node's own Primary contribution (`junction_loss_pa`) and an edge's own
+Inline-chain contribution (`component_loss_pa`) as two separate fields
+(rather than one combined "fitting loss") specifically so `analysis/paths.py`
+can report duct/junction/component/terminal loss separately along a path.
+
+`DuctNetwork.SizingMethod` has a fourth option, `PressureBalancedStaticRegain`
+(`ui/TaskPanel.py`'s Size Ducts panel), which routes through
+`PressureBalanceCoordinator` instead of `LocalStaticRegainSizer` directly —
+any `BalancingRequirement` the coordinator can't resolve by sizing alone is
+surfaced both as a plain warning in the existing Size Ducts warnings box and
+as structured data on the result (`DuctSizingResult.balancing_requirements`)
+for anything that wants to act on it later (e.g. flagging where a real
+damper should go). The coordinator is deliberately written against a
+`base_sizer` it doesn't otherwise know about, so a future Equal-Friction or
+Constant-Velocity sizing method could reuse the same balancing layer without
+changes to `analysis/balancing.py` itself.
 
 ### Airflow & sizing flow
 
@@ -63,19 +139,23 @@ it's kept accurate and up to date on purpose.
 
 ```
 FlowNetwork.solve_flow_components(net_obj)
+   adapter: builds a NetworkModel, then analysis/flow.py solves it --
    one FlowComponent per connected sub-network (must be a tree);
    flow magnitude per segment, solved leaf terminals -> balancing terminal
         |
         +----------------------------+-----------------------------+
         v                                                          v
    AirflowSolver                                              DuctSizer
-   velocity / Reynolds / friction loss (airflow.py, from       velocity / friction-rate / static-regain sizing,
-   each segment's existing size) + junction fitting loss       per the network's SizingMethod (constant-velocity
-   (library loss_module, per type) + static pressure           and constant-friction-rate size each segment
-   propagated outward from the balancing terminal (0 Pa)       independently; static regain walks outward from
-                                                                 the balancing terminal since each section's
-                                                                 target depends on its already-solved parent)
+   adapter over analysis/pressure.py's PressureSolver:         adapter over analysis/sizing.py / balancing.py:
+   velocity / Reynolds / friction loss, junction/component     picks ConstantVelocitySizer / ConstantFrictionRateSizer /
+   fitting loss (via each node's own loss_evaluator             LocalStaticRegainSizer / PressureBalanceCoordinator per
+   closure), static pressure propagated outward from the       the network's SizingMethod -- static regain (plain or
+   balancing terminal (0 Pa) -- plus per-terminal               pressure-balanced) walks outward from the balancing
+   FlowPathResult/CriticalPathResult (analysis/paths.py)        terminal since each section's target depends on its
+                                                                 already-solved parent
 ```
+
+See "Analysis layer" above for what actually happens inside `analysis/flow.py`/`pressure.py`/`sizing.py`/`paths.py`/`balancing.py` -- this section is only about which FreeCAD command triggers which adapter.
 
 `DuctSizer.solve()` only returns a preview; it never writes to segments —
 `apply()` is a separate, explicit step so the UI can show the preview and

@@ -1697,6 +1697,7 @@ class TaskPanelSizeDucts:
         ("ConstantVelocity", "Constant Velocity"),
         ("ConstantFrictionRate", "Constant Friction Rate"),
         ("StaticRegain", "Static Regain"),
+        ("PressureBalancedStaticRegain", "Pressure-Balanced Static Regain"),
     ]
     RECTANGULAR_SIZING_MODES = [
         ("FixedAspectRatio", "Fixed Aspect Ratio"),
@@ -1842,14 +1843,15 @@ class TaskPanelSizeDucts:
     def _refreshParameterVisibility(self):
         """Only show the parameters relevant to the currently-picked SizingMethod/RectangularSizingMode."""
         method = self.sizing_method_combo.currentData()
+        regain_family = ("StaticRegain", "PressureBalancedStaticRegain")
         for widget in (self.target_velocity_label, self.target_velocity):
-            widget.setVisible(method in ("ConstantVelocity", "StaticRegain"))
+            widget.setVisible(method == "ConstantVelocity" or method in regain_family)
         for widget in (self.target_friction_rate_label, self.target_friction_rate):
             widget.setVisible(method == "ConstantFrictionRate")
         for widget in (self.static_regain_factor_label, self.static_regain_factor):
-            widget.setVisible(method == "StaticRegain")
+            widget.setVisible(method in regain_family)
         for widget in (self.minimum_velocity_label, self.minimum_velocity):
-            widget.setVisible(method == "StaticRegain")
+            widget.setVisible(method in regain_family)
 
         show_aspect_ratio = self.rectangular_sizing_mode_combo.currentData() == "FixedAspectRatio"
         for widget in (self.target_aspect_ratio_label, self.target_aspect_ratio):

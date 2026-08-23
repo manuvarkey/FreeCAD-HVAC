@@ -21,8 +21,8 @@ from network_fixtures import (
     make_segment,
 )
 
-from freecad.HVAC.core import airflow
-from freecad.HVAC.core import DuctSizer as duct_sizer_mod
+from freecad.HVAC.analysis import physics as airflow
+from freecad.HVAC.core import _analysis_adapter as duct_sizer_mod
 from freecad.HVAC.core.DuctSizer import DuctSizer
 
 
@@ -258,22 +258,10 @@ def test_rectangular_constant_friction_rate_sizing_all_modes(mode, rect_props):
 # Edge cases
 # ----------------------------------------------------------------------------
 
-def test_zero_flow_segment_is_left_unchanged():
-    # A terminal's own DesignFlowRate can't legitimately be exactly 0 (that's
-    # the "leave blank for the balancing terminal" sentinel -- see
-    # FlowNetwork.py), so exercise the "flow_lps <= 0" defensive branch of
-    # _size_segment directly rather than trying to construct an ambiguous
-    # network topology.
-    seg = make_segment("A", 150.0, 4000.0, profile="Circular")
-    net = make_net(FakeParser({}, {}), {}, {}, **_sizing_props())
-
-    sres = DuctSizer(net)._size_segment(
-        seg, 0.0, "ConstantVelocity", "aspect_ratio", 2.0,
-        5.0, 1.0, 10.0, AIR_VISCOSITY, AIR_DENSITY, DEFAULT_ROUGHNESS_MM, 0.0, 0.0,
-    )
-
-    assert sres.changed is False
-    assert sres.new_diameter_mm == pytest.approx(150.0)
+# test_zero_flow_segment_is_left_unchanged used to call DuctSizer's own
+# internal _size_segment directly -- that per-segment sizing logic moved to
+# analysis.sizing._size_one_segment (a pure function of SegmentModel/
+# SizingSettings/AirState) -- see tests/test_analysis_sizing.py.
 
 
 def test_fixed_height_mode_without_existing_or_default_height_warns():
@@ -316,6 +304,27 @@ def test_base_tree_all_segments_sized():
     assert result.warnings == []
     assert {s.key for s in result.segments} == {"A", "B", "C"}
     assert all(s.new_diameter_mm > 0.0 for s in result.segments)
+
+
+def test_pressure_balanced_static_regain_wiring():
+    # Wiring-only check that SizingMethod=PressureBalancedStaticRegain routes
+    # through the real adapter to analysis.balancing.PressureBalanceCoordinator
+    # end-to-end (the balancing algorithm itself is exercised directly, and
+    # more thoroughly, in tests/test_analysis_balancing.py). An intentionally
+    # short/large branch (B) vs. a long/high-friction one (C) gives the
+    # coordinator something to actually balance.
+    net, segment_map, _ = base_tree(
+        segB_len=500.0, segC_len=20000.0,
+        net_extra_props=_sizing_props(method="PressureBalancedStaticRegain", target_velocity=5.0, min_velocity=2.5),
+    )
+    result = DuctSizer(net).solve()
+
+    assert {s.key for s in result.segments} == {"A", "B", "C"}
+    assert all(s.new_diameter_mm > 0.0 for s in result.segments)
+    # balancing_requirements (if any) must always be mirrored into warnings
+    # too, so they're visible without any extra UI work.
+    for req in result.balancing_requirements:
+        assert any(req.branch_port in w for w in result.warnings)
 
 
 # ----------------------------------------------------------------------------
@@ -744,18 +753,10 @@ def test_static_regain_ignores_fitting_loss_at_inline_degree_two_node(monkeypatc
     assert seg_b_result.new_diameter_mm == pytest.approx(expected_d_m * 1000.0)
 
 
-def test_sizes_converged_helper():
-    prev = {"A": (100.0, 0.0, 0.0)}
-    assert duct_sizer_mod._sizes_converged(prev, {"A": (100.4, 0.0, 0.0)}, tolerance_mm=0.5) is True
-    assert duct_sizer_mod._sizes_converged(prev, {"A": (101.0, 0.0, 0.0)}, tolerance_mm=0.5) is False
-    assert duct_sizer_mod._sizes_converged(prev, {"B": (100.0, 0.0, 0.0)}, tolerance_mm=0.5) is False
 
-
-def test_section_params_from_result_helper():
-    circ = duct_sizer_mod.SegmentSizeResult(key="A", obj=None, profile="Circular", new_diameter_mm=150.0)
-    assert duct_sizer_mod._section_params_from_result(circ) == {"Diameter": 150.0}
-
-    rect = duct_sizer_mod.SegmentSizeResult(
-        key="B", obj=None, profile="Rectangular", new_width_mm=300.0, new_height_mm=200.0
-    )
-    assert duct_sizer_mod._section_params_from_result(rect) == {"Width": 300.0, "Height": 200.0}
+# test_sizes_converged_helper/test_section_params_from_result_helper used to
+# live here as white-box tests of DuctSizer.py's own internal helpers --
+# both moved (as analysis.sizing._sizes_converged, and, for the section
+# case, simply SegmentSizeResult.new_section's own SectionModel fields, with
+# no separate dict-conversion helper needed anymore) -- see
+# tests/test_analysis_sizing.py.

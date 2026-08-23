@@ -14,7 +14,7 @@ import json
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 import pytest
 
-from freecad.HVAC.core import airflow
+from freecad.HVAC.analysis import physics as airflow
 from freecad.HVAC.core.AirflowSolver import AirflowSolver
 from freecad.HVAC.utils import hvaclib
 from network_fixtures import FakeObj, FakeParser, make_net, make_segment

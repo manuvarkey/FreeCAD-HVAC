@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from freecad.HVAC.core import airflow
+from freecad.HVAC.analysis import physics as airflow
 
 
 # ----------------------------------------------------------------------------

@@ -419,8 +419,13 @@ class DuctNetwork:
                 "HVAC Duct Sizing",
                 "Method used by the Size Ducts command"
             )
-            obj.SizingMethod = ["ConstantVelocity", "ConstantFrictionRate", "StaticRegain"]
+            obj.SizingMethod = ["ConstantVelocity", "ConstantFrictionRate", "StaticRegain", "PressureBalancedStaticRegain"]
             obj.SizingMethod = "ConstantVelocity"
+        else:
+            # Re-assigning the enum's own value list (not its current
+            # value) is safe at any time and picks up new options on
+            # documents created before this option existed.
+            obj.SizingMethod = ["ConstantVelocity", "ConstantFrictionRate", "StaticRegain", "PressureBalancedStaticRegain"]
 
         if "TargetVelocity" not in obj.PropertiesList:
             obj.addProperty(

@@ -39,7 +39,7 @@ Every function here is a pure function of plain floats (no FreeCAD, no unit
 objects) and returns a dimensionless loss coefficient already referenced to
 the OUTLET (downstream, for diverging fittings) or the relevant leg's own
 velocity pressure, ready to multiply directly by that leg's velocity_pressure
--- see core.airflow.velocity_pressure. Where the source table is naturally
+-- see analysis.physics.velocity_pressure. Where the source table is naturally
 referenced to a different duct than the one we need, the conversion
 (zeta2 = zeta1 * Pv1/Pv2 = zeta1 / (V1/V2)**2, since Pv ~ V**2 at constant
 density) is applied internally.

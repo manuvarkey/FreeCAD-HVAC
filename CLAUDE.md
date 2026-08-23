@@ -22,7 +22,8 @@ code inside library parts, which is still in an exploratory/testing stage.
 - `freecad/HVAC/core/NetworkParser.py`
 - `freecad/HVAC/core/FlowNetwork.py`
 - `freecad/HVAC/core/Segment.py` / `freecad/HVAC/core/Junction.py` (data/state handling, not shape generation)
-- `freecad/HVAC/core/AirflowSolver.py`, `freecad/HVAC/core/DuctSizer.py`, `freecad/HVAC/core/airflow.py`
+- `freecad/HVAC/core/AirflowSolver.py`, `freecad/HVAC/core/DuctSizer.py`, `freecad/HVAC/core/_analysis_adapter.py`
+- `freecad/HVAC/analysis/` (the whole package: `model.py`, `physics.py`, `flow.py`, `pressure.py`, `sizing.py`, `paths.py`, `balancing.py`) — pure engineering domain code, no FreeCAD dependency
 
 *Geometry handling (loading, dispatch, property/port handling — not shape construction):*
 - `freecad/HVAC/library/Library.py` — type-def loading/registry, `resolve_params`, backend dispatch in `build_geometry`

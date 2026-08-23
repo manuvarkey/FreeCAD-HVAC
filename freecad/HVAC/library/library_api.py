@@ -26,7 +26,7 @@ import FreeCAD
 import Part
 
 from ..utils import hvaclib
-from ..core import airflow
+from ..analysis import physics as airflow
 from . import smacna_loss
 
 class HVACLibraryAPI:

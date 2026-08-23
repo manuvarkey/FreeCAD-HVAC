@@ -3,9 +3,9 @@ Stub out the FreeCAD/FreeCADGui/Part/Materials/MatGui/PySide modules that
 freecad.HVAC.core.* imports at module scope, so those modules can be
 imported and unit-tested without a real FreeCAD installation.
 
-Only freecad.HVAC.core.airflow (tested in test_airflow.py) has no FreeCAD
-dependency at all; everything else in this addon does, so any test that needs
-freecad.HVAC.core.AirflowSolver relies on this stubbing.
+The freecad.HVAC.analysis package (tested in test_physics.py/test_analysis_*.py)
+has no FreeCAD dependency at all; everything else in this addon does, so any
+test that needs freecad.HVAC.core.AirflowSolver relies on this stubbing.
 """
 
 import sys

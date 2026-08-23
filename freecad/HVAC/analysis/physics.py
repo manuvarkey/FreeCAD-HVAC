@@ -28,10 +28,13 @@ objects -- this module doesn't know what a "segment" or "network" is.
 
 Everything here uses plain SI units (metres, m3/s, kg/m3, Pa), so it can be
 unit-tested on its own. The addon's usual units (mm, L/s) are converted at
-the call site, in the solver modules (AirflowSolver.py, DuctSizer.py).
+the call site, in the other analysis/ modules (pressure.py, sizing.py) and
+the core/ adapters that build a SectionModel from FreeCAD properties.
 """
 
 import math
+
+from .model import SectionModel
 
 
 # ----------------------------------------------------------------------------
@@ -669,3 +672,40 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
         return width, height, balanced
 
     raise ValueError("Unknown mode: {!r}".format(mode))
+
+
+# ----------------------------------------------------------------------------
+# Section dispatch: profile ("Circular"/"Rectangular"/"Oval") -> area/hydraulic
+# diameter. One place for the branching that used to be copy-pasted in
+# AirflowSolver, DuctSizer, and HVACLibraryAPI.port_area.
+# ----------------------------------------------------------------------------
+
+def section_area_m2(section: SectionModel) -> float:
+    """Cross-section area (m^2) of a SectionModel (dimensions in mm), or 0.0 if unset/degenerate."""
+    if section.profile == "Circular":
+        d = mm_to_m(section.diameter_mm)
+        return circular_area(d) if d > 0.0 else 0.0
+    if section.profile in ("Rectangular", "Oval"):
+        w = mm_to_m(section.width_mm)
+        h = mm_to_m(section.height_mm)
+        if w <= 0.0 or h <= 0.0:
+            return 0.0
+        return rectangular_area(w, h) if section.profile == "Rectangular" else oval_area(w, h)
+    return 0.0
+
+
+def section_hydraulic_diameter_m(section: SectionModel) -> float:
+    """Hydraulic diameter (m) of a SectionModel (dimensions in mm), or 0.0 if unset/degenerate."""
+    if section.profile == "Circular":
+        d = mm_to_m(section.diameter_mm)
+        return hydraulic_diameter_circular(d) if d > 0.0 else 0.0
+    if section.profile in ("Rectangular", "Oval"):
+        w = mm_to_m(section.width_mm)
+        h = mm_to_m(section.height_mm)
+        if w <= 0.0 or h <= 0.0:
+            return 0.0
+        return (
+            hydraulic_diameter_rectangular(w, h) if section.profile == "Rectangular"
+            else hydraulic_diameter_oval(w, h)
+        )
+    return 0.0

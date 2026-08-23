@@ -4,7 +4,7 @@ import pytest
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs (incl. FakeVector)
 
-from freecad.HVAC.core import airflow
+from freecad.HVAC.analysis import physics as airflow
 from freecad.HVAC.library import smacna_loss
 from freecad.HVAC.library.library_api import HVACLibraryAPI as api
 
