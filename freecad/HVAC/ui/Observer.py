@@ -702,10 +702,10 @@ class TerminalFlowRateObserver:
     highlight.
 
     Clicking is handled with a plain Coin3D SoEventCallback + its own
-    built-in pick, checked against each arrow's own SoSeparator -- these
-    arrows are never real FreeCAD document objects, so FreeCAD's normal
-    Gui.Selection mechanism can't see them on its own. Only arrows are
-    pickable -- the port planes are decorative only.
+    built-in pick, checked against each arrow's/plane's own SoSeparator --
+    these are never real FreeCAD document objects, so FreeCAD's normal
+    Gui.Selection mechanism can't see them on its own. Both the arrow and
+    its port plane are pickable -- only the text label is decorative only.
     """
 
     FALLBACK_DIMENSION_MM = 100.0
@@ -722,7 +722,7 @@ class TerminalFlowRateObserver:
         self._root = None
         self._event_callback_node = None
         self._arrows = []  # [(SoSeparator, junction_obj), ...] -- pickable
-        self._planes = []  # [SoSeparator, ...] -- decorative only
+        self._planes = []  # [(SoSeparator, junction_obj), ...] -- pickable
         self._labels = []  # [SoSeparator, ...] -- decorative only
 
     def start(self):
@@ -811,7 +811,7 @@ class TerminalFlowRateObserver:
         plane_node = buildPortHighlightCoinNode(plane_port, color=color, transparency=self.TRANSPARENCY)
         if plane_node is not None:
             self._root.addChild(plane_node)
-            self._planes.append(plane_node)
+            self._planes.append((plane_node, junction))
 
         label_text = "{:.0f} L/s".format(design_flow_rate) if design_flow_rate != 0.0 else "Not set"
         label_node = buildFlowRateLabelCoinNode(plane_port, label_text, self.COLOR_TEXT)
@@ -857,8 +857,8 @@ class TerminalFlowRateObserver:
         QtCore.QTimer.singleShot(self.SELECTION_CLEAR_DELAY_MS, Gui.Selection.clearSelection)
 
     def _junctionForPickedPath(self, path):
-        for arrow_node, junction in self._arrows:
-            if path.containsNode(arrow_node):
+        for node, junction in self._arrows + self._planes:
+            if path.containsNode(node):
                 return junction
         return None
 
