@@ -80,7 +80,11 @@ class HVAC(Gui.Workbench):
                                 'HVAC_EditPlacement',
                                 'HVAC_EditInlineComponents',
                                 'HVAC_EditMaterial',
-                                'HVAC_ResetTypesToDefaults'
+                                'HVAC_ResetTypesToDefaults',
+                                "Separator",
+                                'HVAC_RenumberNetwork',
+                                'HVAC_SelectAllSegments',
+                                'HVAC_SelectAllComponents'
                                 ]
 
         self.submenu_commands = ['HVAC_CreateDuctNetwork',
@@ -103,7 +107,11 @@ class HVAC(Gui.Workbench):
                                 'HVAC_EditPlacement',
                                 'HVAC_EditInlineComponents',
                                 'HVAC_EditMaterial',
-                                'HVAC_ResetTypesToDefaults'
+                                'HVAC_ResetTypesToDefaults',
+                                "Separator",
+                                'HVAC_RenumberNetwork',
+                                'HVAC_SelectAllSegments',
+                                'HVAC_SelectAllComponents'
                                 ]
 
         self.contextmenu_commands = ['HVAC_CreateDuctNetwork',
@@ -126,7 +134,11 @@ class HVAC(Gui.Workbench):
                                 'HVAC_EditPlacement',
                                 'HVAC_EditInlineComponents',
                                 'HVAC_EditMaterial',
-                                'HVAC_ResetTypesToDefaults'
+                                'HVAC_ResetTypesToDefaults',
+                                "Separator",
+                                'HVAC_RenumberNetwork',
+                                'HVAC_SelectAllSegments',
+                                'HVAC_SelectAllComponents'
                                 ]
 
         self.appendMenu(QT_TRANSLATE_NOOP("Workbench", "HVAC"), self.submenu_commands)
@@ -210,12 +222,15 @@ class HVAC(Gui.Workbench):
                 self.commands = ["HVAC_ModifyDuctNetwork",
                                 "HVAC_EditNetworkTypeDefaults",
                                 "HVAC_CalculateAirflow",
-                                "HVAC_SizeDucts"]
+                                "HVAC_SizeDucts",
+                                "HVAC_RenumberNetwork",
+                                "HVAC_SelectAllSegments",
+                                "HVAC_SelectAllComponents"]
                 self.title = translate("HVAC", "Network")
                 
             def shouldShow(self):
                 # Show if there is an active document and no object is selected
-                return is_network_active()
+                return is_network_active() and not is_object_selected()
                 
         class HVACRoutingWatcher:
             """Shows 'Routing Tools' when an HVAC Network is active."""

@@ -871,7 +871,16 @@ class TaskPanelEditInlineComponents:
     def _refreshComponentList(self):
         self.component_list.blockSignals(True)
         self.component_list.clear()
-        self._components = self.junction.Proxy.getInlineComponents()
+        # Sorted by documentation Number (see core/Numbering.py) -- this
+        # already matches getInlineComponents()' own AttachedEdgeKey/
+        # PortSequence order once the network has been renumbered, since
+        # HVAC_RenumberNetwork numbers Inline components in that same
+        # order; never-renumbered components (blank Number) keep their
+        # original relative order.
+        self._components = sorted(
+            self.junction.Proxy.getInlineComponents(),
+            key=lambda c: getattr(c, "Number", "") or "",
+        )
         for component in self._components:
             self.component_list.addItem(self._componentLabel(component))
         self.component_list.blockSignals(False)
@@ -879,8 +888,9 @@ class TaskPanelEditInlineComponents:
 
     @classmethod
     def _componentLabel(cls, component):
-        edge_key = getattr(component, "AttachedEdgeKey", "")
-        return "{} -- {}".format(edge_key, cls._typeLabel(component))
+        number = getattr(component, "Number", "") or ""
+        label = "{}".format(cls._typeLabel(component))
+        return "{} — {}".format(number, label) if number else label
 
     @staticmethod
     def _typeLabel(component):
@@ -1378,12 +1388,23 @@ class _ResultsSelectionSync:
         self._syncTablesFromSelection()
 
 
+def _sorted_by_number(items):
+    """
+    Stable-sort SegmentResult/JunctionResult/SegmentSizeResult items (or
+    anything with a .obj) by that object's documentation Number (see
+    core/Numbering.py, HVAC_RenumberNetwork). Never-renumbered objects
+    (blank Number) sort first and keep their original relative order --
+    returns a new list, the caller's own result list/tuple is untouched.
+    """
+    return sorted(items, key=lambda item: getattr(item.obj, "Number", "") or "")
+
+
 class TaskPanelAirflowResults:
     """Read-only report panel showing the results of an airflow/pressure-drop calculation."""
 
-    SEGMENT_HEADERS = ["Segment", "Flow (L/s)", "Velocity (m/s)", "Friction (Pa)",
+    SEGMENT_HEADERS = ["Number", "Segment", "Flow (L/s)", "Velocity (m/s)", "Friction (Pa)",
                        "Fitting (Pa)", "Total Loss (Pa)", "Static Pressure (Pa)"]
-    JUNCTION_HEADERS = ["Junction", "Total Flow (L/s)", "Static Pressure (Pa)", "Source", "Warning"]
+    JUNCTION_HEADERS = ["Number", "Junction", "Total Flow (L/s)", "Static Pressure (Pa)", "Source", "Warning"]
 
     def __init__(self, network_obj, result):
         self.network_obj = network_obj
@@ -1542,12 +1563,14 @@ class TaskPanelAirflowResults:
         summary.setWordWrap(True)
         layout.addWidget(summary)
 
-        seg_table = QtWidgets.QTableWidget(len(comp.segments), len(self.SEGMENT_HEADERS))
+        segments = _sorted_by_number(comp.segments)
+        seg_table = QtWidgets.QTableWidget(len(segments), len(self.SEGMENT_HEADERS))
         seg_table.setHorizontalHeaderLabels(self.SEGMENT_HEADERS)
         seg_table.verticalHeader().setVisible(False)
         seg_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        for row, seg in enumerate(comp.segments):
+        for row, seg in enumerate(segments):
             values = [
+                getattr(seg.obj, "Number", "") or "",
                 seg.obj.Label,
                 "{:.2f}".format(seg.flow_lps),
                 "{:.2f}".format(seg.velocity_ms),
@@ -1559,16 +1582,18 @@ class TaskPanelAirflowResults:
             for col, value in enumerate(values):
                 seg_table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
         seg_table.resizeColumnsToContents()
-        self.selection_sync.addTable(seg_table, [seg.obj for seg in comp.segments])
+        self.selection_sync.addTable(seg_table, [seg.obj for seg in segments])
         layout.addWidget(QtWidgets.QLabel(translate("HVAC_CalculateAirflow", "Segments")))
         layout.addWidget(seg_table)
 
-        junc_table = QtWidgets.QTableWidget(len(comp.junctions), len(self.JUNCTION_HEADERS))
+        junctions = _sorted_by_number(comp.junctions)
+        junc_table = QtWidgets.QTableWidget(len(junctions), len(self.JUNCTION_HEADERS))
         junc_table.setHorizontalHeaderLabels(self.JUNCTION_HEADERS)
         junc_table.verticalHeader().setVisible(False)
         junc_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        for row, junc in enumerate(comp.junctions):
+        for row, junc in enumerate(junctions):
             values = [
+                getattr(junc.obj, "Number", "") or "",
                 junc.obj.Label,
                 "{:.2f}".format(junc.total_flow_lps),
                 "{:.1f}".format(junc.static_pressure_pa),
@@ -1578,7 +1603,7 @@ class TaskPanelAirflowResults:
             for col, value in enumerate(values):
                 junc_table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
         junc_table.resizeColumnsToContents()
-        self.selection_sync.addTable(junc_table, [junc.obj for junc in comp.junctions])
+        self.selection_sync.addTable(junc_table, [junc.obj for junc in junctions])
         layout.addWidget(QtWidgets.QLabel(translate("HVAC_CalculateAirflow", "Junctions")))
         layout.addWidget(junc_table)
 
@@ -1609,8 +1634,9 @@ class TaskPanelAirflowResults:
         for i, comp in enumerate(self.result.components):
             sub_network_label = "{} {}".format(translate("HVAC_CalculateAirflow", "Sub-network"), i + 1)
 
-            for seg in comp.segments:
+            for seg in _sorted_by_number(comp.segments):
                 row = [
+                    getattr(seg.obj, "Number", "") or "",
                     seg.obj.Label,
                     "{:.2f}".format(seg.flow_lps),
                     "{:.2f}".format(seg.velocity_ms),
@@ -1621,8 +1647,9 @@ class TaskPanelAirflowResults:
                 ]
                 segment_rows.append([sub_network_label] + row if multi else row)
 
-            for junc in comp.junctions:
+            for junc in _sorted_by_number(comp.junctions):
                 row = [
+                    getattr(junc.obj, "Number", "") or "",
                     junc.obj.Label,
                     "{:.2f}".format(junc.total_flow_lps),
                     "{:.1f}".format(junc.static_pressure_pa),
@@ -1690,7 +1717,7 @@ class TaskPanelSizeDucts:
     would be).
     """
 
-    HEADERS = ["Segment", "Profile", "Current Size", "Proposed Size", "Velocity (m/s)",
+    HEADERS = ["Number", "Segment", "Profile", "Current Size", "Proposed Size", "Velocity (m/s)",
                "Friction Rate (Pa/m)", "Balanced"]
 
     SIZING_METHODS = [
@@ -1916,16 +1943,18 @@ class TaskPanelSizeDucts:
         info.setWordWrap(True)
         self.results_layout.addWidget(info)
 
-        table = QtWidgets.QTableWidget(len(result.segments), len(self.HEADERS))
+        segments = _sorted_by_number(result.segments)
+        table = QtWidgets.QTableWidget(len(segments), len(self.HEADERS))
         table.setHorizontalHeaderLabels(self.HEADERS)
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        for row, sres in enumerate(result.segments):
+        for row, sres in enumerate(segments):
             current = self._formatSize(sres.profile, sres.old_diameter_mm, sres.old_width_mm, sres.old_height_mm)
             proposed = self._formatSize(sres.profile, sres.new_diameter_mm, sres.new_width_mm, sres.new_height_mm)
             if not sres.changed:
                 proposed = translate("HVAC_SizeDucts", "(unchanged)")
             values = [
+                getattr(sres.obj, "Number", "") or "",
                 sres.obj.Label,
                 sres.profile,
                 current,
@@ -1937,7 +1966,7 @@ class TaskPanelSizeDucts:
             for col, value in enumerate(values):
                 table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
         table.resizeColumnsToContents()
-        self.selection_sync.addTable(table, [sres.obj for sres in result.segments])
+        self.selection_sync.addTable(table, [sres.obj for sres in segments])
         self.results_layout.addWidget(table)
 
     def _formatSize(self, profile, diameter_mm, width_mm, height_mm):

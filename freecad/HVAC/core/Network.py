@@ -962,18 +962,34 @@ class DuctNetwork:
 
         QtCore.QTimer.singleShot(0, apply)
         
-    def selectAllGeometry(self):
-        """Select all generated duct objects under the Geometry folder."""
+    def _selectGeometry(self, predicate):
+        """Clear the current selection, then select every Geometry-folder
+        child for which predicate(child) is True. Shared by
+        selectAllGeometry/selectAllSegments/selectAllComponents below."""
         net = self.Object
         Gui.Selection.clearSelection()
-    
+
         for child in net.Geometry.OutList:
-            if not (hvaclib.isDuctSegment(child) or hvaclib.isDuctJunction(child) or hvaclib.isDuctComponent(child)):
+            if not predicate(child):
                 continue
             try:
                 Gui.Selection.addSelection(child)
             except TypeError:
                 Gui.Selection.addSelection(child.Document.Name, child.Name)
+
+    def selectAllGeometry(self):
+        """Select all generated duct objects under the Geometry folder."""
+        self._selectGeometry(
+            lambda child: hvaclib.isDuctSegment(child) or hvaclib.isDuctJunction(child) or hvaclib.isDuctComponent(child)
+        )
+
+    def selectAllSegments(self):
+        """Select every DuctSegment under the Geometry folder."""
+        self._selectGeometry(hvaclib.isDuctSegment)
+
+    def selectAllComponents(self):
+        """Select every DuctComponent (Primary and Inline fittings) under the Geometry folder."""
+        self._selectGeometry(hvaclib.isDuctComponent)
 
     def showAllGeometry(self):
         geometry = self.Object.Geometry
@@ -1296,11 +1312,16 @@ class DuctNetwork:
                 restored = self._restoreSegmentUserParams(segment_obj, cached_params)
                 changed = changed or restored
     
-            # Update label for segment object based on source object and edge index
-            new_label = DuctSegment.labelFor(source_obj, edge_ref.local_index)
-            if segment_obj.Label != new_label:
-                segment_obj.Label = new_label
-                changed = True
+            # Update label for segment object based on source object and edge index.
+            # Once HVAC_RenumberNetwork has assigned this segment a Number,
+            # its Label is documentation-owned by that command instead --
+            # a normal sync must never overwrite a "D012 -- ..." label back
+            # to the plain unnumbered form.
+            if not getattr(segment_obj, "Number", ""):
+                new_label = DuctSegment.labelFor(source_obj, edge_ref.local_index)
+                if segment_obj.Label != new_label:
+                    segment_obj.Label = new_label
+                    changed = True
     
         # Remove old segments
         for segment_obj in list(existing_segments.values()):
@@ -1431,11 +1452,15 @@ class DuctNetwork:
             )
             changed = changed or components_changed
 
-            # Update label for segment object based on source object and edge index
-            new_label = DuctJunction.labelFor(family, node_id)
-            if junction_obj.Label != new_label:
-                junction_obj.Label = new_label
-                changed = True
+            # Update label for junction object based on classified family.
+            # Once HVAC_RenumberNetwork has assigned this junction a Number,
+            # its Label is documentation-owned by that command instead -- see
+            # the matching comment in syncSegments.
+            if not getattr(junction_obj, "Number", ""):
+                new_label = DuctJunction.labelFor(family, node_id)
+                if junction_obj.Label != new_label:
+                    junction_obj.Label = new_label
+                    changed = True
 
         # Remove old junctions
         for junction_obj in list(existing_junctions.values()):
@@ -1571,12 +1596,16 @@ class DuctNetwork:
         schema_changed = primary.Proxy.applyTypeSchema()
         changed = changed or schema_changed
 
-        new_label = DuctComponent.labelFor(
-            "Primary", selection.type_def.label if selection.type_def else ""
-        )
-        if primary.Label != new_label:
-            primary.Label = new_label
-            changed = True
+        # Once HVAC_RenumberNetwork has assigned this Primary component a
+        # Number, its Label is documentation-owned by that command instead --
+        # see the matching comment in syncSegments.
+        if not getattr(primary, "Number", ""):
+            new_label = DuctComponent.labelFor(
+                "Primary", selection.type_def.label if selection.type_def else ""
+            )
+            if primary.Label != new_label:
+                primary.Label = new_label
+                changed = True
 
         # Inline components are retained as-is (never auto-replaced) --
         # just re-apply their schema in case their type's declared

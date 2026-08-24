@@ -138,6 +138,8 @@ class DuctJunction:
         self._addProperty(obj, "App::PropertyString", "OwnerNetworkName", "HVAC", "Owning duct network")
         self._addProperty(obj, "App::PropertyInteger", "NodeId", "HVAC", "Parser node id")
         self._addProperty(obj, "App::PropertyString", "NodeKey", "HVAC", "Persistent snapped node key")
+        # Prop_NoRecompute -- documentation only, never affects geometry.
+        self._addProperty(obj, "App::PropertyString", "Number", "HVAC", "Documentation number assigned by Renumber Network (e.g. 'J007'), blank until first renumbered", attr=16)
         self._addProperty(obj, "App::PropertyVector", "CenterPoint", "HVAC", "Junction center point")
         self._addProperty(obj, "App::PropertyInteger", "Degree", "HVAC", "Node degree")
         self._addProperty(obj, "App::PropertyString", "Topology", "HVAC", "Junction topology")
@@ -585,9 +587,9 @@ class DuctJunction:
         return "{} [{}]".format(family_label, int(node_id))
 
     @staticmethod
-    def _addProperty(obj, prop_type, prop_name, group, description):
+    def _addProperty(obj, prop_type, prop_name, group, description, attr=0):
         if prop_name not in obj.PropertiesList:
-            obj.addProperty(prop_type, prop_name, group, description)
+            obj.addProperty(prop_type, prop_name, group, description, attr)
 
 
 class DuctJunctionViewProvider:

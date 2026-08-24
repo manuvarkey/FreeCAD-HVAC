@@ -160,6 +160,8 @@ class DuctSegment:
     def setProperties(self, obj):
         self._addProperty(obj, "App::PropertyString", "OwnerNetworkName", "HVAC", "Owning duct network")
         self._addProperty(obj, "App::PropertyString", "SegmentKey", "HVAC", "Runtime segment key")
+        # Prop_NoRecompute -- documentation only, never affects geometry.
+        self._addProperty(obj, "App::PropertyString", "Number", "HVAC", "Documentation number assigned by Renumber Network (e.g. 'D012'), blank until first renumbered", attr=16)
         self._addProperty(obj, "App::PropertyString", "SourceObjectName", "HVAC", "Internal source object name")
         self._addProperty(obj, "App::PropertyInteger", "SourceIndex", "HVAC", "Zero-based line segment index in the source object")
         self._addProperty(obj, "App::PropertyInteger", "StartNode", "HVAC", "Graph start node id")

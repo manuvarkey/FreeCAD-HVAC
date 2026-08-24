@@ -1255,6 +1255,107 @@ class CommandSizeDucts:
         Gui.Control.showDialog(self.task_panel)
 
 
+class CommandRenumberNetwork:
+    """Renumber the active/selected HVAC Duct Network's segments/junctions/components."""
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("RenumberNetwork.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_RenumberNetwork', 'Renumber Network'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_RenumberNetwork',
+                'Assign documentation numbers (D.../J...) to the network\'s segments, '
+                'junctions and components, walking outward from a source terminal'
+            ),
+            'CmdType': 'ForEdit',
+        }
+
+    def IsActive(self):
+        if Gui.ActiveDocument is None:
+            return False
+        return bool(hvaclib.selectedHVACNetworks()) or hvaclib.activeHVACNetwork() is not None
+
+    def Activated(self):
+        from ..core.Numbering import renumber_network
+
+        selected_hvac_networks = hvaclib.selectedHVACNetworks()
+        net = selected_hvac_networks[0] if selected_hvac_networks else hvaclib.activeHVACNetwork()
+        if net is None:
+            return
+
+        doc = net.Document
+        doc.openTransaction("Renumber Network")
+        try:
+            result = renumber_network(net)
+            doc.commitTransaction()
+        except Exception:
+            doc.abortTransaction()
+            raise
+
+        for warning in result.warnings:
+            FreeCAD.Console.PrintWarning("HVAC - RenumberNetwork - {}\n".format(warning))
+
+        FreeCAD.Console.PrintMessage(
+            "HVAC - Renumbered {} segment(s), {} junction(s), {} component(s) in '{}'.\n".format(
+                result.segment_count, result.junction_count, result.component_count, net.Label
+            )
+        )
+
+        net.Document.recompute()
+
+
+class CommandSelectAllSegments:
+    """Select every duct segment in the active/selected HVAC Duct Network."""
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("SelectSegments.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_SelectAllSegments', 'Select All Segments'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_SelectAllSegments', 'Select every duct segment in the network'
+            ),
+            'CmdType': 'ForEdit',
+        }
+
+    def IsActive(self):
+        if Gui.ActiveDocument is None:
+            return False
+        return bool(hvaclib.selectedHVACNetworks()) or hvaclib.activeHVACNetwork() is not None
+
+    def Activated(self):
+        selected_hvac_networks = hvaclib.selectedHVACNetworks()
+        net = selected_hvac_networks[0] if selected_hvac_networks else hvaclib.activeHVACNetwork()
+        if net is None:
+            return
+        net.Proxy.selectAllSegments()
+
+
+class CommandSelectAllComponents:
+    """Select every junction fitting (Primary and Inline) in the active/selected HVAC Duct Network."""
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("SelectComponents.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_SelectAllComponents', 'Select All Components'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_SelectAllComponents', 'Select every junction fitting (Primary and Inline) in the network'
+            ),
+            'CmdType': 'ForEdit',
+        }
+
+    def IsActive(self):
+        if Gui.ActiveDocument is None:
+            return False
+        return bool(hvaclib.selectedHVACNetworks()) or hvaclib.activeHVACNetwork() is not None
+
+    def Activated(self):
+        selected_hvac_networks = hvaclib.selectedHVACNetworks()
+        net = selected_hvac_networks[0] if selected_hvac_networks else hvaclib.activeHVACNetwork()
+        if net is None:
+            return
+        net.Proxy.selectAllComponents()
+
+
 class CommandResetTypesToNetworkDefaults:
     """Reset selected HVAC geometry objects to their network defaults."""
 
@@ -1330,4 +1431,7 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_CalculateAirflow', CommandCalculateAirflow())
     FreeCAD.Gui.addCommand('HVAC_SizeDucts', CommandSizeDucts())
     FreeCAD.Gui.addCommand('HVAC_ResetTypesToDefaults', CommandResetTypesToNetworkDefaults())
+    FreeCAD.Gui.addCommand('HVAC_RenumberNetwork', CommandRenumberNetwork())
+    FreeCAD.Gui.addCommand('HVAC_SelectAllSegments', CommandSelectAllSegments())
+    FreeCAD.Gui.addCommand('HVAC_SelectAllComponents', CommandSelectAllComponents())
     FreeCAD.Gui.addCommand('HVAC_ReloadLibraries', CommandReloadHVACLibraries())  # Debug method

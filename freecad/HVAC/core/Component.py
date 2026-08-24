@@ -281,6 +281,8 @@ class DuctComponent:
 
         self._addProperty(obj, "App::PropertyString", "AttachedEdgeKey", "HVAC", "Real edge_key this Inline component's chain is attached to (empty for Primary)")
         self._addProperty(obj, "App::PropertyInteger", "PortSequence", "HVAC", "Order from the Primary outward toward the attached edge (Inline only)")
+        # Prop_NoRecompute -- documentation only, never affects geometry.
+        self._addProperty(obj, "App::PropertyString", "Number", "HVAC", "Documentation number assigned by Renumber Network (e.g. 'J007-P' or 'J007-01'), blank until first renumbered", attr=16)
         self._addProperty(obj, "App::PropertyString", "LibraryId", "HVAC", "HVAC library id")
         self._addProperty(obj, "App::PropertyString", "TypeId", "HVAC", "Selected fitting type id")
         self._addProperty(obj, "App::PropertyString", "Profile", "HVAC", "Duct profile at this component's primary/outlet side")
