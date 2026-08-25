@@ -190,6 +190,7 @@ class DuctSegment:
         self._addProperty(obj, "App::PropertyString", "AnalysisJson", "HVAC", "Serialized segment analysis")
         self._addProperty(obj, "App::PropertyStringList", "TypeSchemaPropertyNames", "HVAC", "Internal: property names added by the last-applied type schema (for stale cleanup)")
         self._addProperty(obj, "App::PropertyStringList", "ConstructionLayerIds", "HVAC", "Internal: construction layer ids of the last-applied type (see core/_construction_schema.py)")
+        self._addProperty(obj, "App::PropertyStringList", "ConstructionFeatureIds", "HVAC", "Internal: construction feature ids of the last-applied type (see core/_construction_schema.py)")
 
         self._addProperty(obj, "App::PropertyEnumeration", "Attachment", "Placement", "Section attachment relative to route")
         self._addProperty(obj, "App::PropertyVector", "Offset", "Placement", "Global user offset")
@@ -302,6 +303,7 @@ class DuctSegment:
             "AnalysisJson",
             "TypeSchemaPropertyNames",
             "ConstructionLayerIds",
+            "ConstructionFeatureIds",
             "StartTrimPlaneJson",
             "EndTrimPlaneJson",
         ):
@@ -362,6 +364,7 @@ class DuctSegment:
         )
         changed = _construction_schema.apply_construction_schema(obj, library_id, type_id) or changed
         _construction_schema.apply_default_layer_materials(obj, library_id, type_id)
+        changed = _construction_schema.apply_construction_features_schema(obj, library_id, type_id) or changed
         return changed
 
     def getConstruction(self):

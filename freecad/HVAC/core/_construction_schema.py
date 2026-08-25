@@ -22,12 +22,13 @@
 ################################################################################
 
 """
-Dynamic per-layer property bookkeeping for FreeCAD objects whose
-construction (how many layers, what each is called) depends on a selected
-library type (DuctSegment, DuctJunction's DuctComponent children). Sibling
-of core/_type_schema.py's apply_type_schema() -- same add/remove-stale-
-properties pattern, but for the Layer_<id>_Shape/Layer_<id>_Material pair
-every construction layer gets, instead of ordinary declared properties.
+Dynamic per-layer/per-feature property bookkeeping for FreeCAD objects whose
+construction (how many layers/features, what each is called) depends on a
+selected library type (DuctSegment, DuctJunction's DuctComponent children).
+Sibling of core/_type_schema.py's apply_type_schema() -- same add/remove-
+stale-properties pattern, but for the Layer_<id>_Shape/Layer_<id>_Material
+pair every construction layer gets, and the Feature_<id>_Shape every
+construction feature gets, instead of ordinary declared properties.
 Internal to core/ -- not part of the stable library_api.py surface for
 library/generator authors.
 """
@@ -44,6 +45,10 @@ def shape_property_name(layer_id):
 
 def material_property_name(layer_id):
     return "Layer_{}_Material".format(layer_id)
+
+
+def feature_shape_property_name(feature_id):
+    return "Feature_{}_Shape".format(feature_id)
 
 
 def apply_construction_schema(obj, library_id, type_id):
@@ -108,6 +113,82 @@ def apply_construction_schema(obj, library_id, type_id):
     if list(getattr(obj, "ConstructionLayerIds", []) or []) != new_ids:
         try:
             obj.ConstructionLayerIds = new_ids
+            changed = True
+        except Exception:
+            pass
+
+    return changed
+
+
+def apply_construction_features_schema(obj, library_id, type_id):
+    """
+    Add/remove Feature_<id>_Shape (Part::PropertyPartShape, read-only) to
+    match the resolved type's declared construction features -- sibling of
+    apply_construction_schema(), same add/remove-stale-properties pattern,
+    keyed off obj.ConstructionFeatureIds instead of ConstructionLayerIds.
+    No Feature_<id>_Material -- a feature has no material of its own in
+    this design; it visually inherits its host layer's own material (see
+    core/_component_appearance.py). No legacy single-implicit-feature
+    fallback either (unlike layers) -- a type with no declared features
+    simply has none.
+
+    Also marks each declared feature's own visible_parameter property
+    Prop_NoRecompute, best-effort, via obj.setPropertyStatus() -- this is
+    what makes "changing visibility never requires a geometry rebuild"
+    true. The property itself is added as an ordinary declared property by
+    core/_type_schema.py's apply_type_schema() (already run earlier in
+    applyTypeSchema()'s call order, per the "existing parameter system,
+    unchanged" rule -- a feature's visible_parameter/enabled_parameter/
+    parameters only ever *reference* a name already declared in the
+    type-def's own "properties" list, never a new parameter-definition
+    mechanism); enabled_parameter and every name in a feature's own
+    `parameters` are deliberately left alone here so they keep triggering a
+    normal recompute.
+
+    Returns True if anything on `obj` changed.
+    """
+    reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
+    if not library_id or not type_id:
+        return False
+
+    type_def = reg.resolve_type(library_id, type_id)
+    if type_def is None:
+        return False
+
+    feature_defs = getattr(type_def, "features", None) or []
+    new_ids = [fdef.id for fdef in feature_defs]
+
+    changed = False
+
+    old_ids = list(getattr(obj, "ConstructionFeatureIds", []) or [])
+    for stale_id in set(old_ids) - set(new_ids):
+        prop_name = feature_shape_property_name(stale_id)
+        if prop_name in obj.PropertiesList:
+            try:
+                obj.removeProperty(prop_name)
+                changed = True
+            except Exception:
+                pass
+
+    for feature_def in feature_defs:
+        shape_name = feature_shape_property_name(feature_def.id)
+        if shape_name not in obj.PropertiesList:
+            obj.addProperty("Part::PropertyPartShape", shape_name, "Geometry", "Generated solid for construction feature '{}'".format(feature_def.id))
+            changed = True
+            try:
+                obj.setEditorMode(shape_name, 1)
+            except Exception:
+                pass
+
+        if feature_def.visible_parameter and feature_def.visible_parameter in obj.PropertiesList:
+            try:
+                obj.setPropertyStatus(feature_def.visible_parameter, "NoRecompute")
+            except Exception:
+                pass
+
+    if list(getattr(obj, "ConstructionFeatureIds", []) or []) != new_ids:
+        try:
+            obj.ConstructionFeatureIds = new_ids
             changed = True
         except Exception:
             pass

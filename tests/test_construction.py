@@ -12,7 +12,7 @@ sure that holds.
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 
 from freecad.HVAC.core import Construction as construction_mod
-from freecad.HVAC.library.construction import ConstructionLayerDef
+from freecad.HVAC.library.construction import ConstructionLayerDef, ConstructionFeatureDef
 
 
 class FakeObj:
@@ -20,14 +20,20 @@ class FakeObj:
         self.LibraryId = library_id
         self.TypeId = type_id
         self.ConstructionLayerIds = list(layer_ids)
+        self.ConstructionFeatureIds = []
         for layer_id in layer_ids:
             setattr(self, "Layer_{}_Shape".format(layer_id), (shapes or {}).get(layer_id))
             setattr(self, "Layer_{}_Material".format(layer_id), (materials or {}).get(layer_id))
 
+    def add_feature(self, feature_id, shape=None):
+        self.ConstructionFeatureIds.append(feature_id)
+        setattr(self, "Feature_{}_Shape".format(feature_id), shape)
+
 
 class _FakeTypeDef:
-    def __init__(self, construction):
+    def __init__(self, construction, features=None):
         self.construction = construction
+        self.features = features or []
 
 
 class _FakeRegistry:
@@ -134,3 +140,82 @@ def test_construction_for_object_with_no_layers_at_all(monkeypatch):
 
     assert construction.layers() == []
     assert construction.flow_surface() is None
+
+
+# ----------------------------------------------------------------------
+# Construction features
+# ----------------------------------------------------------------------
+
+def test_construction_for_resolves_feature_role_and_host_layer(monkeypatch):
+    _patch_registry(monkeypatch, _FakeTypeDef(
+        [ConstructionLayerDef(id="casing", roles=["flow_surface", "structural_shell"])],
+        features=[
+            ConstructionFeatureDef(
+                id="transverse_flange", role="transverse_joint", host_layer="casing",
+                generator="generate_transverse_flange",
+            ),
+        ],
+    ))
+    obj = FakeObj("smacna", "circular_straight", ["casing"])
+    flange_shape = object()
+    obj.add_feature("transverse_flange", flange_shape)
+
+    construction = construction_mod.construction_for(obj)
+
+    feature = construction.feature("transverse_flange")
+    assert feature.role == "transverse_joint"
+    assert feature.host_layer == "casing"
+    assert feature.shape is flange_shape
+    assert feature in construction.features_with_role("transverse_joint")
+    assert construction.features_with_role("something_else") == []
+
+
+def test_construction_for_reads_enabled_and_visible_fresh_off_the_object(monkeypatch):
+    # Not from a cached GeometryResult snapshot -- straight off whatever
+    # property enabled_parameter/visible_parameter currently name.
+    _patch_registry(monkeypatch, _FakeTypeDef(
+        [ConstructionLayerDef(id="casing", roles=["flow_surface"])],
+        features=[
+            ConstructionFeatureDef(
+                id="transverse_flange", host_layer="casing", generator="generate_transverse_flange",
+                enabled_parameter="FlangeEnabled", visible_parameter="FlangeVisible",
+            ),
+        ],
+    ))
+    obj = FakeObj("smacna", "circular_straight", ["casing"])
+    obj.add_feature("transverse_flange")
+    obj.FlangeEnabled = False
+    obj.FlangeVisible = True
+
+    construction = construction_mod.construction_for(obj)
+    feature = construction.feature("transverse_flange")
+
+    assert feature.enabled is False
+    assert feature.visible is True
+
+
+def test_construction_for_defaults_enabled_and_visible_true_when_no_parameter_declared(monkeypatch):
+    _patch_registry(monkeypatch, _FakeTypeDef(
+        [ConstructionLayerDef(id="casing", roles=["flow_surface"])],
+        features=[
+            ConstructionFeatureDef(id="stiffener", host_layer="casing", generator="generate_stiffener"),
+        ],
+    ))
+    obj = FakeObj("smacna", "circular_straight", ["casing"])
+    obj.add_feature("stiffener")
+
+    feature = construction_mod.construction_for(obj).feature("stiffener")
+
+    assert feature.enabled is True
+    assert feature.visible is True
+
+
+def test_construction_for_a_type_with_no_declared_features_has_none():
+    obj = FakeObj("builtin_basic", "rectangular_straight", ["shape"])
+    # No _patch_registry call -- construction_for() must tolerate an
+    # unresolvable type_def (library_id/type_id empty here) the same way
+    # it already does for layers.
+    construction = construction_mod.construction_for(obj)
+
+    assert construction.features() == []
+    assert construction.feature("anything") is None

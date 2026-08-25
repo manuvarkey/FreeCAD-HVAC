@@ -70,7 +70,7 @@ Common fields, both segments and junctions:
 | `profiles` | allowed cross-section profiles, e.g. `["Circular"]`, `["Rectangular"]` |
 | `constraints` | e.g. `{"degree": 1}` restricting how many ports a junction may have |
 | `properties` | list of property defs (below) |
-| `construction` | optional list of construction layer defs (below); omit entirely for a type with just one, roleless implicit layer |
+| `construction` | optional `{"layers": [...], "features": [...]}` object (below); omit entirely for a type with just one, roleless implicit layer and no features |
 | `geometry` | `{"backend": "partscript"\|"static", "file"\|"descriptor": "..."}` |
 | `generator` | legacy alternative to `geometry`: `{"module": "...", "function": "..."}` |
 | `lengths_module` / `lengths_function` | optional, junctions: computes per-port trim lengths separately from the shape |
@@ -106,7 +106,9 @@ geometry & materials").
 
 ### Construction layers
 
-A type's own `"construction"` block declares how many physical layers its
+A type's own `"construction"` block is an object with its own `"layers"`
+array (this section) and an optional `"features"` array (see "Construction
+features" below). `"layers"` declares how many physical layers the type's
 wall is built from, in build order (e.g. a bare duct wall, or a wall plus
 insulation, or a casing plus an acoustic fill plus a perforated liner) and
 what each one *means* -- its FreeCAD-standardized semantic role(s), from
@@ -118,19 +120,21 @@ single-wall duct's only layer is both `flow_surface` and
 `structural_shell`).
 
 ```json
-"construction": [
-  {
-    "id": "casing",
-    "roles": ["flow_surface", "structural_shell"],
-    "thickness_property": "Thickness"
-  },
-  {
-    "id": "insulation",
-    "roles": ["thermal_insulation"],
-    "default_material_role": "thermal_insulation",
-    "thickness_property": "InsulationThickness"
-  }
-]
+"construction": {
+  "layers": [
+    {
+      "id": "casing",
+      "roles": ["flow_surface", "structural_shell"],
+      "thickness_property": "Thickness"
+    },
+    {
+      "id": "insulation",
+      "roles": ["thermal_insulation"],
+      "default_material_role": "thermal_insulation",
+      "thickness_property": "InsulationThickness"
+    }
+  ]
+}
 ```
 
 - `id`: library-chosen, stable within this type-def (e.g. `"casing"`,
@@ -166,6 +170,91 @@ detailing) queries construction only by role, via
 `flow_surface()` / `structural_layers()` / `thermal_layers()` /
 `acoustic_layers()` -- reachable off a segment/component's own
 `getConstruction()`. It must never assume a particular layer id exists.
+
+### Construction features
+
+A construction layer spans the whole wall; a **construction feature** is a
+smaller, localized attachment on top of one -- a flange, a stiffener, a
+seam, a proprietary fabrication detail. Features are declared in the same
+type-def's `"construction"` block, as a sibling `"features"` array:
+
+```json
+"construction": {
+  "layers": [
+    {"id": "casing", "roles": ["flow_surface", "structural_shell"], "thickness_property": "Thickness"}
+  ],
+  "features": [
+    {
+      "id": "transverse_flange",
+      "role": "transverse_joint",
+      "host_layer": "casing",
+      "generator": "generate_transverse_flange",
+      "enabled_parameter": "FlangeEnabled",
+      "visible_parameter": "FlangeVisible",
+      "parameters": ["Diameter", "FlangeHeight", "FlangeThickness"]
+    }
+  ]
+}
+```
+
+- `id`: library-chosen, stable within this type-def -- pairs a feature's def
+  with its own `Feature_<id>_Shape` FreeCAD property (see
+  `core/_construction_schema.py`) and with the geometry backend's own
+  return value key inside `GeometryResult.features` (see
+  `freecad/HVAC/library/geometry_result.py`).
+- `role`: a free-form, library-chosen string (e.g. `"transverse_joint"`) --
+  unlike a layer's `roles`, there is no standardized/enumerated vocabulary
+  for feature roles; downstream code queries features only by whatever
+  string a library chose, via `Construction.features_with_role(role)`.
+- `host_layer`: the `id` of one of this same `"construction"` block's own
+  declared layers -- `HVACLibraryRegistry.build_geometry()` resolves this
+  to that layer's own already-built `LayerGeometry` (shape + roles) before
+  invoking the feature's generator, and it's also what a non-visible
+  feature's rendered appearance falls back to (see below).
+- `generator`: the name of a function this library's own
+  `<generators_package>.features` module (a fixed, conventional submodule
+  -- e.g. `smacna/generators/features.py` -- resolved the same way
+  `generator`/`loss` modules already are) must define, with the signature
+  `generate_<name>(api, ctx) -> Part.Shape | None`. `api` is
+  `HVACLibraryAPI`; `ctx` (a `FeatureContext`) provides `ctx.parameters`
+  (this feature's own declared `parameters`, already-resolved values --
+  never the type's full property set), `ctx.host_layer` (the host layer's
+  own `LayerGeometry` for this build), and `ctx.context` (the full
+  underlying geometry-build context dict -- ports, start/end points,
+  profile, profile_x_axis, path info, ... -- an escape hatch for anything
+  else the generator needs). If a feature's geometry is naturally several
+  repeated pieces (e.g. several stiffeners), return them fused into one
+  compound `Part.Shape` -- a feature is always exactly one shape (or
+  `None`, if nothing should be built this call).
+- `enabled_parameter` (optional): the name of one of this type-def's own
+  declared `properties` whose current value gates whether this feature is
+  generated *at all* this build. When it resolves false, the feature's
+  generator is never called and it has no entry in `GeometryResult.features`
+  -- not an entry with a null shape. Changing this property (an ordinary
+  declared property, ordinary recompute behavior) triggers a normal
+  geometry rebuild, same as changing any of `parameters`.
+- `visible_parameter` (optional): the name of one of this type-def's own
+  declared `properties` that controls only the feature's *rendered*
+  visibility, independent of whether it was generated. A non-visible
+  feature is still built and still part of the object's own `Shape`
+  compound (so it stays individually accessible/queryable via
+  `Feature_<id>_Shape`/`Construction.feature(id)`) -- only its own faces'
+  `ViewObject.ShapeAppearance` are forced fully transparent instead of
+  inheriting the host layer's material appearance (see
+  `core/_component_appearance.py`). Core marks whatever property this
+  names `Prop_NoRecompute` once it's added (see
+  `core/_construction_schema.py`), so toggling visibility re-renders
+  appearance without ever rebuilding geometry.
+- `parameters`: names of existing declared type-def `properties` this
+  feature's own generator function needs -- core resolves just these
+  (already-resolved) values into `ctx.parameters`.
+
+`enabled_parameter`/`visible_parameter`/`parameters` only ever *reference*
+property names -- the properties themselves are declared exactly where
+every other type-def property already is, in the same `"properties"` list
+described above. There is no separate parameter-definition mechanism for
+features (or for layers' `thickness_property`, which follows the same
+by-reference convention).
 
 ## Type selection (automatic matching)
 

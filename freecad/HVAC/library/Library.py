@@ -49,7 +49,7 @@ import FreeCAD
 from .library_api import HVACLibraryAPI
 from . import validation
 from . import geometry_result
-from .construction import ConstructionLayerDef
+from .construction import ConstructionLayerDef, ConstructionFeatureDef, FeatureContext
 
 
 @dataclass
@@ -131,8 +131,13 @@ class HVACTypeDef:
     # and the "construction" JSON block below) -- empty for a type that
     # hasn't been migrated to the multilayer model, which build_geometry()
     # treats as a single, roleless implicit layer (geometry_result.normalize()'s
-    # legacy {"shape": ...} wrapping).
+    # legacy {"shape": ...} wrapping). Parsed from the JSON "construction"
+    # block's own "layers" array.
     construction: list[ConstructionLayerDef] = field(default_factory=list)
+    # Construction features this type declares (localized attachments --
+    # flanges, stiffeners, seams, ... -- see library/construction.py).
+    # Parsed from the JSON "construction" block's own "features" array.
+    features: list[ConstructionFeatureDef] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -645,7 +650,75 @@ class HVACLibraryRegistry:
             if layer_def is not None:
                 layer_geometry.roles = list(layer_def.roles)
 
+        self._build_features(library_id, type_def, context, result)
+
         return result
+
+    def _build_features(self, library_id: str, type_def: HVACTypeDef, context: dict, result):
+        """
+        Second pass, after the backend's own layers are built and
+        normalized: resolve and invoke each of the type-def's own declared
+        construction.features generators, storing each enabled one's
+        returned Part.Shape into result.features. A feature's own
+        enabled_parameter/visible_parameter/parameters only ever reference
+        property names already resolved into context["params"] by
+        _prepare_geometry_context() above -- no second parameter
+        resolution, per the "existing parameter system, unchanged" rule.
+
+        Unlike geometry backends (partscript/static/legacy generator, one
+        per type, declared via type_def.geometry/generator_module), feature
+        generators always live in one fixed, conventional module --
+        <library's generators_package>.features -- resolved the same way
+        generator_module/loss_module already are (import_generator()), so a
+        PartScript-backed type (which has no generator_module of its own)
+        still has a well-defined place for its own feature generators.
+        """
+        feature_defs = getattr(type_def, "features", None) or []
+        if not feature_defs:
+            return
+
+        params = dict(context.get("params", {}) or {})
+        features_module = None
+
+        for feature_def in feature_defs:
+            enabled = True
+            if feature_def.enabled_parameter:
+                enabled = bool(params.get(feature_def.enabled_parameter, True))
+            if not enabled:
+                continue
+
+            host_layer_geometry = result.layers.get(feature_def.host_layer)
+            if host_layer_geometry is None:
+                raise ValueError(
+                    "Feature '{}' on type '{}' references host_layer '{}', which this "
+                    "type's geometry backend never returned".format(
+                        feature_def.id, type_def.id, feature_def.host_layer
+                    )
+                )
+
+            visible = True
+            if feature_def.visible_parameter:
+                visible = bool(params.get(feature_def.visible_parameter, True))
+
+            feature_params = {name: params.get(name) for name in feature_def.parameters}
+
+            ctx = FeatureContext(
+                parameters=feature_params,
+                host_layer=host_layer_geometry,
+                context=context,
+            )
+
+            if features_module is None:
+                features_module = self.import_generator(library_id, "features")
+            generator_func = getattr(features_module, feature_def.generator)
+
+            shape = generator_func(HVACLibraryAPI, ctx)
+
+            result.features[feature_def.id] = geometry_result.FeatureGeometry(
+                shape=shape,
+                role=feature_def.role,
+                visible=visible,
+            )
 
     def call_generator(self, library_id: str, type_def: HVACTypeDef, context: dict):
         return self.build_geometry(library_id, type_def, context)
@@ -813,8 +886,15 @@ class HVACLibraryRegistry:
             priority=int(selection_raw.get("priority", 0) or 0),
         )
 
+        # "construction" is an object with its own "layers"/"features"
+        # arrays (see freecad/HVAC/libraries/README.md's "Construction
+        # layers"/"Construction features" sections) -- both optional, a
+        # type-def with no "construction" block at all keeps behaving as a
+        # single, roleless implicit layer with no features.
+        construction_raw = raw.get("construction", {}) or {}
+
         construction = []
-        for layer_raw in raw.get("construction", []) or []:
+        for layer_raw in construction_raw.get("layers", []) or []:
             construction.append(
                 ConstructionLayerDef(
                     id=layer_raw["id"],
@@ -822,6 +902,20 @@ class HVACLibraryRegistry:
                     default_material_role=layer_raw.get("default_material_role"),
                     default_material_uuid=layer_raw.get("default_material_uuid"),
                     thickness_property=layer_raw.get("thickness_property"),
+                )
+            )
+
+        features = []
+        for feature_raw in construction_raw.get("features", []) or []:
+            features.append(
+                ConstructionFeatureDef(
+                    id=feature_raw["id"],
+                    role=feature_raw.get("role", ""),
+                    host_layer=feature_raw.get("host_layer", ""),
+                    generator=feature_raw.get("generator", ""),
+                    enabled_parameter=feature_raw.get("enabled_parameter"),
+                    visible_parameter=feature_raw.get("visible_parameter"),
+                    parameters=list(feature_raw.get("parameters", []) or []),
                 )
             )
 
@@ -843,4 +937,5 @@ class HVACLibraryRegistry:
             loss_function=loss.get("function", ""),
             selection=selection,
             construction=construction,
+            features=features,
         )

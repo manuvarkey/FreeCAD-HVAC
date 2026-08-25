@@ -72,25 +72,27 @@
       "default": 0.0
     }
   ],
-  "construction": [
-    {
-      "id": "casing",
-      "roles": [
-        "flow_surface",
-        "structural_shell"
-      ],
-      "default_material_role": "structural_shell",
-      "thickness_property": "Thickness"
-    },
-    {
-      "id": "insulation",
-      "roles": [
-        "thermal_insulation"
-      ],
-      "default_material_role": "thermal_insulation",
-      "thickness_property": "InsulationThickness"
-    }
-  ],
+  "construction": {
+    "layers": [
+      {
+        "id": "casing",
+        "roles": [
+          "flow_surface",
+          "structural_shell"
+        ],
+        "default_material_role": "structural_shell",
+        "thickness_property": "Thickness"
+      },
+      {
+        "id": "insulation",
+        "roles": [
+          "thermal_insulation"
+        ],
+        "default_material_role": "thermal_insulation",
+        "thickness_property": "InsulationThickness"
+      }
+    ]
+  },
   "generator": {
     "module": "junctions",
     "function": "build_elbow"

@@ -59,6 +59,13 @@
       "default": false
     },
     {
+      "name": "FlangeVisible",
+      "prop_type": "App::PropertyBool",
+      "group": "Options",
+      "description": "Show the transverse flange feature in the 3D view; the flange is still generated and part of the object's own geometry either way, only its rendered visibility is affected",
+      "default": true
+    },
+    {
       "name": "InsulationThickness",
       "prop_type": "App::PropertyLength",
       "group": "Parameters",
@@ -66,25 +73,43 @@
       "default": 0.0
     }
   ],
-  "construction": [
-    {
-      "id": "casing",
-      "roles": [
-        "flow_surface",
-        "structural_shell"
-      ],
-      "default_material_role": "structural_shell",
-      "thickness_property": "Thickness"
-    },
-    {
-      "id": "insulation",
-      "roles": [
-        "thermal_insulation"
-      ],
-      "default_material_role": "thermal_insulation",
-      "thickness_property": "InsulationThickness"
-    }
-  ],
+  "construction": {
+    "layers": [
+      {
+        "id": "casing",
+        "roles": [
+          "flow_surface",
+          "structural_shell"
+        ],
+        "default_material_role": "structural_shell",
+        "thickness_property": "Thickness"
+      },
+      {
+        "id": "insulation",
+        "roles": [
+          "thermal_insulation"
+        ],
+        "default_material_role": "thermal_insulation",
+        "thickness_property": "InsulationThickness"
+      }
+    ],
+    "features": [
+      {
+        "id": "transverse_flange",
+        "role": "transverse_joint",
+        "host_layer": "casing",
+        "generator": "generate_transverse_flange",
+        "visible_parameter": "FlangeVisible",
+        "parameters": [
+          "Diameter",
+          "FlangeHeight",
+          "FlangeThickness",
+          "ShowFlange1",
+          "ShowFlange2"
+        ]
+      }
+    ]
+  },
   "geometry": {
     "backend": "partscript",
     "file": "models/circular_straight.py"

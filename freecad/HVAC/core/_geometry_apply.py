@@ -37,29 +37,42 @@ from . import _construction_schema
 def apply_geometry_result(obj, result):
     """
     Write Layer_<id>_Shape (see core/_construction_schema.py) for every
-    layer in obj.ConstructionLayerIds from result.layers, then derive Shape
-    as the compound of whichever layers actually have a real shape, in that
-    same declared order -- so the ViewProvider can work out per-layer face
-    ranges without guessing (see core/_component_appearance.py).
+    layer in obj.ConstructionLayerIds from result.layers, then the same for
+    every feature in obj.ConstructionFeatureIds from result.features, then
+    derive Shape as the compound of whichever layers/features actually have
+    a real shape -- layers first, then features, each group in its own
+    declared order -- so the ViewProvider can work out per-layer/per-feature
+    face ranges without guessing (see core/_component_appearance.py). A
+    feature absent from result.features (disabled this build -- see
+    library/Library.py's build_geometry()) gets an empty Feature_<id>_Shape
+    and contributes nothing to the compound, same as a layer with no shape.
     """
     layer_ids = list(getattr(obj, "ConstructionLayerIds", []) or [])
     ordered_shapes = []
 
     for layer_id in layer_ids:
         layer_geometry = result.layers.get(layer_id)
-        shape = _layer_shape(layer_geometry)
+        shape = _entry_shape(layer_geometry)
         setattr(obj, _construction_schema.shape_property_name(layer_id), shape if shape is not None else Part.Shape())
+        if shape is not None:
+            ordered_shapes.append(shape)
+
+    feature_ids = list(getattr(obj, "ConstructionFeatureIds", []) or [])
+    for feature_id in feature_ids:
+        feature_geometry = result.features.get(feature_id)
+        shape = _entry_shape(feature_geometry)
+        setattr(obj, _construction_schema.feature_shape_property_name(feature_id), shape if shape is not None else Part.Shape())
         if shape is not None:
             ordered_shapes.append(shape)
 
     obj.Shape = Part.makeCompound(ordered_shapes)
 
 
-def _layer_shape(layer_geometry):
-    """A LayerGeometry's own shape, or None if absent/null."""
-    if layer_geometry is None:
+def _entry_shape(geometry):
+    """A LayerGeometry's/FeatureGeometry's own shape, or None if absent/null."""
+    if geometry is None:
         return None
-    shape = layer_geometry.shape
+    shape = geometry.shape
     if shape is None:
         return None
     try:

@@ -90,17 +90,19 @@
       "default": true
     }
   ],
-  "construction": [
-    {
-      "id": "casing",
-      "roles": [
-        "flow_surface",
-        "structural_shell"
-      ],
-      "default_material_role": "structural_shell",
-      "thickness_property": "Thickness"
-    }
-  ],
+  "construction": {
+    "layers": [
+      {
+        "id": "casing",
+        "roles": [
+          "flow_surface",
+          "structural_shell"
+        ],
+        "default_material_role": "structural_shell",
+        "thickness_property": "Thickness"
+      }
+    ]
+  },
   "generator": {
     "module": "junctions",
     "function": "build_wye"

@@ -5,7 +5,7 @@ import types
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 
 from freecad.HVAC.library.Library import HVACLibrary, HVACTypeDef, HVACLibraryRegistry
-from freecad.HVAC.library.construction import ConstructionLayerDef
+from freecad.HVAC.library.construction import ConstructionLayerDef, ConstructionFeatureDef
 
 
 def _type_def(id_, category, family, profiles=None):
@@ -150,19 +150,21 @@ def test_load_type_def_file_parses_construction_block(tmp_path):
         "category": "segment",
         "family": ["straight_segment"],
         "generator": {"module": "segments", "function": "build_circular_straight"},
-        "construction": [
-            {
-                "id": "casing",
-                "roles": ["flow_surface", "structural_shell"],
-                "thickness_property": "Thickness",
-            },
-            {
-                "id": "insulation",
-                "roles": ["thermal_insulation"],
-                "default_material_role": "thermal_insulation",
-                "thickness_property": "InsulationThickness",
-            },
-        ],
+        "construction": {
+            "layers": [
+                {
+                    "id": "casing",
+                    "roles": ["flow_surface", "structural_shell"],
+                    "thickness_property": "Thickness",
+                },
+                {
+                    "id": "insulation",
+                    "roles": ["thermal_insulation"],
+                    "default_material_role": "thermal_insulation",
+                    "thickness_property": "InsulationThickness",
+                },
+            ],
+        },
     }))
 
     reg = HVACLibraryRegistry()
@@ -172,6 +174,71 @@ def test_load_type_def_file_parses_construction_block(tmp_path):
     assert type_def.construction[0].roles == ["flow_surface", "structural_shell"]
     assert type_def.construction[0].thickness_property == "Thickness"
     assert type_def.construction[1].default_material_role == "thermal_insulation"
+    assert type_def.features == []
+
+
+def test_load_type_def_file_parses_features_block(tmp_path):
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps({
+        "id": "circular_straight",
+        "label": "Circular Straight",
+        "category": "segment",
+        "family": ["straight_segment"],
+        "generator": {"module": "segments", "function": "build_circular_straight"},
+        "construction": {
+            "layers": [{"id": "casing", "roles": ["flow_surface", "structural_shell"]}],
+            "features": [
+                {
+                    "id": "transverse_flange",
+                    "role": "transverse_joint",
+                    "host_layer": "casing",
+                    "generator": "generate_transverse_flange",
+                    "enabled_parameter": "FlangeEnabled",
+                    "visible_parameter": "FlangeVisible",
+                    "parameters": ["FlangeDepth", "FlangeThickness"],
+                },
+            ],
+        },
+    }))
+
+    reg = HVACLibraryRegistry()
+    type_def = reg._load_type_def_file(str(type_file))
+
+    assert len(type_def.features) == 1
+    fdef = type_def.features[0]
+    assert fdef.id == "transverse_flange"
+    assert fdef.role == "transverse_joint"
+    assert fdef.host_layer == "casing"
+    assert fdef.generator == "generate_transverse_flange"
+    assert fdef.enabled_parameter == "FlangeEnabled"
+    assert fdef.visible_parameter == "FlangeVisible"
+    assert fdef.parameters == ["FlangeDepth", "FlangeThickness"]
+
+
+def test_load_type_def_file_features_default_to_optional_fields_unset(tmp_path):
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps({
+        "id": "circular_straight",
+        "label": "Circular Straight",
+        "category": "segment",
+        "family": ["straight_segment"],
+        "generator": {"module": "segments", "function": "build_circular_straight"},
+        "construction": {
+            "layers": [{"id": "casing", "roles": ["flow_surface"]}],
+            "features": [
+                {"id": "stiffener", "host_layer": "casing", "generator": "generate_stiffener"},
+            ],
+        },
+    }))
+
+    reg = HVACLibraryRegistry()
+    type_def = reg._load_type_def_file(str(type_file))
+
+    fdef = type_def.features[0]
+    assert fdef.role == ""
+    assert fdef.enabled_parameter is None
+    assert fdef.visible_parameter is None
+    assert fdef.parameters == []
 
 
 def test_load_type_def_file_defaults_construction_to_empty_list(tmp_path):
@@ -226,6 +293,167 @@ def test_build_geometry_stamps_layer_roles_from_construction_defs():
         assert result.layers["insulation"].roles == ["thermal_insulation"]
     finally:
         sys.modules.pop("fake_hvac_lib_pkg.segments", None)
+
+
+# ----------------------------------------------------------------------
+# build_geometry() -- construction features
+# ----------------------------------------------------------------------
+
+def _register_fake_type(construction=None, features=None, extra_params=None):
+    """
+    Build a fake-module-backed HVACLibrary + type-def, the same fixture
+    shape test_build_geometry_stamps_layer_roles_from_construction_defs()
+    already uses, extended with an optional "features" fake module. Neither
+    module is a real SMACNA file -- this proves a library-defined feature
+    needs zero feature-specific core changes, only its own generator
+    function in its own conventional module.
+    """
+    segments_module = types.ModuleType("fake_hvac_lib_pkg.segments")
+    segments_module.build = lambda context: {"layers": {"casing": {"shape": "CASING"}}}
+    sys.modules["fake_hvac_lib_pkg.segments"] = segments_module
+
+    lib = HVACLibrary(id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg")
+    type_def = HVACTypeDef(
+        id="circular_straight",
+        label="Circular Straight",
+        category="segment",
+        topology="generic",
+        family=["straight_segment"],
+        generator_module="segments",
+        generator_function="build",
+        construction=construction or [ConstructionLayerDef(id="casing", roles=["flow_surface"])],
+        features=features or [],
+    )
+    lib.add_type(type_def)
+    reg = HVACLibraryRegistry()
+    reg.register_library(lib)
+    return reg, type_def
+
+
+def test_build_geometry_invokes_an_enabled_features_own_generator_with_filtered_context():
+    calls = []
+
+    def generate_transverse_flange(api, ctx):
+        calls.append((api, ctx))
+        return "FLANGE_SHAPE"
+
+    features_module = types.ModuleType("fake_hvac_lib_pkg.features")
+    features_module.generate_transverse_flange = generate_transverse_flange
+    sys.modules["fake_hvac_lib_pkg.features"] = features_module
+    try:
+        reg, type_def = _register_fake_type(features=[
+            ConstructionFeatureDef(
+                id="transverse_flange",
+                role="transverse_joint",
+                host_layer="casing",
+                generator="generate_transverse_flange",
+                parameters=["FlangeDepth", "FlangeThickness"],
+            ),
+        ])
+
+        result = reg.build_geometry("lib", type_def, {
+            "params": {"FlangeDepth": 25.0, "FlangeThickness": 1.0, "SomethingElse": 999},
+        })
+
+        assert len(calls) == 1
+        api_arg, ctx = calls[0]
+        from freecad.HVAC.library.library_api import HVACLibraryAPI
+        assert api_arg is HVACLibraryAPI
+        # Only the feature's own declared parameters -- never the type's
+        # full property set (e.g. "SomethingElse" must not leak through).
+        assert ctx.parameters == {"FlangeDepth": 25.0, "FlangeThickness": 1.0}
+        assert ctx.host_layer is result.layers["casing"]
+
+        assert result.features["transverse_flange"].shape == "FLANGE_SHAPE"
+        assert result.features["transverse_flange"].role == "transverse_joint"
+        assert result.features["transverse_flange"].visible is True
+    finally:
+        sys.modules.pop("fake_hvac_lib_pkg.features", None)
+        sys.modules.pop("fake_hvac_lib_pkg.segments", None)
+
+
+def test_build_geometry_skips_a_disabled_feature_entirely():
+    calls = []
+
+    def generate_transverse_flange(api, ctx):
+        calls.append(ctx)
+        return "FLANGE_SHAPE"
+
+    features_module = types.ModuleType("fake_hvac_lib_pkg.features")
+    features_module.generate_transverse_flange = generate_transverse_flange
+    sys.modules["fake_hvac_lib_pkg.features"] = features_module
+    try:
+        reg, type_def = _register_fake_type(features=[
+            ConstructionFeatureDef(
+                id="transverse_flange",
+                host_layer="casing",
+                generator="generate_transverse_flange",
+                enabled_parameter="FlangeEnabled",
+            ),
+        ])
+
+        result = reg.build_geometry("lib", type_def, {"params": {"FlangeEnabled": False}})
+
+        assert calls == []
+        assert "transverse_flange" not in result.features
+    finally:
+        sys.modules.pop("fake_hvac_lib_pkg.features", None)
+        sys.modules.pop("fake_hvac_lib_pkg.segments", None)
+
+
+def test_build_geometry_stamps_visible_false_from_visible_parameter():
+    features_module = types.ModuleType("fake_hvac_lib_pkg.features")
+    features_module.generate_transverse_flange = lambda api, ctx: "FLANGE_SHAPE"
+    sys.modules["fake_hvac_lib_pkg.features"] = features_module
+    try:
+        reg, type_def = _register_fake_type(features=[
+            ConstructionFeatureDef(
+                id="transverse_flange",
+                host_layer="casing",
+                generator="generate_transverse_flange",
+                visible_parameter="FlangeVisible",
+            ),
+        ])
+
+        result = reg.build_geometry("lib", type_def, {"params": {"FlangeVisible": False}})
+
+        # Not visible, but still generated -- present in result.features,
+        # unlike a disabled feature.
+        assert result.features["transverse_flange"].shape == "FLANGE_SHAPE"
+        assert result.features["transverse_flange"].visible is False
+    finally:
+        sys.modules.pop("fake_hvac_lib_pkg.features", None)
+        sys.modules.pop("fake_hvac_lib_pkg.segments", None)
+
+
+def test_build_geometry_raises_for_a_feature_referencing_an_unbuilt_host_layer():
+    features_module = types.ModuleType("fake_hvac_lib_pkg.features")
+    features_module.generate_transverse_flange = lambda api, ctx: "FLANGE_SHAPE"
+    sys.modules["fake_hvac_lib_pkg.features"] = features_module
+    try:
+        reg, type_def = _register_fake_type(features=[
+            ConstructionFeatureDef(
+                id="transverse_flange",
+                host_layer="does_not_exist",
+                generator="generate_transverse_flange",
+            ),
+        ])
+
+        try:
+            reg.build_geometry("lib", type_def, {"params": {}})
+        except ValueError as exc:
+            assert "does_not_exist" in str(exc)
+        else:
+            raise AssertionError("Expected ValueError for a feature with no matching host layer")
+    finally:
+        sys.modules.pop("fake_hvac_lib_pkg.features", None)
+        sys.modules.pop("fake_hvac_lib_pkg.segments", None)
+
+
+def test_build_geometry_with_no_features_declared_leaves_result_features_empty():
+    reg, type_def = _register_fake_type()
+    result = reg.build_geometry("lib", type_def, {"params": {}})
+    assert result.features == {}
 
 
 def test_build_geometry_leaves_roles_empty_for_layers_with_no_matching_construction_def():

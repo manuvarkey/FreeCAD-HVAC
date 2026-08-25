@@ -2,8 +2,12 @@
   "id": "circular_acoustic_straight",
   "label": "Circular Acoustic Straight",
   "category": "segment",
-  "family": ["straight_segment"],
-  "profiles": ["Circular"],
+  "family": [
+    "straight_segment"
+  ],
+  "profiles": [
+    "Circular"
+  ],
   "selection": {
     "kind": "model",
     "priority": 10
@@ -50,26 +54,36 @@
       }
     }
   ],
-  "construction": [
-    {
-      "id": "liner",
-      "roles": ["flow_surface", "acoustic_liner"],
-      "default_material_role": "acoustic_liner",
-      "thickness_property": "LinerThickness"
-    },
-    {
-      "id": "absorber",
-      "roles": ["acoustic_absorber"],
-      "default_material_role": "acoustic_absorber",
-      "thickness_property": "AbsorberThickness"
-    },
-    {
-      "id": "jacket",
-      "roles": ["outer_jacket", "structural_shell"],
-      "default_material_role": "structural_shell",
-      "thickness_property": "Thickness"
-    }
-  ],
+  "construction": {
+    "layers": [
+      {
+        "id": "liner",
+        "roles": [
+          "flow_surface",
+          "acoustic_liner"
+        ],
+        "default_material_role": "acoustic_liner",
+        "thickness_property": "LinerThickness"
+      },
+      {
+        "id": "absorber",
+        "roles": [
+          "acoustic_absorber"
+        ],
+        "default_material_role": "acoustic_absorber",
+        "thickness_property": "AbsorberThickness"
+      },
+      {
+        "id": "jacket",
+        "roles": [
+          "outer_jacket",
+          "structural_shell"
+        ],
+        "default_material_role": "structural_shell",
+        "thickness_property": "Thickness"
+      }
+    ]
+  },
   "geometry": {
     "backend": "partscript",
     "file": "models/circular_acoustic_straight.py"

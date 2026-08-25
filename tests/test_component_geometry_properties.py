@@ -63,9 +63,11 @@ def _bare_component(obj):
 def _assert_no_fixed_casing_insulation_properties(obj):
     for name in ("CasingShape", "InsulationShape", "CasingMaterial", "InsulationMaterial"):
         assert name not in obj.PropertiesList, name
-    # No layer property either -- those only ever get added by
-    # apply_construction_schema(), never by setProperties() itself.
+    # No layer or feature property either -- those only ever get added by
+    # apply_construction_schema()/apply_construction_features_schema(),
+    # never by setProperties() itself.
     assert not any(name.startswith("Layer_") for name in obj.PropertiesList)
+    assert not any(name.startswith("Feature_") for name in obj.PropertiesList)
 
 
 def test_segment_setproperties_declares_no_fixed_layer_properties(monkeypatch):
@@ -79,6 +81,8 @@ def test_segment_setproperties_declares_no_fixed_layer_properties(monkeypatch):
     _assert_no_fixed_casing_insulation_properties(obj)
     assert "ConstructionLayerIds" in obj.PropertiesList
     assert obj._editor_modes["ConstructionLayerIds"] == 2
+    assert "ConstructionFeatureIds" in obj.PropertiesList
+    assert obj._editor_modes["ConstructionFeatureIds"] == 2
 
 
 def test_component_setproperties_declares_no_fixed_layer_properties(monkeypatch):
@@ -92,6 +96,8 @@ def test_component_setproperties_declares_no_fixed_layer_properties(monkeypatch)
     _assert_no_fixed_casing_insulation_properties(obj)
     assert "ConstructionLayerIds" in obj.PropertiesList
     assert obj._editor_modes["ConstructionLayerIds"] == 2
+    assert "ConstructionFeatureIds" in obj.PropertiesList
+    assert obj._editor_modes["ConstructionFeatureIds"] == 2
 
 
 def test_junction_setproperties_has_no_geometry_or_material_properties():
@@ -104,6 +110,7 @@ def test_junction_setproperties_has_no_geometry_or_material_properties():
 
     _assert_no_fixed_casing_insulation_properties(obj)
     assert "ConstructionLayerIds" not in obj.PropertiesList
+    assert "ConstructionFeatureIds" not in obj.PropertiesList
 
 
 def test_setproperties_never_creates_a_document_object_for_materials(monkeypatch):

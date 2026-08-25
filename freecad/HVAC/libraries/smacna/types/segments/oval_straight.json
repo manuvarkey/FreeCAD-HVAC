@@ -35,17 +35,19 @@
       "default": 0.8
     }
   ],
-  "construction": [
-    {
-      "id": "casing",
-      "roles": [
-        "flow_surface",
-        "structural_shell"
-      ],
-      "default_material_role": "structural_shell",
-      "thickness_property": "Thickness"
-    }
-  ],
+  "construction": {
+    "layers": [
+      {
+        "id": "casing",
+        "roles": [
+          "flow_surface",
+          "structural_shell"
+        ],
+        "default_material_role": "structural_shell",
+        "thickness_property": "Thickness"
+      }
+    ]
+  },
   "geometry": {
     "backend": "partscript",
     "file": "models/oval_straight.py"

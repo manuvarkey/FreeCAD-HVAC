@@ -9,7 +9,7 @@ implicit layer.
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 
 from freecad.HVAC.core import _construction_schema
-from freecad.HVAC.library.construction import ConstructionLayerDef
+from freecad.HVAC.library.construction import ConstructionLayerDef, ConstructionFeatureDef
 from freecad.HVAC.library import geometry_result
 
 
@@ -19,7 +19,9 @@ class FakeDuctObj:
     def __init__(self):
         self.PropertiesList = []
         self._editor_modes = {}
+        self._property_statuses = []
         self.ConstructionLayerIds = []
+        self.ConstructionFeatureIds = []
 
     def addProperty(self, prop_type, name, group, description, attr=0):
         if name not in self.PropertiesList:
@@ -37,10 +39,14 @@ class FakeDuctObj:
     def setEditorMode(self, name, mode):
         self._editor_modes[name] = mode
 
+    def setPropertyStatus(self, name, status):
+        self._property_statuses.append((name, status))
+
 
 class _FakeTypeDef:
-    def __init__(self, construction):
+    def __init__(self, construction, features=None):
         self.construction = construction
+        self.features = features or []
 
 
 class _FakeRegistry:
@@ -127,6 +133,114 @@ def test_apply_construction_schema_returns_false_when_nothing_changed(monkeypatc
     changed_again = _construction_schema.apply_construction_schema(obj, "smacna", "circular_straight")
 
     assert changed_again is False
+
+
+# ----------------------------------------------------------------------
+# apply_construction_features_schema()
+# ----------------------------------------------------------------------
+
+def test_apply_construction_features_schema_adds_shape_per_feature(monkeypatch):
+    features = [
+        ConstructionFeatureDef(id="transverse_flange", host_layer="casing", generator="generate_transverse_flange"),
+        ConstructionFeatureDef(id="stiffener", host_layer="casing", generator="generate_stiffener"),
+    ]
+    obj = FakeDuctObj()
+    _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([], features=features)))
+
+    changed = _construction_schema.apply_construction_features_schema(obj, "smacna", "circular_straight")
+
+    assert changed is True
+    assert "Feature_transverse_flange_Shape" in obj.PropertiesList
+    assert "Feature_stiffener_Shape" in obj.PropertiesList
+    # No Feature_<id>_Material -- features have no material of their own.
+    assert "Feature_transverse_flange_Material" not in obj.PropertiesList
+    assert obj._editor_modes["Feature_transverse_flange_Shape"] == 1
+    assert obj.ConstructionFeatureIds == ["transverse_flange", "stiffener"]
+
+
+def test_apply_construction_features_schema_with_no_declared_features_is_a_noop(monkeypatch):
+    obj = FakeDuctObj()
+    _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([], features=[])))
+
+    changed = _construction_schema.apply_construction_features_schema(obj, "smacna", "circular_straight")
+
+    assert changed is False
+    assert obj.ConstructionFeatureIds == []
+    assert not any(name.startswith("Feature_") for name in obj.PropertiesList)
+
+
+def test_apply_construction_features_schema_removes_features_from_a_previous_type(monkeypatch):
+    obj = FakeDuctObj()
+    registry = _FakeRegistry(_FakeTypeDef([], features=[
+        ConstructionFeatureDef(id="transverse_flange", host_layer="casing", generator="generate_transverse_flange"),
+        ConstructionFeatureDef(id="stiffener", host_layer="casing", generator="generate_stiffener"),
+    ]))
+    _patch_registry(monkeypatch, registry)
+    _construction_schema.apply_construction_features_schema(obj, "smacna", "circular_acoustic_straight")
+    assert {"Feature_transverse_flange_Shape", "Feature_stiffener_Shape"} <= set(obj.PropertiesList)
+
+    registry._type_def = _FakeTypeDef([], features=[
+        ConstructionFeatureDef(id="transverse_flange", host_layer="casing", generator="generate_transverse_flange"),
+    ])
+    _construction_schema.apply_construction_features_schema(obj, "smacna", "circular_straight")
+
+    assert "Feature_stiffener_Shape" not in obj.PropertiesList
+    assert "Feature_transverse_flange_Shape" in obj.PropertiesList
+    assert obj.ConstructionFeatureIds == ["transverse_flange"]
+
+
+def test_apply_construction_features_schema_marks_visible_parameter_no_recompute(monkeypatch):
+    obj = FakeDuctObj()
+    obj.addProperty("App::PropertyBool", "FlangeVisible", "Options", "")
+    features = [
+        ConstructionFeatureDef(
+            id="transverse_flange", host_layer="casing", generator="generate_transverse_flange",
+            visible_parameter="FlangeVisible",
+        ),
+    ]
+    _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([], features=features)))
+
+    _construction_schema.apply_construction_features_schema(obj, "smacna", "circular_straight")
+
+    assert ("FlangeVisible", "NoRecompute") in obj._property_statuses
+
+
+def test_apply_construction_features_schema_never_marks_enabled_or_ordinary_parameters(monkeypatch):
+    # enabled_parameter and every name in `parameters` must keep triggering
+    # a normal recompute -- only visible_parameter gets the NoRecompute
+    # treatment.
+    obj = FakeDuctObj()
+    obj.addProperty("App::PropertyBool", "FlangeEnabled", "Options", "")
+    obj.addProperty("App::PropertyLength", "FlangeDepth", "Dimensions", "")
+    features = [
+        ConstructionFeatureDef(
+            id="transverse_flange", host_layer="casing", generator="generate_transverse_flange",
+            enabled_parameter="FlangeEnabled", parameters=["FlangeDepth"],
+        ),
+    ]
+    _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([], features=features)))
+
+    _construction_schema.apply_construction_features_schema(obj, "smacna", "circular_straight")
+
+    assert obj._property_statuses == []
+
+
+def test_apply_construction_features_schema_tolerates_visible_parameter_not_yet_added(monkeypatch):
+    # If the referenced property hasn't been added yet (e.g. a test calling
+    # this in isolation, without first running apply_type_schema()), this
+    # must not raise -- just skip the status call.
+    obj = FakeDuctObj()
+    features = [
+        ConstructionFeatureDef(
+            id="transverse_flange", host_layer="casing", generator="generate_transverse_flange",
+            visible_parameter="FlangeVisible",
+        ),
+    ]
+    _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([], features=features)))
+
+    _construction_schema.apply_construction_features_schema(obj, "smacna", "circular_straight")  # must not raise
+
+    assert obj._property_statuses == []
 
 
 # ----------------------------------------------------------------------

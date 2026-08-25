@@ -62,11 +62,31 @@ class ConstructionLayer:
         return role in self.roles
 
 
-class Construction:
-    """Queryable view of one object's own construction layers, in the type-def's declared order."""
+@dataclass
+class ConstructionFeature:
+    """
+    One construction feature as built for a real object -- its own
+    generated Shape, not just its definition. Unlike a layer, `role` is a
+    single free-form string (no standardized vocabulary -- see
+    library/construction.py's ConstructionFeatureDef), and `enabled`/
+    `visible` reflect the *current* value of whatever property each was
+    resolved from (getattr'd fresh off the object, not a stale snapshot
+    from whenever geometry was last generated).
+    """
+    id: str
+    role: str = ""
+    host_layer: str = ""
+    shape: object = None
+    enabled: bool = True
+    visible: bool = True
 
-    def __init__(self, layers):
+
+class Construction:
+    """Queryable view of one object's own construction layers/features, in the type-def's declared order."""
+
+    def __init__(self, layers, features=()):
         self._layers = list(layers)
+        self._features = list(features)
 
     def layers(self):
         return list(self._layers)
@@ -97,20 +117,37 @@ class Construction:
             if ROLE_ACOUSTIC_ABSORBER in layer.roles or ROLE_ACOUSTIC_LINER in layer.roles
         ]
 
+    def features(self):
+        return list(self._features)
+
+    def feature(self, feature_id):
+        for feature in self._features:
+            if feature.id == feature_id:
+                return feature
+        return None
+
+    def features_with_role(self, role):
+        return [feature for feature in self._features if feature.role == role]
+
 
 def construction_for(obj):
     """
     Build a Construction for `obj` (a DuctSegment/DuctComponent) from its
-    own obj.ConstructionLayerIds/Layer_<id>_Shape/Layer_<id>_Material
-    properties, with each layer's roles resolved from the currently-
-    selected type's own declared construction (empty roles for a
-    not-yet-migrated type's single implicit layer).
+    own obj.ConstructionLayerIds/Layer_<id>_Shape/Layer_<id>_Material and
+    obj.ConstructionFeatureIds/Feature_<id>_Shape properties, with each
+    layer's roles and each feature's role/host_layer resolved from the
+    currently-selected type's own declared construction (empty roles for a
+    not-yet-migrated type's single implicit layer; no features at all for a
+    type that declares none). A feature's own enabled/visible are read
+    fresh off `obj`'s current enabled_parameter/visible_parameter value,
+    not cached from whenever its geometry was last generated.
     """
     reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
     library_id = getattr(obj, "LibraryId", "")
     type_id = getattr(obj, "TypeId", "")
     type_def = reg.resolve_type(library_id, type_id) if library_id and type_id else None
     layer_defs_by_id = {ldef.id: ldef for ldef in getattr(type_def, "construction", []) or []} if type_def else {}
+    feature_defs_by_id = {fdef.id: fdef for fdef in getattr(type_def, "features", []) or []} if type_def else {}
 
     layers = []
     for layer_id in getattr(obj, "ConstructionLayerIds", []) or []:
@@ -123,4 +160,26 @@ def construction_for(obj):
                 material=getattr(obj, _construction_schema.material_property_name(layer_id), None),
             )
         )
-    return Construction(layers)
+
+    features = []
+    for feature_id in getattr(obj, "ConstructionFeatureIds", []) or []:
+        feature_def = feature_defs_by_id.get(feature_id)
+        enabled = True
+        visible = True
+        if feature_def is not None:
+            if feature_def.enabled_parameter:
+                enabled = bool(getattr(obj, feature_def.enabled_parameter, True))
+            if feature_def.visible_parameter:
+                visible = bool(getattr(obj, feature_def.visible_parameter, True))
+        features.append(
+            ConstructionFeature(
+                id=feature_id,
+                role=feature_def.role if feature_def is not None else "",
+                host_layer=feature_def.host_layer if feature_def is not None else "",
+                shape=getattr(obj, _construction_schema.feature_shape_property_name(feature_id), None),
+                enabled=enabled,
+                visible=visible,
+            )
+        )
+
+    return Construction(layers, features)

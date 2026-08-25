@@ -90,6 +90,16 @@ def test_normalize_preserves_unknown_keys_in_extra():
     assert result.extra == {"some_future_output": "value"}
 
 
+def test_normalize_never_populates_features_from_a_raw_backend_dict():
+    # Unlike layers, features are never something a backend/generator
+    # returns directly -- a "features" key in a raw dict is not a supported
+    # part of the contract, it would just land in .extra like any other
+    # unrecognized key. GeometryResult.features is only ever populated by
+    # HVACLibraryRegistry.build_geometry()'s own second pass (see Library.py).
+    result = gr.normalize({"shape": _Shape()})
+    assert result.features == {}
+
+
 def test_normalize_rejects_unsupported_raw_type():
     try:
         gr.normalize(42)

@@ -121,3 +121,91 @@ class LayerGeometry:
     """
     shape: object = None  # Part.Shape, or None if this layer has no geometry this call
     roles: list = field(default_factory=list)
+
+
+@dataclass
+class ConstructionFeatureDef:
+    """
+    One library-declared construction feature (a localized attachment --
+    flange, stiffener, seam, ... -- as opposed to a role-bearing layer
+    spanning the whole wall), parsed from a type-def's "construction.features"
+    JSON block (see Library.py._load_type_def_file).
+
+    id: library-chosen, stable within that type-def -- pairs a feature's def
+        with its generated geometry and its own Feature_<id>_Shape FreeCAD
+        property (see core/_construction_schema.py). Never interpreted by
+        core/application code.
+    role: a free-form, library-chosen string (e.g. "transverse_joint") --
+        unlike a layer's roles, there is no standardized/enumerated
+        vocabulary for feature roles; core only supports querying by
+        whatever string a library chose (see core/Construction.py).
+    host_layer: the id of the ConstructionLayerDef this feature is attached
+        to/built from (see Library.py.build_geometry(), which resolves this
+        to that layer's own already-built LayerGeometry before invoking the
+        feature's generator).
+    generator: name of the function this feature's own library-supplied
+        "features" generator module (generators_package + ".features")
+        must define -- resolved and invoked by build_geometry(), never
+        imported by core ahead of time.
+    enabled_parameter: name of an *existing* declared type-def property
+        (see HVACPropertyDef) whose current value gates whether this
+        feature is generated at all this build. None means always enabled.
+    visible_parameter: name of an *existing* declared type-def property
+        whose current value controls only the feature's rendered
+        visibility, independent of whether it was generated -- see
+        core/_construction_schema.py for why this property is marked
+        Prop_NoRecompute (changing visibility must never trigger a
+        geometry rebuild). None means always visible.
+    parameters: names of existing declared type-def properties this
+        feature's own generator function needs -- core resolves just these
+        (already-resolved) values into the generator's own FeatureContext.parameters,
+        never the type's full property set. This list, and
+        enabled_parameter/visible_parameter, only ever *reference* property
+        names -- the properties themselves stay declared exactly where they
+        already are, in the type-def's own "properties" list.
+    """
+    id: str
+    role: str = ""
+    host_layer: str = ""
+    generator: str = ""
+    enabled_parameter: "str | None" = None
+    visible_parameter: "str | None" = None
+    parameters: list = field(default_factory=list)
+
+
+@dataclass
+class FeatureGeometry:
+    """
+    One feature's generated geometry for one build_geometry() call. Absent
+    from GeometryResult.features entirely when disabled (see
+    ConstructionFeatureDef.enabled_parameter) -- unlike a layer, a feature
+    has no "present but null" state, only "present" or "not generated at
+    all this call."
+    """
+    shape: object = None  # Part.Shape (or a compound, for repeated geometry)
+    role: str = ""
+    visible: bool = True
+
+
+@dataclass
+class FeatureContext:
+    """
+    The `ctx` argument a library's own feature generator function receives
+    (alongside HVACLibraryAPI as `api`) -- see Library.py.build_geometry()'s
+    feature-generation pass.
+
+    parameters: {name: value} filtered to exactly this feature's own
+        declared ConstructionFeatureDef.parameters (already resolved by the
+        same validation.resolve_params() call that resolved every other
+        property for this build -- never a second/separate resolution).
+    host_layer: this feature's own host layer's already-built LayerGeometry
+        (shape + roles) for this same build_geometry() call.
+    context: the full underlying geometry-build context dict (ports,
+        start/end points, profile, profile_x_axis, path info, ...) -- an
+        escape hatch for anything a feature generator needs beyond its own
+        parameters/host layer, so this dataclass doesn't need to re-invent
+        every context key generator/PartScript authors already rely on.
+    """
+    parameters: dict = field(default_factory=dict)
+    host_layer: object = None
+    context: dict = field(default_factory=dict)

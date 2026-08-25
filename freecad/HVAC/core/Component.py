@@ -289,6 +289,7 @@ class DuctComponent:
         self._addProperty(obj, "App::PropertyString", "Profile", "HVAC", "Duct profile at this component's primary/outlet side")
         self._addProperty(obj, "App::PropertyStringList", "TypeSchemaPropertyNames", "HVAC", "Internal: property names added by the last-applied type schema (for stale cleanup)")
         self._addProperty(obj, "App::PropertyStringList", "ConstructionLayerIds", "HVAC", "Internal: construction layer ids of the last-applied type (see core/_construction_schema.py)")
+        self._addProperty(obj, "App::PropertyStringList", "ConstructionFeatureIds", "HVAC", "Internal: construction feature ids of the last-applied type (see core/_construction_schema.py)")
         self._addProperty(obj, "App::PropertyString", "LocalPortsJson", "HVAC", "Internal: this component's local inlet/outlet port geometry, written by the parent junction's composer")
         self._addProperty(obj, "App::PropertyString", "ConnectionLengthsJson", "HVAC", "This component's own per-port connection (trim) lengths")
 
@@ -361,6 +362,7 @@ class DuctComponent:
             "AttachedEdgeKey",
             "TypeSchemaPropertyNames",
             "ConstructionLayerIds",
+            "ConstructionFeatureIds",
             "LocalPortsJson",
             "ConnectionLengthsJson",
         ):
@@ -376,6 +378,7 @@ class DuctComponent:
         changed = _type_schema.apply_type_schema(obj, library_id, type_id)
         changed = _construction_schema.apply_construction_schema(obj, library_id, type_id) or changed
         _construction_schema.apply_default_layer_materials(obj, library_id, type_id)
+        changed = _construction_schema.apply_construction_features_schema(obj, library_id, type_id) or changed
         return changed
 
     def getConstruction(self):

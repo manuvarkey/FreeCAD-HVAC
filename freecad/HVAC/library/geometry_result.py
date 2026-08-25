@@ -21,7 +21,7 @@ deals with a real GeometryResult, never a bare dict.
 
 from dataclasses import dataclass, field
 
-from .construction import LayerGeometry
+from .construction import LayerGeometry, FeatureGeometry  # noqa: F401 -- re-exported for GeometryResult.features consumers
 
 # Top-level raw-dict keys normalize() understands by name; anything else is
 # preserved verbatim on GeometryResult.extra rather than silently dropped.
@@ -48,8 +48,18 @@ class GeometryResult:
     call. `layers` holds arbitrary library-defined layer ids -> LayerGeometry
     (see library/construction.py) -- no layer id or count is required or
     assumed here; a type may return one layer or many.
+
+    `features` holds arbitrary library-defined feature ids -> FeatureGeometry
+    -- unlike `layers`, this is never populated from a raw backend dict
+    (normalize() leaves it empty); HVACLibraryRegistry.build_geometry()
+    fills it in as a second pass, after the backend's own layers are built
+    and normalized, by resolving and invoking each of the type-def's own
+    declared construction.features generators (see Library.py). A disabled
+    feature (its own enabled_parameter resolves False) has no entry here at
+    all, not an entry with a null shape.
     """
     layers: dict = field(default_factory=dict)
+    features: dict = field(default_factory=dict)
     connection_lengths: list = field(default_factory=list)
     computed_properties: dict = field(default_factory=dict)
     start_trim_plane_json: "str | None" = None

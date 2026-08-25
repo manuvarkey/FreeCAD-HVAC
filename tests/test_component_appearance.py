@@ -1,15 +1,19 @@
 """
 Tests for core/_component_appearance.py: rendering every construction
-layer's own Layer_<id>_Shape from its own native Layer_<id>_Material via
-FreeCAD's per-face ViewObject.ShapeAppearance -- see ARCHITECTURE.md's
-"Component geometry & materials" section for why the per-layer face-count
-split (len(Layer_<id>_Shape.Faces)) is an exact count derived from the same
-shapes Shape was built from, not a hardcoded/guessed index.
+layer's own Layer_<id>_Shape from its own native Layer_<id>_Material, and
+every construction feature's own Feature_<id>_Shape from its host layer's
+appearance (or fully transparent when hidden), via FreeCAD's per-face
+ViewObject.ShapeAppearance -- see ARCHITECTURE.md's "Component geometry &
+materials" section for why the per-layer/per-feature face-count split
+(len(Layer_<id>_Shape.Faces)/len(Feature_<id>_Shape.Faces)) is an exact
+count derived from the same shapes Shape was built from, not a
+hardcoded/guessed index.
 """
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/Materials/PySide stubs
 
 from freecad.HVAC.core import _component_appearance as appearance_mod
+from freecad.HVAC.library.construction import ConstructionFeatureDef
 
 
 class FakeShape:
@@ -29,11 +33,18 @@ class FakeMaterial:
 class FakeObj:
     """layers: ordered list of (layer_id, shape, material) triples."""
 
-    def __init__(self, layers):
+    def __init__(self, layers, library_id="", type_id=""):
+        self.LibraryId = library_id
+        self.TypeId = type_id
         self.ConstructionLayerIds = [layer_id for layer_id, _, _ in layers]
+        self.ConstructionFeatureIds = []
         for layer_id, shape, material in layers:
             setattr(self, "Layer_{}_Shape".format(layer_id), shape)
             setattr(self, "Layer_{}_Material".format(layer_id), material)
+
+    def add_feature(self, feature_id, shape):
+        self.ConstructionFeatureIds.append(feature_id)
+        setattr(self, "Feature_{}_Shape".format(feature_id), shape)
 
 
 class FakeViewObject:
@@ -51,6 +62,28 @@ def _patch_view_appearance(monkeypatch, mapping):
                 return value
         return None
     monkeypatch.setattr(appearance_mod.hvac_materials, "get_view_appearance", fake_get_view_appearance)
+
+
+class _FakeTypeDef:
+    def __init__(self, features):
+        self.features = features
+
+
+class _FakeRegistry:
+    def __init__(self, type_def):
+        self._type_def = type_def
+
+    def resolve_type(self, lib_id, type_id):
+        return self._type_def
+
+
+def _patch_features(monkeypatch, features):
+    registry = _FakeRegistry(_FakeTypeDef(features))
+    monkeypatch.setattr(
+        appearance_mod.hvaclib.HVACLibraryService,
+        "get_hvac_library_registry",
+        staticmethod(lambda: registry),
+    )
 
 
 def test_apply_component_appearance_builds_per_face_list_in_declared_layer_order(monkeypatch):
@@ -224,3 +257,83 @@ def test_is_trigger_property_reflects_the_objects_own_construction_layers():
     assert appearance_mod.is_trigger_property(obj, "Layer_liner_Material")
     assert not appearance_mod.is_trigger_property(obj, "Layer_absorber_Shape")
     assert not appearance_mod.is_trigger_property(obj, "SomeUnrelatedProperty")
+
+
+# ----------------------------------------------------------------------
+# Construction features
+# ----------------------------------------------------------------------
+
+def test_visible_feature_inherits_its_host_layers_appearance(monkeypatch):
+    casing_material = FakeMaterial("Galvanized Steel")
+    casing_appearance = object()
+    _patch_view_appearance(monkeypatch, [(casing_material, casing_appearance)])
+    _patch_features(monkeypatch, [
+        ConstructionFeatureDef(id="transverse_flange", host_layer="casing", generator="generate_transverse_flange"),
+    ])
+
+    obj = FakeObj([("casing", FakeShape(3), casing_material)], library_id="smacna", type_id="circular_straight")
+    obj.add_feature("transverse_flange", FakeShape(2))
+    vobj = FakeViewObject(obj)
+
+    appearance_mod.apply_component_appearance(vobj)
+
+    assert vobj.ShapeAppearance == [casing_appearance] * 3 + [casing_appearance] * 2
+
+
+def test_non_visible_feature_gets_a_fully_transparent_override_not_its_host_layers_material(monkeypatch):
+    casing_material = FakeMaterial("Galvanized Steel")
+    casing_appearance = object()
+    _patch_view_appearance(monkeypatch, [(casing_material, casing_appearance)])
+    _patch_features(monkeypatch, [
+        ConstructionFeatureDef(
+            id="transverse_flange", host_layer="casing", generator="generate_transverse_flange",
+            visible_parameter="FlangeVisible",
+        ),
+    ])
+
+    obj = FakeObj([("casing", FakeShape(3), casing_material)], library_id="smacna", type_id="circular_straight")
+    obj.add_feature("transverse_flange", FakeShape(2))
+    obj.FlangeVisible = False
+    vobj = FakeViewObject(obj)
+
+    appearance_mod.apply_component_appearance(vobj)
+
+    entries = vobj.ShapeAppearance
+    assert entries[:3] == [casing_appearance] * 3
+    # The 2 flange faces are neither the casing's own appearance nor None --
+    # a distinct, forced fully-transparent override.
+    assert len(entries) == 5
+    assert all(e is not casing_appearance for e in entries[3:])
+    assert all(getattr(e, "Transparency", None) == appearance_mod._FULLY_TRANSPARENT_TRANSPARENCY for e in entries[3:])
+
+
+def test_feature_defaults_to_visible_when_no_visible_parameter_declared(monkeypatch):
+    casing_material = FakeMaterial("Galvanized Steel")
+    casing_appearance = object()
+    _patch_view_appearance(monkeypatch, [(casing_material, casing_appearance)])
+    _patch_features(monkeypatch, [
+        ConstructionFeatureDef(id="transverse_flange", host_layer="casing", generator="generate_transverse_flange"),
+    ])
+
+    obj = FakeObj([("casing", FakeShape(1), casing_material)], library_id="smacna", type_id="circular_straight")
+    obj.add_feature("transverse_flange", FakeShape(1))
+    vobj = FakeViewObject(obj)
+
+    appearance_mod.apply_component_appearance(vobj)
+
+    assert vobj.ShapeAppearance == [casing_appearance, casing_appearance]
+
+
+def test_is_trigger_property_includes_feature_shape_and_visible_parameter(monkeypatch):
+    _patch_features(monkeypatch, [
+        ConstructionFeatureDef(
+            id="transverse_flange", host_layer="casing", generator="generate_transverse_flange",
+            visible_parameter="FlangeVisible",
+        ),
+    ])
+    obj = FakeObj([("casing", None, None)], library_id="smacna", type_id="circular_straight")
+    obj.add_feature("transverse_flange", None)
+
+    assert appearance_mod.is_trigger_property(obj, "Feature_transverse_flange_Shape")
+    assert appearance_mod.is_trigger_property(obj, "FlangeVisible")
+    assert not appearance_mod.is_trigger_property(obj, "FlangeDepth")
