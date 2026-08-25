@@ -3,8 +3,21 @@
   "label": "Wye - Generic",
   "category": "junction",
   "topology": "branch",
-  "family": ["branch.wye", "branch.tee", "branch.lateral_tee", "branch.wye.3d", "branch.tee.3d", "branch.lateral_tee.3d", "branch.generic"],
-  "profiles": ["Circular", "Rectangular", "Oval", "Generic"],
+  "family": [
+    "branch.wye",
+    "branch.tee",
+    "branch.lateral_tee",
+    "branch.wye.3d",
+    "branch.tee.3d",
+    "branch.lateral_tee.3d",
+    "branch.generic"
+  ],
+  "profiles": [
+    "Circular",
+    "Rectangular",
+    "Oval",
+    "Generic"
+  ],
   "selection": {
     "kind": "model",
     "priority": 10
@@ -75,6 +88,17 @@
       "group": "Options",
       "description": "Include the flange at port C",
       "default": true
+    }
+  ],
+  "construction": [
+    {
+      "id": "casing",
+      "roles": [
+        "flow_surface",
+        "structural_shell"
+      ],
+      "default_material_role": "structural_shell",
+      "thickness_property": "Thickness"
     }
   ],
   "generator": {

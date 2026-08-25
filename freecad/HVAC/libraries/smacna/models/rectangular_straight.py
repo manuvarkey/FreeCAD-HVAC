@@ -85,4 +85,4 @@ def generate(context):
         )
 
     shape = api.fuse_shapes(parts)
-    return {"shape": shape}
+    return {"layers": {"casing": {"shape": shape}}}

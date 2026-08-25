@@ -169,7 +169,7 @@ let the user confirm first.
 3. `DuctNetworkParser` rebuilds its graph from the base geometry and classifies every node/edge (topology, `family_key`, connected-port profiles).
 4. `DuctNetwork.syncSegments` builds a match request from that classification and asks the library registry to resolve a type (see next section) — then writes the result onto the segment (`LibraryId`, `TypeId`, `Profile`, etc.) via `updateMetadata()`, a **pure metadata writer** with no selection logic of its own, and `applyTypeSchema()` adds/removes the FreeCAD properties the selected type declares.
 5. `DuctNetwork.syncJunctions` writes each junction's own metadata (`NodeKey`, `CenterPoint`, `Degree`, `Topology`, `Family`, ...), then `syncJunctionComponents` creates/updates that junction's **Primary** `DuctComponent` (same sticky type-resolution policy a junction used to run directly), leaves any **Inline** components untouched (never auto-replaced), and calls `DuctJunction.composeComponents()` to write every component's local inlet/outlet ports for this sync — see "Junction component composition" below.
-6. FreeCAD recompute calls `DuctSegment.execute()` / `DuctComponent.execute()`, which do an **exact** `resolve_type(LibraryId, TypeId)` lookup and call `HVACLibraryRegistry.build_geometry()` to produce a `GeometryResult` (see "Component geometry & materials" below), applied onto the object's `CasingShape`/`InsulationShape`/aggregate `Shape` by the shared `core/_geometry_apply.apply_geometry_result()` helper. `DuctJunction.aggregateConnectionLengths()` then rolls each component's own trim into the junction's `ConnectionLengthsJson` — the one external trim contract `syncSegments`'s next pass consumes to shorten the two real connected segments.
+6. FreeCAD recompute calls `DuctSegment.execute()` / `DuctComponent.execute()`, which do an **exact** `resolve_type(LibraryId, TypeId)` lookup and call `HVACLibraryRegistry.build_geometry()` to produce a `GeometryResult` (see "Component geometry & materials" below), applied onto each of the object's own construction layers' `Layer_<id>_Shape`/aggregate `Shape` by the shared `core/_geometry_apply.apply_geometry_result()` helper. `DuctJunction.aggregateConnectionLengths()` then rolls each component's own trim into the junction's `ConnectionLengthsJson` — the one external trim contract `syncSegments`'s next pass consumes to shorten the two real connected segments.
 7. Optionally, `HVAC_CalculateAirflow` (`AirflowSolver`) and `HVAC_SizeDucts` (`DuctSizer`) run over the resulting network for pressure-drop and sizing results — see "Airflow & sizing flow" above.
 
 ## Junction component composition
@@ -236,51 +236,107 @@ a topology change always leaves it consistent, not just a live edit.
 ## Component geometry & materials
 
 Every `DuctSegment`/`DuctComponent` is one physical HVAC element, but that
-element can be made of more than one solid -- a sheet-metal casing, and
-optionally an insulation wrap. `HVACLibraryRegistry.build_geometry()`
-normalizes whatever a geometry backend returned (see
-`library/geometry_result.py`) into a `GeometryResult`:
+element can be made of any number of physical **construction layers** -- a
+bare sheet-metal wall, a wall plus insulation, or a casing plus an acoustic
+fill plus a perforated liner. How many layers a type has, what each is
+called, and how they're built is entirely **library-defined data** (a
+type-def's own `"construction"` block -- see
+`freecad/HVAC/libraries/README.md`'s "Construction layers" section); core
+only owns the standardized semantic **role** vocabulary
+(`library/construction.py`'s `LayerRole`: `flow_surface`,
+`structural_shell`, `thermal_insulation`, `acoustic_absorber`,
+`acoustic_liner`, `vapor_barrier`, `outer_jacket`, `fire_protection`) and
+the generic machinery that composes/queries whatever layers a type
+declares. Downstream code must only ever branch on a layer's roles, never
+on its library-chosen id.
+
+```
+library/construction.py     LayerRole vocabulary + ConstructionLayerDef
+                             (a type-def's own declared layer: id, roles,
+                             default_material_role/uuid, thickness_property)
+                             + LayerGeometry (one layer's built shape+roles)
+        |
+library/geometry_result.py  GeometryResult.layers: dict[layer_id, LayerGeometry]
+        |
+library/Library.py          HVACTypeDef.construction: list[ConstructionLayerDef],
+                             parsed from the type-def's "construction" JSON;
+                             build_geometry() stamps each returned layer's
+                             roles from there after normalize()
+        |
+library/library_api.py      HVACLibraryAPI.build_concentric_layers() -- the
+                             one shared primitive for "N concentric shells
+                             around a shared set of ports", generalizing the
+                             tube-diff/grow+sweep+cut pattern every casing+
+                             insulation generator used to hand-roll
+        |
+core/_construction_schema.py   apply_construction_schema() -- adds/removes
+                                each layer's own Layer_<id>_Shape/
+                                Layer_<id>_Material FreeCAD properties to
+                                match the selected type, mirroring
+                                core/_type_schema.py's dynamic-property
+                                pattern; writes the declared order onto
+                                obj.ConstructionLayerIds
+        |
+core/_geometry_apply.py     writes each declared layer's own Layer_<id>_Shape
+                             from GeometryResult.layers, then derives the
+                             object's own Shape as Part.makeCompound() of
+                             every non-null layer shape, in
+                             ConstructionLayerIds order
+        |
+core/Construction.py        the semantic query API: Construction(obj)
+                             .layers_with_role(role) / .flow_surface() /
+                             .structural_layers() / .thermal_layers() /
+                             .acoustic_layers() -- reachable off a segment/
+                             component's own getConstruction()
+```
+
+`HVACLibraryRegistry.build_geometry()` normalizes whatever a geometry
+backend returned into a `GeometryResult`:
 
 ```
 GeometryResult
-   components: {"casing": ComponentGeometry, "insulation": ComponentGeometry, ...}
-               -- always has "casing" and "insulation" keys; a component's
-               .shape is None when that piece has no geometry (e.g.
-               insulation disabled for that type)
+   layers: dict[str, LayerGeometry]  -- arbitrary library-defined layer ids;
+               no required keys or count. Each LayerGeometry carries its own
+               .shape (None if that layer has no geometry this call) and
+               .roles (stamped on by build_geometry() from the type-def's
+               own "construction" block -- empty for a not-yet-migrated
+               type with no construction block at all).
    connection_lengths / computed_properties / start_trim_plane_json / ...
                -- the same non-shape outputs generators have always returned
 ```
 
 Generator/PartScript/static-descriptor authors never import
-`GeometryResult`/`ComponentGeometry` directly -- per the "external code uses
+`GeometryResult`/`LayerGeometry` directly -- per the "external code uses
 only `HVACLibraryAPI`" rule, they keep returning plain dicts: either the
-legacy `{"shape": ...}` form (every shipped type that doesn't model
-insulation), or `{"components": {"casing": {"shape": ...}, "insulation":
-{"shape": ...}}}` for a type that does. `normalize()` accepts both.
+legacy `{"shape": ...}` form (a type with just one, roleless implicit
+layer, id `"shape"`), or `{"layers": {"<id>": {"shape": ...}, ...}}` for a
+type with more than one declared layer. `normalize()` accepts both.
 
 `core/_geometry_apply.apply_geometry_result()` is the one place
-`DuctSegment.execute()`/`DuctComponent.execute()` share: it writes
-`CasingShape`/`InsulationShape` (`Part::PropertyPartShape`, read-only in the
-property editor) from `result.components`, then derives the object's own
-`Shape` as `Part.makeCompound()` of whichever of those two actually have a
-shape, in that fixed casing-then-insulation order. `Shape` is only ever this
-derived aggregate -- nothing downstream recovers casing/insulation meaning
-by inspecting its faces/solids.
+`DuctSegment.execute()`/`DuctComponent.execute()` share: it writes each of
+`obj.ConstructionLayerIds`' own `Layer_<id>_Shape`
+(`Part::PropertyPartShape`, read-only in the property editor) from
+`result.layers`, then derives the object's own `Shape` as
+`Part.makeCompound()` of whichever layers actually have a shape, in that
+same declared order. `Shape` is only ever this derived aggregate --
+nothing downstream recovers a layer's meaning by inspecting its
+faces/solids; that's what `core/Construction.py`'s role queries are for.
 
 **FreeCAD-HVAC uses FreeCAD's native `Materials::PropertyMaterial` and
 `.FCMat` database. HVAC supplies only domain-specific material cards;
 FreeCAD's Material subsystem owns material storage, selection, physical
-properties and appearance.** `CasingMaterial`/`InsulationMaterial`
-(`Materials::PropertyMaterial`) hold a native FreeCAD material value
-directly -- not a link to a per-object document object -- so the same
-database material (built-in, this addon's own, from another addon, or
-user-defined) can be assigned to any number of duct objects without
-duplication, exactly like assigning a material anywhere else in FreeCAD.
-There are no HVAC-specific color/transparency properties: appearance always
-comes from the assigned material's own `AppearanceModels`. Both properties
-are added with `Prop_NoRecompute` -- picking a material never changes the
-object's own geometry, only its ViewProvider's rendered appearance, so it
-shouldn't force a recompute.
+properties and appearance.** Each construction layer's own
+`Layer_<id>_Material` (`Materials::PropertyMaterial`) holds a native
+FreeCAD material value directly -- not a link to a per-object document
+object -- so the same database material (built-in, this addon's own, from
+another addon, or user-defined) can be assigned to any number of duct
+objects without duplication, exactly like assigning a material anywhere
+else in FreeCAD. There are no HVAC-specific color/transparency properties:
+appearance always comes from the assigned material's own
+`AppearanceModels`. Every `Layer_<id>_Material` is added with
+`Prop_NoRecompute` -- picking a material never changes the object's own
+geometry, only its ViewProvider's rendered appearance, so it shouldn't
+force a recompute.
 
 `freecad/HVAC/Resources/Materials/` ships a handful of HVAC-domain `.FCMat`
 cards -- casing metals (galvanized steel, aluminium, stainless steel) and
@@ -288,8 +344,8 @@ insulation (glass wool, rock wool, nitrile rubber, polyurethane foam,
 expanded polystyrene) -- built entirely from FreeCAD's own standard models
 (`Father`, `Density`, `Thermal`, `BasicRendering`) -- no HVAC-specific
 material schema. Every insulation card's `BasicRendering.Transparency` is
-`0.6` so a duct's base casing stays visible through its insulation wrap
-while modeling; metal casing cards are opaque (`0.0`).
+`0.6` so an inner layer stays visible through an outer wrap while
+modeling; metal casing cards are opaque (`0.0`).
 `utils/materials.register_material_resources()` (called once from
 `init_gui.py`) registers that folder with FreeCAD's Material subsystem the
 same way FreeCAD's own Supplemental-Materials addon does (a `ModuleDir` key
@@ -298,73 +354,82 @@ show up in the normal material browser/editor next to every other material
 FreeCAD knows about -- there is no separate HVAC material dropdown.
 `utils/materials.get_physical_value()`/`get_view_appearance()` are the only
 two ways core/ code reads a `Materials::PropertyMaterial` value: the first
-for a future quantity calculation (volume x density -> mass, from
-`CasingShape`/`InsulationShape` + `CasingMaterial`/`InsulationMaterial`),
-the second to build the plain `FreeCAD.Material()` struct
-`ViewObject.ShapeAppearance` actually consumes, from the native material's
-own appearance -- a one-way, read-only conversion; nothing is written back
-onto the material, and nothing is cached onto the HVAC object itself.
-Construction parameters like `InsulationThickness` stay separate, plain
-type properties -- never part of material identity, so the same Glass Wool
-material works at any thickness.
+for a future quantity calculation (volume x density -> mass, from a
+layer's own `Layer_<id>_Shape` + `Layer_<id>_Material`), the second to
+build the plain `FreeCAD.Material()` struct `ViewObject.ShapeAppearance`
+actually consumes, from the native material's own appearance -- a one-way,
+read-only conversion; nothing is written back onto the material, and
+nothing is cached onto the HVAC object itself. Construction parameters
+like a layer's own thickness stay separate, plain type properties -- never
+part of material identity, so the same Glass Wool material works at any
+thickness (a `ConstructionLayerDef.thickness_property`, if declared, names
+which one -- purely informational metadata, since a layer's generated
+Shape is always the source of truth for its own volume).
 
-`core/_component_appearance.py` renders the two materials: since `Shape` is
-always the compound built in fixed casing-then-insulation order,
-`len(CasingShape.Faces)` tells the ViewProvider exactly where the casing's
-own faces end in that compound (an exact count derived from the very two
-shapes the compound was built from, never a hardcoded/guessed split), so it
-can assign a per-face `ViewObject.ShapeAppearance` array built from each
-material's own converted appearance -- no custom Coin scene graph needed.
-It guards against a real FreeCAD re-entrancy quirk (querying a material's
-own appearance can synchronously re-fire `updateData()` for that same
-property before the original call returns, which would otherwise recurse
-until the interpreter's stack limit crashes it) -- see the module's own
-`_rendering` guard and its comment before touching that function.
+`core/_component_appearance.py` renders every layer's own material: since
+`Shape` is always the compound built in `ConstructionLayerIds` order,
+`len(Layer_<id>_Shape.Faces)` for each layer in that same order tells the
+ViewProvider exactly where each layer's own faces fall in that compound
+(an exact count derived from the very shapes the compound was built from,
+never a hardcoded/guessed split), so it can assign a per-face
+`ViewObject.ShapeAppearance` array built from each layer's own converted
+material appearance -- no custom Coin scene graph needed. It guards
+against a real FreeCAD re-entrancy quirk (querying a material's own
+appearance can synchronously re-fire `updateData()` for that same property
+before the original call returns, which would otherwise recurse until the
+interpreter's stack limit crashes it) -- see the module's own `_rendering`
+guard and its comment before touching that function.
 
 FreeCAD's generic property editor has no interactive picker for
 `Materials::PropertyMaterial` on an arbitrary object (confirmed: no shipped
 FreeCAD workbench relies on inline editing for it either -- CAM's own
 "Assign Material" feature builds its own dialog the same way). Materials are
 assigned via one command, `HVAC_EditMaterial` (`ui/Command.py`), which opens
-`ui/TaskPanel.py:TaskPanelEditMaterial` -- a single panel with a
-`MaterialPickerRow` for each of Casing/Insulation, so both properties are
-edited together rather than through two separate commands. Each row's
-"Browse..." button opens a `MaterialPickerDialog` built from FreeCAD's own
-`MatGui::MaterialTreeWidget` -- the same native browser widget the Material
-workbench and CAM use. A row only reports a material back to
-`Network.applyMaterialSelection()` if the user actually picked one
+`ui/TaskPanel.py:TaskPanelEditMaterial` -- one panel with a
+`MaterialPickerRow` per construction layer id present on the selection
+(the union across a mixed selection of different types), so every layer is
+edited together rather than through a separate command per layer. Each
+row's "Browse..." button opens a `MaterialPickerDialog` built from
+FreeCAD's own `MatGui::MaterialTreeWidget` -- the same native browser
+widget the Material workbench and CAM use. A row only reports a material
+back to `Network.applyMaterialSelection()` if the user actually picked one
 (`MaterialPickerRow.touched`) -- leaving a row alone (e.g. only changing
-Insulation across a selection with mixed Casing materials) never clobbers
-the other property with whatever the first selected object happened to
-show. `MatGui` (the Gui module that implements the tree widget) is imported
-once, at `ui/TaskPanel.py` module scope, since it isn't loaded automatically
-just by activating the HVAC workbench.
+one layer across a selection with mixed materials on another layer) never
+clobbers the other layers' properties with whatever the first selected
+object happened to show. `MatGui` (the Gui module that implements the tree
+widget) is imported once, at `ui/TaskPanel.py` module scope, since it
+isn't loaded automatically just by activating the HVAC workbench.
 
 `DuctNetwork` carries the same picker (embedded in
-`TaskPanelNetworkTypeDefaults`, the "Network Defaults" command) for
-`DefaultCasingMaterial`/`DefaultInsulationMaterial` -- defaulted to this
-addon's own Galvanized Steel/Nitrile Rubber cards
-(`utils/materials.GALVANIZED_STEEL_UUID`/`NITRILE_RUBBER_UUID`) the first
-time a network is created -- plus a `DefaultInsulationThickness` alongside
-the existing `DefaultDiameter`/`DefaultWidth`/`DefaultHeight`.
-`DuctSegment.applyOwnerDefaults()`/`DuctComponent.applyOwnerDefaults()` copy
-these onto a newly-created segment/component whenever it doesn't already
-have its own value (never overwrites a manual choice or a value restored
-from an existing document) -- so every new duct object is fully materialed
-out of the box without the user having to visit `HVAC_EditMaterial` for it.
-`DuctNetwork.resetObjectsToNetworkDefaults()` (the "Reset to Defaults"
-command) is the opposite convention -- like it already does for
-`LibraryId`/`TypeId`, an explicit reset always re-applies the network's
-*current* default materials, discarding whatever `CasingMaterial`/
-`InsulationMaterial` the object already had.
+`TaskPanelNetworkTypeDefaults`, the "Network Defaults" command) for one
+`DefaultMaterial_<Role>` property per standardized `LayerRole` (not per
+library-defined layer id -- roles are the fixed, small vocabulary core
+owns), defaulted for the two roles every shipped single/dual-layer type
+actually uses (`structural_shell`/`thermal_insulation`, this addon's own
+Galvanized Steel/Nitrile Rubber cards,
+`utils/materials.GALVANIZED_STEEL_UUID`/`NITRILE_RUBBER_UUID`) the first
+time a network is created -- other roles start unset until a library's own
+construction layer declares a `default_material_role` for them.
+`core/_construction_schema.apply_default_layer_materials()` (called from
+`DuctSegment.applyTypeSchema()`/`DuctComponent.applyTypeSchema()` every
+time a type's construction schema is (re)established, not just once at
+object creation, since which layers exist depends on a type that isn't
+known yet when a segment/component is first created) fills in each layer's
+material whenever it doesn't already have one: the layer's own
+`ConstructionLayerDef.default_material_uuid`, else the network's
+`DefaultMaterial_<Role>` for the layer's own `default_material_role` (or
+its first declared role, if the layer doesn't specify one explicitly) --
+never overwrites a manual choice or a value restored from an existing
+document. `DuctNetwork.resetObjectsToNetworkDefaults()` (the "Reset to
+Defaults" command) is the opposite convention, via
+`core/_construction_schema.reset_layer_materials_to_network_defaults()` --
+like it already does for `LibraryId`/`TypeId`, an explicit reset always
+re-applies the network's *current* default materials, discarding whatever
+material each layer already had.
 
-`DuctJunction` itself stays geometry-free: it never gets `CasingShape`/
-`InsulationShape`/materials of its own, only its `DuctComponent` children do.
-
-`components` is intentionally an open dict, not hardcoded to exactly two
-entries -- a future role (`lining`, `coating`, `flange`, `access_panel`, ...)
-can appear in it without changing the generator API, though only `casing`
-and `insulation` have first-class FreeCAD properties today.
+`DuctJunction` itself stays geometry-free: it never gets
+`ConstructionLayerIds`/`Layer_<id>_Shape`/materials of its own, only its
+`DuctComponent` children do.
 
 ## Type selection subsystem
 

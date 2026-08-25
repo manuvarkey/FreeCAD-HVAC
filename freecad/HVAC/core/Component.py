@@ -41,8 +41,10 @@ translate = FreeCAD.Qt.translate
 from ..utils import hvaclib
 from ..library.library_api import HVACLibraryAPI
 from . import _type_schema
+from . import _construction_schema
 from . import _geometry_apply
 from . import _component_appearance
+from . import Construction as _construction
 
 
 class DuctComponent:
@@ -65,7 +67,6 @@ class DuctComponent:
         self._allow_delete = False
         self._mirroring_design_flow_rate = False
         self.setProperties(obj)
-        self.applyOwnerDefaults(obj, parent_junction)
         self.updateMetadata(
             parent_junction=parent_junction,
             role=role,
@@ -287,24 +288,15 @@ class DuctComponent:
         self._addProperty(obj, "App::PropertyString", "TypeId", "HVAC", "Selected fitting type id")
         self._addProperty(obj, "App::PropertyString", "Profile", "HVAC", "Duct profile at this component's primary/outlet side")
         self._addProperty(obj, "App::PropertyStringList", "TypeSchemaPropertyNames", "HVAC", "Internal: property names added by the last-applied type schema (for stale cleanup)")
+        self._addProperty(obj, "App::PropertyStringList", "ConstructionLayerIds", "HVAC", "Internal: construction layer ids of the last-applied type (see core/_construction_schema.py)")
         self._addProperty(obj, "App::PropertyString", "LocalPortsJson", "HVAC", "Internal: this component's local inlet/outlet port geometry, written by the parent junction's composer")
         self._addProperty(obj, "App::PropertyString", "ConnectionLengthsJson", "HVAC", "This component's own per-port connection (trim) lengths")
 
-        # Per-component shapes (see library/geometry_result.py) -- Shape
-        # itself is only the aggregate compound of these, derived each
-        # execute() by core/_geometry_apply.py; never the other way around.
-        self._addProperty(obj, "Part::PropertyPartShape", "CasingShape", "Geometry", "Fitting wall/casing solid")
-        self._addProperty(obj, "Part::PropertyPartShape", "InsulationShape", "Geometry", "Insulation solid (empty if insulation is disabled for this type)")
-        # Materials::PropertyMaterial -- see the matching comment in
-        # Segment.py's own setProperties().
-        self._addProperty(obj, "Materials::PropertyMaterial", "CasingMaterial", "Materials", "Native FreeCAD material for the casing", attr=16)
-        self._addProperty(obj, "Materials::PropertyMaterial", "InsulationMaterial", "Materials", "Native FreeCAD material for the insulation", attr=16)
-
-        for prop in ("CasingShape", "InsulationShape"):
-            try:
-                obj.setEditorMode(prop, 1)
-            except Exception:
-                pass
+        # Per-construction-layer Layer_<id>_Shape/Layer_<id>_Material
+        # properties are added/removed by applyTypeSchema() (via
+        # core/_construction_schema.py) to match the selected type's own
+        # declared construction -- see the matching comment in Segment.py's
+        # own setProperties().
 
         # Two-way proxy for the parent junction's own DesignFlowRate (see
         # Junction.py's DesignFlowRate/onChanged) -- a junction has no Shape
@@ -368,6 +360,7 @@ class DuctComponent:
             "ParentJunctionName",
             "AttachedEdgeKey",
             "TypeSchemaPropertyNames",
+            "ConstructionLayerIds",
             "LocalPortsJson",
             "ConnectionLengthsJson",
         ):
@@ -378,31 +371,16 @@ class DuctComponent:
 
     def applyTypeSchema(self):
         obj = self.Object
-        return _type_schema.apply_type_schema(
-            obj, getattr(obj, "LibraryId", ""), getattr(obj, "TypeId", "")
-        )
+        library_id = getattr(obj, "LibraryId", "")
+        type_id = getattr(obj, "TypeId", "")
+        changed = _type_schema.apply_type_schema(obj, library_id, type_id)
+        changed = _construction_schema.apply_construction_schema(obj, library_id, type_id) or changed
+        _construction_schema.apply_default_layer_materials(obj, library_id, type_id)
+        return changed
 
-    def applyOwnerDefaults(self, obj, parent_junction):
-        """
-        Assign the owning network's default casing/insulation materials
-        onto a newly-created component, same convention as
-        Segment.applyOwnerDefaults() -- only fills in a material the
-        component doesn't already have (never overwrites a manual choice
-        or a value restored from an existing document).
-        """
-        owner = hvaclib.getOwnerNetwork(parent_junction) if parent_junction is not None else None
-        if owner is None:
-            return
-
-        if not getattr(obj.CasingMaterial, "Name", ""):
-            default_material = getattr(owner, "DefaultCasingMaterial", None)
-            if default_material is not None and getattr(default_material, "Name", ""):
-                obj.CasingMaterial = default_material
-
-        if not getattr(obj.InsulationMaterial, "Name", ""):
-            default_material = getattr(owner, "DefaultInsulationMaterial", None)
-            if default_material is not None and getattr(default_material, "Name", ""):
-                obj.InsulationMaterial = default_material
+    def getConstruction(self):
+        """This component's own construction layers, queryable by semantic role -- see core/Construction.py."""
+        return _construction.construction_for(self.Object)
 
     def updateMetadata(
         self,
@@ -493,10 +471,10 @@ class DuctComponentViewProvider:
         pass
 
     def updateData(self, obj, prop):
-        # Re-render CasingShape/InsulationShape from their own linked
-        # materials whenever the shapes or the material links themselves
-        # change -- see core/_component_appearance.py.
-        if prop in _component_appearance.TRIGGER_PROPERTIES:
+        # Re-render every construction layer's own shape from its own
+        # linked material whenever a layer's shape or material link
+        # changes -- see core/_component_appearance.py.
+        if _component_appearance.is_trigger_property(obj, prop):
             vobj = getattr(self, "ViewObject", None)
             if vobj is not None:
                 _component_appearance.apply_component_appearance(vobj)

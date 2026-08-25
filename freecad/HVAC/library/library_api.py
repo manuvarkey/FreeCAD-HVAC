@@ -1142,6 +1142,64 @@ class HVACLibraryAPI:
             return out
 
     # ------------------------------------------------------------------
+    # Construction layer helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def build_concentric_layers(anchor_ports, layer_offsets, path=None):
+        """
+        Build N concentric annular solids sharing the same anchor ports --
+        the generalized form of the tube-diff (straight ducts) / grow+sweep+
+        cut (swept fittings) pattern every casing+insulation generator used
+        to hand-roll separately before construction layers existed.
+
+        anchor_ports: the ports a single-profile duct/fitting is built
+            from (e.g. a straight segment's own start/end ports, or an
+            elbow's own two tangent-plane ports) -- at least 2, all sharing
+            the same profile/section_params.
+        layer_offsets: ordered list of (inner_offset, outer_offset) pairs in
+            mm, each measured outward from the anchor ports' own profile
+            (negative = inward -- e.g. a sheet-metal wall built by shrinking
+            in from the nominal duct size is (-thickness, 0); a wrap built
+            by growing outward is (0, +thickness)).
+        path: a Part.Wire to sweep the anchor ports' profiles along (for a
+            curved fitting); omit for a straight duct between exactly 2
+            anchor ports.
+
+        Returns one Part.Shape per entry in layer_offsets, in the same
+        order, each the annular solid between its own inner/outer bound
+        (grown-outer sweep minus grown-inner sweep, same boolean-cut
+        approach every existing casing/insulation generator already used).
+        """
+        anchors = list(anchor_ports or [])
+        if len(anchors) < 2:
+            raise ValueError("build_concentric_layers requires at least 2 anchor ports")
+
+        def solid_at_offset(offset):
+            grown = [HVACLibraryAPI.grow_port_section(p, offset) for p in anchors]
+            if path is None:
+                if len(grown) != 2:
+                    raise ValueError("build_concentric_layers without a path requires exactly 2 anchor ports")
+                return HVACLibraryAPI.make_straight_shape(
+                    start_point=HVACLibraryAPI.port_position(grown[0]),
+                    end_point=HVACLibraryAPI.port_position(grown[1]),
+                    profile=HVACLibraryAPI.port_profile(grown[0]),
+                    section_params=HVACLibraryAPI.port_section_params(grown[0]),
+                    profile_x_axis=HVACLibraryAPI.port_profile_x_axis(grown[0]),
+                )
+            wires = [HVACLibraryAPI.make_section_wire_from_port(p) for p in grown]
+            return HVACLibraryAPI.make_pipe_shell(path, wires)
+
+        layer_shapes = []
+        for inner_offset, outer_offset in layer_offsets:
+            if outer_offset <= inner_offset:
+                raise ValueError("build_concentric_layers requires outer_offset > inner_offset")
+            outer_solid = solid_at_offset(float(outer_offset))
+            inner_solid = solid_at_offset(float(inner_offset))
+            layer_shapes.append(outer_solid.cut(inner_solid))
+
+        return layer_shapes
+
+    # ------------------------------------------------------------------
     # External geometry sources
     # ------------------------------------------------------------------
     @staticmethod

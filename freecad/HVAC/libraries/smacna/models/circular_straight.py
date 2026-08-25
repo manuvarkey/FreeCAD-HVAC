@@ -66,7 +66,7 @@ def generate(context):
         )
 
     return {
-        "components": {
+        "layers": {
             "casing": {"shape": casing_shape},
             "insulation": {"shape": insulation_shape},
         }

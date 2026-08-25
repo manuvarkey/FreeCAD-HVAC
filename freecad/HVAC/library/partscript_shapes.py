@@ -108,23 +108,29 @@ def execute_partscript(script_path, context):
             "PartScript '{}' must return Part.Shape or dict".format(script_path)
         )
 
-    # Step 4: the result must contain a real, non-empty shape -- either the
-    # legacy result["shape"], or result["components"]["casing"]["shape"]
-    # (the new components contract; see library/geometry_result.py).
-    if "components" in result:
-        components = dict(result.get("components") or {})
-        casing = components.get("casing")
-        shape = casing.get("shape") if isinstance(casing, dict) else getattr(casing, "shape", None)
-        shape_source = "result['components']['casing']['shape']"
+    # Step 4: the result must contain at least one real, non-empty shape --
+    # either the legacy result["shape"], or a shape in one of
+    # result["layers"]'s entries (the multilayer construction contract; see
+    # library/geometry_result.py). Never hardcodes a layer id -- a
+    # PartScript names its own construction layers however it likes.
+    if "layers" in result:
+        layers = dict(result.get("layers") or {})
+        shapes = {}
+        for layer_id, layer_value in layers.items():
+            shape = layer_value.get("shape") if isinstance(layer_value, dict) else getattr(layer_value, "shape", None)
+            shapes[layer_id] = shape
+
+        if not any(hasattr(s, "isNull") and not s.isNull() for s in shapes.values() if s is not None):
+            raise PartScriptSchemaError(
+                "PartScript '{}' did not return a real Part.Shape in any of result['layers']".format(script_path)
+            )
     else:
         shape = result.get("shape")
-        shape_source = "result['shape']"
-
-    if shape is None or not hasattr(shape, "isNull"):
-        raise PartScriptSchemaError(
-            "PartScript '{}' did not return a Part.Shape in {}".format(script_path, shape_source)
-        )
-    if shape.isNull():
-        raise PartScriptSchemaError("PartScript '{}' returned an empty shape".format(script_path))
+        if shape is None or not hasattr(shape, "isNull"):
+            raise PartScriptSchemaError(
+                "PartScript '{}' did not return a Part.Shape in result['shape']".format(script_path)
+            )
+        if shape.isNull():
+            raise PartScriptSchemaError("PartScript '{}' returned an empty shape".format(script_path))
 
     return dict(result)

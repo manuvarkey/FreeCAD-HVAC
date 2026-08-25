@@ -3,8 +3,15 @@
   "label": "Transition - Generic",
   "category": "junction",
   "topology": "through",
-  "family": ["through.straight", "through.offset"],
-  "profiles": ["Circular", "Rectangular", "Oval"],
+  "family": [
+    "through.straight",
+    "through.offset"
+  ],
+  "profiles": [
+    "Circular",
+    "Rectangular",
+    "Oval"
+  ],
   "selection": {
     "kind": "model",
     "priority": 50
@@ -54,6 +61,17 @@
       "group": "Options",
       "description": "Include the flange at port 2",
       "default": true
+    }
+  ],
+  "construction": [
+    {
+      "id": "casing",
+      "roles": [
+        "flow_surface",
+        "structural_shell"
+      ],
+      "default_material_role": "structural_shell",
+      "thickness_property": "Thickness"
     }
   ],
   "generator": {

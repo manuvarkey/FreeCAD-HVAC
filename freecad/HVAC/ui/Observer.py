@@ -34,6 +34,7 @@ translate = FreeCAD.Qt.translate
 
 from ..utils import hvaclib
 from ..ui import Toolbar
+from ..library.construction import ROLE_FLOW_SURFACE, ROLE_STRUCTURAL_SHELL
 
 
 class SketchObserver:
@@ -1079,7 +1080,7 @@ class AirflowResultObserver:
     JUNCTION_ARROW_LENGTH_FRACTION = 0.4  # fraction of the port's own dimension
     JUNCTION_ARROW_INSET_FRACTION = 0.15  # how far inside the plane's corner the arrow's base sits
     JUNCTION_TOP_EXTEND = 0.5  # extra plane height above the port's own top edge, for text/arrow room
-    SEGMENT_OVERLAY_SCALE = 1.25  # multiplies (duct dimension + 2 x insulation thickness)
+    SEGMENT_OVERLAY_SCALE = 1.25  # multiplies (duct dimension + 2 x outward construction-layer growth)
     TRANSPARENCY = 0.4
     COLOR_TEXT = (0, 0, 0)
     LEGEND_STEPS = 24  # gradient slices drawn across the legend bar
@@ -1287,14 +1288,44 @@ class AirflowResultObserver:
         return seg_res.velocity_ms
 
     @staticmethod
+    def _outwardLayerGrowth(seg_obj):
+        """
+        Sum of every construction layer's own thickness that grows the
+        section outward from the core wall -- every declared layer except
+        the one(s) playing flow_surface/structural_shell (the base wall,
+        which shrinks inward, not outward). Generalizes the old fixed
+        InsulationThickness-only overlay margin to however many wrap layers
+        a type declares (insulation, an outer jacket, ...); a layer with no
+        declared thickness_property (or a not-yet-migrated type with no
+        construction block at all) contributes 0.
+        """
+        library_id = getattr(seg_obj, "LibraryId", "")
+        type_id = getattr(seg_obj, "TypeId", "")
+        if not library_id or not type_id:
+            return 0.0
+        reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
+        type_def = reg.resolve_type(library_id, type_id)
+        if type_def is None:
+            return 0.0
+
+        total = 0.0
+        for ldef in getattr(type_def, "construction", []) or []:
+            if ROLE_FLOW_SURFACE in ldef.roles or ROLE_STRUCTURAL_SHELL in ldef.roles:
+                continue
+            if not ldef.thickness_property:
+                continue
+            total += float(getattr(seg_obj, ldef.thickness_property, 0.0) or 0.0)
+        return total
+
+    @staticmethod
     def _segmentGeometry(seg_obj):
         """
         Pull a duct segment's own centerline (start, end, unit direction,
-        midpoint, length) plus its profile axis/section/insulation, shared
-        by the segment overlay's solid box (spans start->end) and its
-        text label (placed on the box's own top face -- see
-        _buildSegmentOverlays). Returns None if the segment has no usable
-        geometry yet.
+        midpoint, length) plus its profile axis/section/outward construction
+        growth, shared by the segment overlay's solid box (spans
+        start->end) and its text label (placed on the box's own top face --
+        see _buildSegmentOverlays). Returns None if the segment has no
+        usable geometry yet.
         """
         start = getattr(seg_obj, "EffectiveStartPoint", None)
         end = getattr(seg_obj, "EffectiveEndPoint", None)
@@ -1321,7 +1352,7 @@ class AirflowResultObserver:
             "length": length,
             "profile_x_axis": profile_x_axis,
             "section_params": hvaclib.get_segment_section_params(seg_obj),
-            "insulation_thickness": float(getattr(seg_obj, "InsulationThickness", 0.0) or 0.0),
+            "outward_growth": AirflowResultObserver._outwardLayerGrowth(seg_obj),
         }
 
     def _buildSegmentOverlays(self):
@@ -1340,12 +1371,13 @@ class AirflowResultObserver:
             width, height = hvaclib.get_section_extents(geometry["section_params"])
             if width <= 0.0 or height <= 0.0:
                 width = height = 100.0
-            # Overlay must clear the duct's own insulation, not just its
-            # bare casing -- grow by 2x the insulation thickness (it wraps
-            # both sides) before applying the overlay's own extra margin.
-            insulation = geometry["insulation_thickness"]
-            box_width = (width + 2.0 * insulation) * self.SEGMENT_OVERLAY_SCALE
-            box_height = (height + 2.0 * insulation) * self.SEGMENT_OVERLAY_SCALE
+            # Overlay must clear the duct's own outward construction layers
+            # (insulation, an outer jacket, ...), not just its bare core
+            # wall -- grow by 2x their combined thickness (they wrap both
+            # sides) before applying the overlay's own extra margin.
+            outward_growth = geometry["outward_growth"]
+            box_width = (width + 2.0 * outward_growth) * self.SEGMENT_OVERLAY_SCALE
+            box_height = (height + 2.0 * outward_growth) * self.SEGMENT_OVERLAY_SCALE
 
             overlay_node = buildSegmentOverlayCoinNode(
                 geometry["midpoint"], geometry["direction"], geometry["profile_x_axis"],

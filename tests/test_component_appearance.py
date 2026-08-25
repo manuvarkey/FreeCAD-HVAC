@@ -1,10 +1,10 @@
 """
-Tests for core/_component_appearance.py: rendering CasingShape/
-InsulationShape from their own native CasingMaterial/InsulationMaterial via
+Tests for core/_component_appearance.py: rendering every construction
+layer's own Layer_<id>_Shape from its own native Layer_<id>_Material via
 FreeCAD's per-face ViewObject.ShapeAppearance -- see ARCHITECTURE.md's
-"Component geometry & materials" section for why the face-count split
-(len(CasingShape.Faces)) is an exact count derived from the same two shapes
-Shape was built from, not a hardcoded/guessed index.
+"Component geometry & materials" section for why the per-layer face-count
+split (len(Layer_<id>_Shape.Faces)) is an exact count derived from the same
+shapes Shape was built from, not a hardcoded/guessed index.
 """
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/Materials/PySide stubs
@@ -27,11 +27,13 @@ class FakeMaterial:
 
 
 class FakeObj:
-    def __init__(self, casing_shape=None, insulation_shape=None, casing_material=None, insulation_material=None):
-        self.CasingShape = casing_shape
-        self.InsulationShape = insulation_shape
-        self.CasingMaterial = casing_material
-        self.InsulationMaterial = insulation_material
+    """layers: ordered list of (layer_id, shape, material) triples."""
+
+    def __init__(self, layers):
+        self.ConstructionLayerIds = [layer_id for layer_id, _, _ in layers]
+        for layer_id, shape, material in layers:
+            setattr(self, "Layer_{}_Shape".format(layer_id), shape)
+            setattr(self, "Layer_{}_Material".format(layer_id), material)
 
 
 class FakeViewObject:
@@ -51,7 +53,7 @@ def _patch_view_appearance(monkeypatch, mapping):
     monkeypatch.setattr(appearance_mod.hvac_materials, "get_view_appearance", fake_get_view_appearance)
 
 
-def test_apply_component_appearance_builds_per_face_list_in_casing_then_insulation_order(monkeypatch):
+def test_apply_component_appearance_builds_per_face_list_in_declared_layer_order(monkeypatch):
     casing_material = FakeMaterial("Galvanized Steel")
     insulation_material = FakeMaterial("Glass Wool")
     casing_appearance = object()
@@ -61,12 +63,10 @@ def test_apply_component_appearance_builds_per_face_list_in_casing_then_insulati
         (insulation_material, insulation_appearance),
     ])
 
-    obj = FakeObj(
-        casing_shape=FakeShape(3),
-        insulation_shape=FakeShape(2),
-        casing_material=casing_material,
-        insulation_material=insulation_material,
-    )
+    obj = FakeObj([
+        ("casing", FakeShape(3), casing_material),
+        ("insulation", FakeShape(2), insulation_material),
+    ])
     vobj = FakeViewObject(obj)
 
     appearance_mod.apply_component_appearance(vobj)
@@ -74,7 +74,32 @@ def test_apply_component_appearance_builds_per_face_list_in_casing_then_insulati
     assert vobj.ShapeAppearance == [casing_appearance] * 3 + [insulation_appearance] * 2
 
 
-def test_apply_component_appearance_fills_missing_side_with_default(monkeypatch):
+def test_apply_component_appearance_supports_arbitrary_layer_counts(monkeypatch):
+    liner_material = FakeMaterial("Perforated Steel")
+    absorber_material = FakeMaterial("Mineral Wool")
+    jacket_material = FakeMaterial("Aluminium")
+    liner_appearance, absorber_appearance, jacket_appearance = object(), object(), object()
+    _patch_view_appearance(monkeypatch, [
+        (liner_material, liner_appearance),
+        (absorber_material, absorber_appearance),
+        (jacket_material, jacket_appearance),
+    ])
+
+    obj = FakeObj([
+        ("liner", FakeShape(2), liner_material),
+        ("absorber", FakeShape(1), absorber_material),
+        ("jacket", FakeShape(4), jacket_material),
+    ])
+    vobj = FakeViewObject(obj)
+
+    appearance_mod.apply_component_appearance(vobj)
+
+    assert vobj.ShapeAppearance == (
+        [liner_appearance] * 2 + [absorber_appearance] * 1 + [jacket_appearance] * 4
+    )
+
+
+def test_apply_component_appearance_fills_missing_layer_with_default(monkeypatch):
     casing_material = FakeMaterial("Galvanized Steel")
     casing_appearance = object()
     _patch_view_appearance(monkeypatch, [(casing_material, casing_appearance)])
@@ -82,12 +107,10 @@ def test_apply_component_appearance_fills_missing_side_with_default(monkeypatch)
     default_appearance = object()
     monkeypatch.setattr(appearance_mod.FreeCAD, "Material", lambda: default_appearance)
 
-    obj = FakeObj(
-        casing_shape=FakeShape(2),
-        insulation_shape=FakeShape(1),
-        casing_material=casing_material,
-        insulation_material=None,  # no insulation material assigned
-    )
+    obj = FakeObj([
+        ("casing", FakeShape(2), casing_material),
+        ("insulation", FakeShape(1), None),  # no insulation material assigned
+    ])
     vobj = FakeViewObject(obj)
 
     appearance_mod.apply_component_appearance(vobj)
@@ -98,7 +121,7 @@ def test_apply_component_appearance_fills_missing_side_with_default(monkeypatch)
 
 
 def test_apply_component_appearance_does_nothing_without_any_faces():
-    obj = FakeObj(casing_shape=None, insulation_shape=None)
+    obj = FakeObj([("casing", None, None), ("insulation", None, None)])
     vobj = FakeViewObject(obj)
 
     appearance_mod.apply_component_appearance(vobj)
@@ -106,10 +129,10 @@ def test_apply_component_appearance_does_nothing_without_any_faces():
     assert not hasattr(vobj, "ShapeAppearance") or vobj.ShapeAppearance is None
 
 
-def test_apply_component_appearance_does_nothing_when_neither_material_resolves(monkeypatch):
+def test_apply_component_appearance_does_nothing_when_no_layer_resolves(monkeypatch):
     monkeypatch.setattr(appearance_mod.hvac_materials, "get_view_appearance", lambda material: None)
 
-    obj = FakeObj(casing_shape=FakeShape(4), casing_material=FakeMaterial("Something"))
+    obj = FakeObj([("casing", FakeShape(4), FakeMaterial("Something"))])
     vobj = FakeViewObject(obj)
 
     appearance_mod.apply_component_appearance(vobj)
@@ -120,7 +143,7 @@ def test_apply_component_appearance_does_nothing_when_neither_material_resolves(
 def test_apply_component_appearance_noop_without_shape_appearance_property():
     # Defensive: an older FreeCAD without the native per-face property must
     # not raise -- just leave the object's appearance untouched.
-    obj = FakeObj(casing_shape=FakeShape(2), casing_material=FakeMaterial("Steel"))
+    obj = FakeObj([("casing", FakeShape(2), FakeMaterial("Steel"))])
     vobj = FakeViewObject(obj, has_shape_appearance=False)
 
     appearance_mod.apply_component_appearance(vobj)  # must not raise
@@ -133,11 +156,10 @@ def test_apply_component_appearance_treats_null_shape_as_zero_faces(monkeypatch)
     casing_appearance = object()
     _patch_view_appearance(monkeypatch, [(casing_material, casing_appearance)])
 
-    obj = FakeObj(
-        casing_shape=FakeShape(3),
-        insulation_shape=FakeShape(5, null=True),
-        casing_material=casing_material,
-    )
+    obj = FakeObj([
+        ("casing", FakeShape(3), casing_material),
+        ("insulation", FakeShape(5, null=True), None),
+    ])
     vobj = FakeViewObject(obj)
 
     appearance_mod.apply_component_appearance(vobj)
@@ -179,17 +201,26 @@ def test_apply_component_appearance_guards_against_freecad_reentrancy(monkeypatc
                 calls["shape_appearance_writes"] += 1
             super().__setattr__(name, value)
 
-    obj = FakeObj(casing_shape=FakeShape(2), casing_material=casing_material)
+    obj = FakeObj([("casing", FakeShape(2), casing_material)])
     vobj = CountingViewObject(obj)
     calls["shape_appearance_writes"] = 0  # discount FakeViewObject.__init__'s own initial assignment
 
     appearance_mod.apply_component_appearance(vobj)  # must not raise/recurse
 
     # Guarded: the reentrant inner call bails out before calling
-    # get_view_appearance() at all (2 calls total: casing + insulation, from
-    # the outer call only) and renders exactly once. Unguarded, the inner
-    # call would run to completion first (2 more get_view_appearance()
-    # calls, 1 more write) before the outer call resumed and repeated it.
-    assert calls["get_view_appearance"] == 2
+    # get_view_appearance() at all (1 call total, from the outer call only)
+    # and renders exactly once. Unguarded, the inner call would run to
+    # completion first (1 more get_view_appearance() call, 1 more write)
+    # before the outer call resumed and repeated it.
+    assert calls["get_view_appearance"] == 1
     assert calls["shape_appearance_writes"] == 1
     assert vobj.ShapeAppearance == [casing_appearance] * 2
+
+
+def test_is_trigger_property_reflects_the_objects_own_construction_layers():
+    obj = FakeObj([("casing", None, None), ("liner", None, None)])
+
+    assert appearance_mod.is_trigger_property(obj, "Layer_casing_Shape")
+    assert appearance_mod.is_trigger_property(obj, "Layer_liner_Material")
+    assert not appearance_mod.is_trigger_property(obj, "Layer_absorber_Shape")
+    assert not appearance_mod.is_trigger_property(obj, "SomeUnrelatedProperty")

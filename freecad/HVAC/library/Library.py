@@ -49,6 +49,7 @@ import FreeCAD
 from .library_api import HVACLibraryAPI
 from . import validation
 from . import geometry_result
+from .construction import ConstructionLayerDef
 
 
 @dataclass
@@ -126,6 +127,12 @@ class HVACTypeDef:
     loss_module: str = ""
     loss_function: str = ""
     selection: HVACSelectionDef = field(default_factory=HVACSelectionDef)
+    # Construction layers this type declares (see library/construction.py
+    # and the "construction" JSON block below) -- empty for a type that
+    # hasn't been migrated to the multilayer model, which build_geometry()
+    # treats as a single, roleless implicit layer (geometry_result.normalize()'s
+    # legacy {"shape": ...} wrapping).
+    construction: list[ConstructionLayerDef] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -597,9 +604,14 @@ class HVACLibraryRegistry:
         plus a placement descriptor), or -- if neither is set -- the legacy
         generator_module/generator_function pair. Whatever the backend
         returns (a legacy {"shape": ...} dict or a new-style
-        {"components": {...}} dict) is normalized here, once, into a real
+        {"layers": {...}} dict) is normalized here, once, into a real
         GeometryResult -- every caller downstream (DuctSegment/DuctComponent/
         DuctJunction) only ever sees a GeometryResult, never a raw dict.
+
+        Each returned layer's `roles` is then stamped on from the type-def's
+        own declared construction (matched by layer id) -- this is the one
+        place a raw geometry dict and the type-def's construction defs are
+        both in scope together, so it's where role vocabulary gets attached.
         """
         context = self._prepare_geometry_context(type_def, context)
         geometry = getattr(type_def, "geometry", None)
@@ -625,7 +637,15 @@ class HVACLibraryRegistry:
         else:
             raise ValueError("Type '{}' has no geometry definition".format(type_def.id))
 
-        return geometry_result.normalize(raw)
+        result = geometry_result.normalize(raw)
+
+        layer_defs_by_id = {ldef.id: ldef for ldef in getattr(type_def, "construction", []) or []}
+        for layer_id, layer_geometry in result.layers.items():
+            layer_def = layer_defs_by_id.get(layer_id)
+            if layer_def is not None:
+                layer_geometry.roles = list(layer_def.roles)
+
+        return result
 
     def call_generator(self, library_id: str, type_def: HVACTypeDef, context: dict):
         return self.build_geometry(library_id, type_def, context)
@@ -793,6 +813,18 @@ class HVACLibraryRegistry:
             priority=int(selection_raw.get("priority", 0) or 0),
         )
 
+        construction = []
+        for layer_raw in raw.get("construction", []) or []:
+            construction.append(
+                ConstructionLayerDef(
+                    id=layer_raw["id"],
+                    roles=list(layer_raw.get("roles", []) or []),
+                    default_material_role=layer_raw.get("default_material_role"),
+                    default_material_uuid=layer_raw.get("default_material_uuid"),
+                    thickness_property=layer_raw.get("thickness_property"),
+                )
+            )
+
         return HVACTypeDef(
             id=raw["id"],
             label=raw.get("label", raw["id"]),
@@ -810,4 +842,5 @@ class HVACLibraryRegistry:
             loss_module=loss.get("module", ""),
             loss_function=loss.get("function", ""),
             selection=selection,
+            construction=construction,
         )

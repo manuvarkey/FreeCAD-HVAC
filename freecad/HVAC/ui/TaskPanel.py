@@ -36,6 +36,8 @@ translate = FreeCAD.Qt.translate
 
 from ..utils import hvaclib
 from ..utils import materials as hvac_materials
+from ..core import _construction_schema
+from ..library.construction import ALL_LAYER_ROLES, role_property_suffix
 from ..ui.Observer import buildPortHighlightCoinNode, TerminalFlowRateObserver, AirflowResultObserver
 
 
@@ -329,11 +331,16 @@ def _common_material_label(objects, prop_name):
     return translate("HVAC_EditMaterial", "(multiple)")
 
 
+def _layer_label(layer_id):
+    return layer_id.replace("_", " ").capitalize()
+
+
 class TaskPanelEditMaterial:
     """
-    Task panel to assign native FreeCAD casing/insulation materials to
-    selected duct segment(s)/component(s) -- one panel covering both
-    properties (see CommandEditMaterial), instead of two separate commands.
+    Task panel to assign native FreeCAD materials to selected duct
+    segment(s)/component(s) -- one row per construction layer id present on
+    the selection (union across a mixed selection of different types; see
+    CommandEditMaterial), instead of two hardcoded casing/insulation rows.
     """
 
     def __init__(self, objects, apply_callback=None):
@@ -348,33 +355,30 @@ class TaskPanelEditMaterial:
             translate("HVAC_EditMaterial", "Selected objects: {}").format(len(self.objects))
         ))
 
-        layout.addWidget(QtWidgets.QLabel(translate("HVAC_EditMaterial", "Casing material:")))
-        self.casing_row = MaterialPickerRow(
-            translate("HVAC_EditMaterial", "Select Casing Material"),
-            _common_material_label(self.objects, "CasingMaterial"),
-        )
-        layout.addWidget(self.casing_row)
+        layer_ids = []
+        for obj in self.objects:
+            for layer_id in getattr(obj, "ConstructionLayerIds", []) or []:
+                if layer_id not in layer_ids:
+                    layer_ids.append(layer_id)
 
-        layout.addWidget(QtWidgets.QLabel(translate("HVAC_EditMaterial", "Insulation material:")))
-        self.insulation_row = MaterialPickerRow(
-            translate("HVAC_EditMaterial", "Select Insulation Material"),
-            _common_material_label(self.objects, "InsulationMaterial"),
-        )
-        layout.addWidget(self.insulation_row)
+        self.rows = {}
+        for layer_id in layer_ids:
+            label = _layer_label(layer_id)
+            layout.addWidget(QtWidgets.QLabel(
+                translate("HVAC_EditMaterial", "{} material:").format(label)
+            ))
+            row = MaterialPickerRow(
+                translate("HVAC_EditMaterial", "Select {} Material").format(label),
+                _common_material_label(self.objects, _construction_schema.material_property_name(layer_id)),
+            )
+            layout.addWidget(row)
+            self.rows[layer_id] = row
 
     def accept(self):
-        casing_material = self.casing_row.material if self.casing_row.touched else None
-        insulation_material = self.insulation_row.material if self.insulation_row.touched else None
+        materials = {layer_id: row.material for layer_id, row in self.rows.items() if row.touched}
 
-        if (casing_material is not None or insulation_material is not None) and self.apply_callback:
-            QtCore.QTimer.singleShot(
-                0,
-                lambda: self.apply_callback(
-                    self.objects,
-                    casing_material=casing_material,
-                    insulation_material=insulation_material,
-                )
-            )
+        if materials and self.apply_callback:
+            QtCore.QTimer.singleShot(0, lambda: self.apply_callback(self.objects, materials))
         return True
 
     def reject(self):
@@ -444,22 +448,21 @@ class TaskPanelNetworkTypeDefaults:
         layout.addWidget(self._makeSeparator())
 
         layout.addWidget(QtWidgets.QLabel(
-            translate("HVAC_NetworkTypeDefaults", "Default casing material:")
+            translate("HVAC_NetworkTypeDefaults", "Default materials by role:")
         ))
-        self.casing_material_row = MaterialPickerRow(
-            translate("HVAC_NetworkTypeDefaults", "Select Casing Material"),
-            _common_material_label([network_obj], "DefaultCasingMaterial"),
-        )
-        layout.addWidget(self.casing_material_row)
-
-        layout.addWidget(QtWidgets.QLabel(
-            translate("HVAC_NetworkTypeDefaults", "Default insulation material:")
-        ))
-        self.insulation_material_row = MaterialPickerRow(
-            translate("HVAC_NetworkTypeDefaults", "Select Insulation Material"),
-            _common_material_label([network_obj], "DefaultInsulationMaterial"),
-        )
-        layout.addWidget(self.insulation_material_row)
+        self.role_material_rows = {}
+        for role in ALL_LAYER_ROLES:
+            prop_name = "DefaultMaterial_" + role_property_suffix(role)
+            label = _layer_label(role)
+            layout.addWidget(QtWidgets.QLabel(
+                translate("HVAC_NetworkTypeDefaults", "{}:").format(label)
+            ))
+            row = MaterialPickerRow(
+                translate("HVAC_NetworkTypeDefaults", "Select {} Material").format(label),
+                _common_material_label([network_obj], prop_name),
+            )
+            layout.addWidget(row)
+            self.role_material_rows[role] = row
 
         self._populateLibraries()
         self._loadFromNetwork()
@@ -479,9 +482,8 @@ class TaskPanelNetworkTypeDefaults:
         self.default_diameter = QtWidgets.QDoubleSpinBox()
         self.default_height = QtWidgets.QDoubleSpinBox()
         self.default_width = QtWidgets.QDoubleSpinBox()
-        self.default_insulation_thickness = QtWidgets.QDoubleSpinBox()
 
-        for w in (self.default_diameter, self.default_width, self.default_height, self.default_insulation_thickness):
+        for w in (self.default_diameter, self.default_width, self.default_height):
             w.setDecimals(3)
             w.setRange(0.0, 1e9)
             w.setSingleStep(10.0)
@@ -495,9 +497,6 @@ class TaskPanelNetworkTypeDefaults:
 
         row.addWidget(QtWidgets.QLabel("Width"), 2, 0)
         row.addWidget(self.default_width, 2, 1)
-
-        row.addWidget(QtWidgets.QLabel("Insulation thickness"), 3, 0)
-        row.addWidget(self.default_insulation_thickness, 3, 1)
 
         return row
     
@@ -601,8 +600,7 @@ class TaskPanelNetworkTypeDefaults:
         self.default_diameter.setValue(float(getattr(self.network_obj, "DefaultDiameter", 100.0)))
         self.default_width.setValue(float(getattr(self.network_obj, "DefaultWidth", 100.0)))
         self.default_height.setValue(float(getattr(self.network_obj, "DefaultHeight", 100.0)))
-        self.default_insulation_thickness.setValue(float(getattr(self.network_obj, "DefaultInsulationThickness", 0.0)))
-                
+
         attachment = str(getattr(self.network_obj, "DefaultAttachment", "Center"))
         if attachment in self._attachment_buttons:
             self._attachment_buttons[attachment].setChecked(True)
@@ -638,13 +636,9 @@ class TaskPanelNetworkTypeDefaults:
                 default_diameter=self.default_diameter.value(),
                 default_width=self.default_width.value(),
                 default_height=self.default_height.value(),
-                default_insulation_thickness=self.default_insulation_thickness.value(),
-                default_casing_material=(
-                    self.casing_material_row.material if self.casing_material_row.touched else None
-                ),
-                default_insulation_material=(
-                    self.insulation_material_row.material if self.insulation_material_row.touched else None
-                ),
+                default_materials_by_role={
+                    role: row.material for role, row in self.role_material_rows.items() if row.touched
+                },
             )
         return True
 

@@ -1,14 +1,16 @@
 """
 Tests for core/_geometry_apply.py's apply_geometry_result(): the one piece
 of DuctSegment.execute()/DuctComponent.execute() that writes a GeometryResult
-onto CasingShape/InsulationShape and derives Shape as their compound --
-shared so the two execute() methods don't duplicate it.
+onto each of obj.ConstructionLayerIds' own Layer_<id>_Shape property and
+derives Shape as their compound -- shared so the two execute() methods
+don't duplicate it.
 """
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 
 from freecad.HVAC.core import _geometry_apply
 from freecad.HVAC.library import geometry_result as gr
+from freecad.HVAC.library.construction import LayerGeometry
 
 
 class _Shape:
@@ -20,32 +22,51 @@ class _Shape:
 
 
 class _FakeObj:
-    def __init__(self):
-        self.CasingShape = None
-        self.InsulationShape = None
+    def __init__(self, layer_ids):
+        self.ConstructionLayerIds = list(layer_ids)
         self.Shape = None
+        for layer_id in layer_ids:
+            setattr(self, "Layer_{}_Shape".format(layer_id), None)
 
 
-def test_apply_geometry_result_sets_casing_and_insulation_shapes():
+def test_apply_geometry_result_sets_each_declared_layers_shape():
     casing_shape = _Shape()
     insulation_shape = _Shape()
-    result = gr.GeometryResult(components={
-        "casing": gr.ComponentGeometry(shape=casing_shape, material_role="casing"),
-        "insulation": gr.ComponentGeometry(shape=insulation_shape, material_role="insulation"),
+    result = gr.GeometryResult(layers={
+        "casing": LayerGeometry(shape=casing_shape),
+        "insulation": LayerGeometry(shape=insulation_shape),
     })
 
-    obj = _FakeObj()
+    obj = _FakeObj(["casing", "insulation"])
     _geometry_apply.apply_geometry_result(obj, result)
 
-    assert obj.CasingShape is casing_shape
-    assert obj.InsulationShape is insulation_shape
+    assert obj.Layer_casing_Shape is casing_shape
+    assert obj.Layer_insulation_Shape is insulation_shape
 
 
-def test_apply_geometry_result_builds_shape_as_compound_of_non_null_shapes(monkeypatch):
+def test_apply_geometry_result_supports_arbitrary_layer_counts():
+    liner_shape = _Shape()
+    absorber_shape = _Shape()
+    jacket_shape = _Shape()
+    result = gr.GeometryResult(layers={
+        "liner": LayerGeometry(shape=liner_shape),
+        "absorber": LayerGeometry(shape=absorber_shape),
+        "jacket": LayerGeometry(shape=jacket_shape),
+    })
+
+    obj = _FakeObj(["liner", "absorber", "jacket"])
+    _geometry_apply.apply_geometry_result(obj, result)
+
+    assert obj.Layer_liner_Shape is liner_shape
+    assert obj.Layer_absorber_Shape is absorber_shape
+    assert obj.Layer_jacket_Shape is jacket_shape
+
+
+def test_apply_geometry_result_builds_shape_as_compound_of_non_null_shapes_in_declared_order(monkeypatch):
     casing_shape = _Shape()
-    result = gr.GeometryResult(components={
-        "casing": gr.ComponentGeometry(shape=casing_shape, material_role="casing"),
-        "insulation": gr.ComponentGeometry(shape=None, material_role="insulation"),
+    result = gr.GeometryResult(layers={
+        "casing": LayerGeometry(shape=casing_shape),
+        "insulation": LayerGeometry(shape=None),
     })
 
     captured = {}
@@ -56,7 +77,7 @@ def test_apply_geometry_result_builds_shape_as_compound_of_non_null_shapes(monke
 
     monkeypatch.setattr(_geometry_apply.Part, "makeCompound", fake_make_compound)
 
-    obj = _FakeObj()
+    obj = _FakeObj(["casing", "insulation"])
     _geometry_apply.apply_geometry_result(obj, result)
 
     # Only the non-null casing shape goes into the compound -- insulation is
@@ -67,9 +88,9 @@ def test_apply_geometry_result_builds_shape_as_compound_of_non_null_shapes(monke
 
 def test_apply_geometry_result_treats_null_shape_as_absent(monkeypatch):
     null_shape = _Shape(null=True)
-    result = gr.GeometryResult(components={
-        "casing": gr.ComponentGeometry(shape=null_shape, material_role="casing"),
-        "insulation": gr.ComponentGeometry(shape=None, material_role="insulation"),
+    result = gr.GeometryResult(layers={
+        "casing": LayerGeometry(shape=null_shape),
+        "insulation": LayerGeometry(shape=None),
     })
 
     captured = {}
@@ -77,24 +98,39 @@ def test_apply_geometry_result_treats_null_shape_as_absent(monkeypatch):
         _geometry_apply.Part, "makeCompound", lambda shapes: captured.setdefault("shapes", list(shapes))
     )
 
-    obj = _FakeObj()
+    obj = _FakeObj(["casing", "insulation"])
     _geometry_apply.apply_geometry_result(obj, result)
 
     assert captured["shapes"] == []
 
 
 def test_apply_geometry_result_defaults_missing_shapes_to_empty_part_shape(monkeypatch):
-    result = gr.GeometryResult(components={
-        "casing": gr.ComponentGeometry(shape=None, material_role="casing"),
-        "insulation": gr.ComponentGeometry(shape=None, material_role="insulation"),
+    result = gr.GeometryResult(layers={
+        "casing": LayerGeometry(shape=None),
+        "insulation": LayerGeometry(shape=None),
     })
 
     monkeypatch.setattr(_geometry_apply.Part, "Shape", lambda: "EMPTY_SHAPE")
     monkeypatch.setattr(_geometry_apply.Part, "makeCompound", lambda shapes: list(shapes))
 
-    obj = _FakeObj()
+    obj = _FakeObj(["casing", "insulation"])
     _geometry_apply.apply_geometry_result(obj, result)
 
-    assert obj.CasingShape == "EMPTY_SHAPE"
-    assert obj.InsulationShape == "EMPTY_SHAPE"
+    assert obj.Layer_casing_Shape == "EMPTY_SHAPE"
+    assert obj.Layer_insulation_Shape == "EMPTY_SHAPE"
     assert obj.Shape == []
+
+
+def test_apply_geometry_result_skips_layer_ids_missing_from_the_result(monkeypatch):
+    # A layer id declared on obj but not present in result.layers at all
+    # (e.g. a generator that failed to return one of its declared layers)
+    # is treated the same as a null shape, not an error.
+    result = gr.GeometryResult(layers={"casing": LayerGeometry(shape=_Shape())})
+
+    monkeypatch.setattr(_geometry_apply.Part, "Shape", lambda: "EMPTY_SHAPE")
+    monkeypatch.setattr(_geometry_apply.Part, "makeCompound", lambda shapes: list(shapes))
+
+    obj = _FakeObj(["casing", "insulation"])
+    _geometry_apply.apply_geometry_result(obj, result)
+
+    assert obj.Layer_insulation_Shape == "EMPTY_SHAPE"

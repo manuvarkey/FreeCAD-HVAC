@@ -291,7 +291,15 @@ def build_through_generic(context):
         elif family in ["through.straight", "through.offset"]:
             return build_transition(context)
 
-    return build_terminal_marker(context)
+    # Neither bend nor straight/offset -- fall back to an invisible marker.
+    # through_generic.json declares a single "casing" construction layer
+    # (the same id build_elbow/build_transition already use above), so
+    # remap the marker's own legacy {"shape": ...} return onto that id.
+    marker = build_terminal_marker(context)
+    return {
+        "layers": {"casing": {"shape": marker.get("shape")}},
+        "connection_lengths": marker.get("connection_lengths", []),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -405,7 +413,7 @@ def build_elbow(context):
         insulation_shape = insulation_outer_shape.cut(outer_shape)
 
     return {
-        "components": {
+        "layers": {
             "casing": {"shape": shape},
             "insulation": {"shape": insulation_shape},
         },
@@ -489,7 +497,7 @@ def build_transition(context):
     shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
     return {
-        "shape": shape,
+        "layers": {"casing": {"shape": shape}},
         "connection_lengths": api.build_trim_rec_from_port_lengths(
             [
                 (ports[0], trim1),
@@ -752,7 +760,7 @@ def build_tee(context):
     shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
     return {
-        "shape": shape,
+        "layers": {"casing": {"shape": shape}},
         "connection_lengths": api.build_trim_rec_from_port_lengths(
             [
                 (run_a, run_trim_a),
@@ -831,7 +839,7 @@ def build_wye(context):
     shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
     return {
-        "shape": shape,
+        "layers": {"casing": {"shape": shape}},
         "connection_lengths": api.build_trim_rec_from_port_lengths(
             [
                 (port_a, a_trim_sug),
@@ -960,6 +968,6 @@ def build_manifold(context):
     shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
     return {
-        "shape": shape,
+        "layers": {"casing": {"shape": shape}},
         "connection_lengths": api.build_trim_rec_from_port_lengths(trim_records),
     }

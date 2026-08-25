@@ -2,8 +2,12 @@
   "id": "circular_straight",
   "label": "Circular Straight",
   "category": "segment",
-  "family": ["straight_segment"],
-  "profiles": ["Circular"],
+  "family": [
+    "straight_segment"
+  ],
+  "profiles": [
+    "Circular"
+  ],
   "selection": {
     "kind": "model",
     "priority": 50
@@ -60,6 +64,25 @@
       "group": "Parameters",
       "description": "Insulation thickness wrapped around the outside of the duct wall; 0 disables insulation",
       "default": 0.0
+    }
+  ],
+  "construction": [
+    {
+      "id": "casing",
+      "roles": [
+        "flow_surface",
+        "structural_shell"
+      ],
+      "default_material_role": "structural_shell",
+      "thickness_property": "Thickness"
+    },
+    {
+      "id": "insulation",
+      "roles": [
+        "thermal_insulation"
+      ],
+      "default_material_role": "thermal_insulation",
+      "thickness_property": "InsulationThickness"
     }
   ],
   "geometry": {

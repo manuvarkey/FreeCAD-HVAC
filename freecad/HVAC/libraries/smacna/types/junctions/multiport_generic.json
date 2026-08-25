@@ -3,8 +3,16 @@
   "label": "Multiport - Generic",
   "category": "junction",
   "topology": "multiport",
-  "family": ["multiport.multiport", "multiport.multiport.3d"],
-  "profiles": ["Circular", "Rectangular", "Oval", "Generic"],
+  "family": [
+    "multiport.multiport",
+    "multiport.multiport.3d"
+  ],
+  "profiles": [
+    "Circular",
+    "Rectangular",
+    "Oval",
+    "Generic"
+  ],
   "selection": {
     "kind": "model",
     "priority": 50
@@ -47,6 +55,17 @@
       "group": "Options",
       "description": "Include the flange at every port",
       "default": true
+    }
+  ],
+  "construction": [
+    {
+      "id": "casing",
+      "roles": [
+        "flow_surface",
+        "structural_shell"
+      ],
+      "default_material_role": "structural_shell",
+      "thickness_property": "Thickness"
     }
   ],
   "generator": {

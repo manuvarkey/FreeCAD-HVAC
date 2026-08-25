@@ -33,8 +33,9 @@ class FakeQuantity:
 
 
 class FakeMaterial:
-    """Stand-in for a Materials.Material value (what obj.CasingMaterial
-    actually is at runtime) -- both the "unassigned" and "real" shapes."""
+    """Stand-in for a Materials.Material value (what a construction layer's
+    own Layer_<id>_Material actually is at runtime) -- both the
+    "unassigned" and "real" shapes."""
 
     def __init__(self, name="", physical=None, appearance=None):
         self.Name = name
@@ -104,9 +105,9 @@ def _card_uuid(relative_path):
 
 def test_default_material_uuids_match_the_shipped_cards():
     # These constants are hand-copied from the .FCMat files' own UUIDs (see
-    # Network.py's DefaultCasingMaterial/DefaultInsulationMaterial) -- if a
-    # card's UUID ever changes, this must fail loudly rather than silently
-    # defaulting new networks to no material.
+    # Network.py's DefaultMaterial_StructuralShell/DefaultMaterial_
+    # ThermalInsulation) -- if a card's UUID ever changes, this must fail
+    # loudly rather than silently defaulting new networks to no material.
     assert hvac_materials.GALVANIZED_STEEL_UUID == _card_uuid("Metal/Galvanized-Steel.FCMat")
     assert hvac_materials.NITRILE_RUBBER_UUID == _card_uuid("Insulation/Nitrile-Rubber.FCMat")
 

@@ -31,31 +31,35 @@ library_api.py surface for library/generator authors.
 
 import Part
 
+from . import _construction_schema
+
 
 def apply_geometry_result(obj, result):
     """
-    Write CasingShape/InsulationShape from result.components onto `obj`,
-    then derive Shape as the compound of whichever of those two actually
-    have a real shape (in casing-then-insulation order, so the ViewProvider
-    can work out per-component face ranges without guessing -- see
-    core/_component_appearance.py).
+    Write Layer_<id>_Shape (see core/_construction_schema.py) for every
+    layer in obj.ConstructionLayerIds from result.layers, then derive Shape
+    as the compound of whichever layers actually have a real shape, in that
+    same declared order -- so the ViewProvider can work out per-layer face
+    ranges without guessing (see core/_component_appearance.py).
     """
-    casing_shape = _component_shape(result.casing)
-    insulation_shape = _component_shape(result.insulation)
+    layer_ids = list(getattr(obj, "ConstructionLayerIds", []) or [])
+    ordered_shapes = []
 
-    obj.CasingShape = casing_shape if casing_shape is not None else Part.Shape()
-    obj.InsulationShape = insulation_shape if insulation_shape is not None else Part.Shape()
+    for layer_id in layer_ids:
+        layer_geometry = result.layers.get(layer_id)
+        shape = _layer_shape(layer_geometry)
+        setattr(obj, _construction_schema.shape_property_name(layer_id), shape if shape is not None else Part.Shape())
+        if shape is not None:
+            ordered_shapes.append(shape)
 
-    obj.Shape = Part.makeCompound(
-        [s for s in (casing_shape, insulation_shape) if s is not None]
-    )
+    obj.Shape = Part.makeCompound(ordered_shapes)
 
 
-def _component_shape(component):
-    """A ComponentGeometry's own shape, or None if absent/null."""
-    if component is None:
+def _layer_shape(layer_geometry):
+    """A LayerGeometry's own shape, or None if absent/null."""
+    if layer_geometry is None:
         return None
-    shape = component.shape
+    shape = layer_geometry.shape
     if shape is None:
         return None
     try:

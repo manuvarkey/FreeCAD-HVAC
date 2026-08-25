@@ -83,6 +83,20 @@ def _bare_component(obj):
     return dc
 
 
+def _give_single_implicit_layer(obj):
+    """
+    execute() only writes whatever Layer_<id>_Shape properties already exist
+    in obj.ConstructionLayerIds -- in production, applyTypeSchema() (via
+    core/_construction_schema.py) always runs before execute() and creates
+    them. These lower-level execute()-only tests simulate that same
+    single-layer state a not-yet-migrated type ends up with, without going
+    through the full applyTypeSchema() flow.
+    """
+    obj.ConstructionLayerIds = [geometry_result_mod.LEGACY_SHAPE_LAYER_ID]
+    obj.addProperty("Part::PropertyPartShape", "Layer_shape_Shape", "Geometry", "")
+    obj.addProperty("Materials::PropertyMaterial", "Layer_shape_Material", "Materials", "")
+
+
 def test_setproperties_hides_internal_bookkeeping_and_json_properties(monkeypatch):
     """
     Internal bookkeeping fields and JSON blobs are kept (never removed) for
@@ -138,6 +152,7 @@ def test_execute_applies_computed_properties_to_matching_object_property(monkeyp
     obj.LocalPortsJson = json.dumps([_port("A", "end", True), _port("B", "start", False)])
     obj.ConnectionLengthsJson = "[]"
     obj.Label = "Component"
+    _give_single_implicit_layer(obj)
 
     geometry_result = {
         "shape": object(),
@@ -154,7 +169,7 @@ def test_execute_applies_computed_properties_to_matching_object_property(monkeyp
 
     assert obj.angle == 42.0
     assert not hasattr(obj, "not_a_real_property")
-    assert obj.CasingShape is geometry_result["shape"]
+    assert obj.Layer_shape_Shape is geometry_result["shape"]
 
 
 def test_execute_writes_connection_lengths(monkeypatch):
@@ -224,6 +239,7 @@ def test_execute_builds_shape_for_a_non_two_port_primary(monkeypatch):
         obj.LibraryId = "smacna"
         obj.TypeId = "branch_tee_generic"
         obj.LocalPortsJson = json.dumps(ports)
+        _give_single_implicit_layer(obj)
 
         geometry_result = {"shape": object(), "connection_lengths": [], "computed_properties": {}}
         _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([]), geometry_result))
@@ -231,7 +247,7 @@ def test_execute_builds_shape_for_a_non_two_port_primary(monkeypatch):
         dc = _bare_component(obj)
         dc.execute(obj)
 
-        assert obj.CasingShape is geometry_result["shape"]
+        assert obj.Layer_shape_Shape is geometry_result["shape"]
 
 
 def test_execute_context_family_resolved_from_parent_for_primary_only(monkeypatch):

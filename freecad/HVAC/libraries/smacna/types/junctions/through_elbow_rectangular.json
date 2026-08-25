@@ -3,8 +3,15 @@
   "label": "Elbow - Rectangular",
   "category": "junction",
   "topology": "through",
-  "family": ["through.bend", "through.bend.3d", "through.bend_90", "through.bend_90.3d"],
-  "profiles": ["Rectangular"],
+  "family": [
+    "through.bend",
+    "through.bend.3d",
+    "through.bend_90",
+    "through.bend_90.3d"
+  ],
+  "profiles": [
+    "Rectangular"
+  ],
   "selection": {
     "kind": "model",
     "priority": 100
@@ -54,6 +61,17 @@
       "group": "Options",
       "description": "Include the flange at port 2",
       "default": true
+    }
+  ],
+  "construction": [
+    {
+      "id": "casing",
+      "roles": [
+        "flow_surface",
+        "structural_shell"
+      ],
+      "default_material_role": "structural_shell",
+      "thickness_property": "Thickness"
     }
   ],
   "geometry": {

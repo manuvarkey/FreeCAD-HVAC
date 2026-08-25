@@ -66,6 +66,35 @@ def test_partscript_optional_validate_and_generate(tmp_path):
     assert result["tag"] == "ok"
 
 
+def test_partscript_accepts_layers_contract_with_one_real_shape_among_several(tmp_path):
+    script = tmp_path / "model.py"
+    script.write_text(
+        "HVAC_PARTSCRIPT_API = 1\n"
+        "def generate(context):\n"
+        "    return {'layers': {\n"
+        "        'casing': {'shape': context['test_shape']},\n"
+        "        'insulation': {'shape': None},\n"
+        "    }}\n"
+    )
+    result = partscript_shapes.execute_partscript(str(script), {"params": {}, "test_shape": _Shape()})
+    assert result["layers"]["casing"]["shape"] is not None
+
+
+def test_partscript_rejects_layers_contract_with_no_real_shape_anywhere(tmp_path):
+    script = tmp_path / "model.py"
+    script.write_text(
+        "HVAC_PARTSCRIPT_API = 1\n"
+        "def generate(context):\n"
+        "    return {'layers': {'casing': {'shape': None}}}\n"
+    )
+    try:
+        partscript_shapes.execute_partscript(str(script), {"params": {}})
+    except partscript_shapes.PartScriptSchemaError as exc:
+        assert "layers" in str(exc)
+    else:
+        raise AssertionError("Expected PartScriptSchemaError")
+
+
 def test_validate_context_generic_profile_accepts_any_connected_profile():
     # Profile-agnostic placeholder types (e.g. topology marker fittings)
     # declare profiles=["Generic"] and must still accept junctions whose

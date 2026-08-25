@@ -1,9 +1,11 @@
 """
 Focused tests for DuctNetwork's own default-value properties added for the
-casing/insulation material feature: DefaultCasingMaterial/
-DefaultInsulationMaterial (Materials::PropertyMaterial, defaulted to this
-addon's own Galvanized Steel/Nitrile Rubber cards) and
-DefaultInsulationThickness -- plus the Network.applyNetworkTypeDefaults()/
+multilayer construction feature: one Materials::PropertyMaterial property
+per standardized LayerRole (DefaultMaterial_<Role> -- see
+library/construction.py's ALL_LAYER_ROLES/role_property_suffix), seeded for
+the two roles every shipped single/dual-layer type actually uses
+(structural_shell/thermal_insulation, this addon's own Galvanized Steel/
+Nitrile Rubber cards) -- plus the Network.applyNetworkTypeDefaults()/
 applyMaterialSelection() callbacks that read/write them. See
 ARCHITECTURE.md's "Component geometry & materials" section.
 """
@@ -11,6 +13,8 @@ ARCHITECTURE.md's "Component geometry & materials" section.
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/Materials/MatGui/PySide stubs
 
 from freecad.HVAC.core import Network as network_mod
+from freecad.HVAC.core import _construction_schema
+from freecad.HVAC.library.construction import ALL_LAYER_ROLES, ROLE_STRUCTURAL_SHELL, ROLE_THERMAL_INSULATION, role_property_suffix
 
 
 class FakeMaterial:
@@ -61,7 +65,11 @@ def _patch_library_lookups(monkeypatch):
     )
 
 
-def test_setproperties_adds_default_material_and_insulation_thickness_properties(monkeypatch):
+def _default_material_prop(role):
+    return "DefaultMaterial_" + role_property_suffix(role)
+
+
+def test_setproperties_adds_one_default_material_property_per_role(monkeypatch):
     _patch_library_lookups(monkeypatch)
     steel = FakeMaterial("Galvanized-Steel")
     wool = FakeMaterial("Nitrile-Rubber")
@@ -77,13 +85,17 @@ def test_setproperties_adds_default_material_and_insulation_thickness_properties
     obj = FakeNetworkObj()
     _bare_network().setProperties(obj)
 
-    assert obj._prop_attrs["DefaultCasingMaterial"] == 16  # Prop_NoRecompute
-    assert obj._prop_attrs["DefaultInsulationMaterial"] == 16
-    assert "DefaultInsulationThickness" in obj.PropertiesList
+    for role in ALL_LAYER_ROLES:
+        prop_name = _default_material_prop(role)
+        assert prop_name in obj.PropertiesList, prop_name
+        assert obj._prop_attrs[prop_name] == 16  # Prop_NoRecompute
 
-    assert obj.DefaultCasingMaterial is steel
-    assert obj.DefaultInsulationMaterial is wool
-    assert obj.DefaultInsulationThickness == 25.0
+    # Only the two roles every shipped single/dual-layer type actually uses
+    # get a seeded default -- everything else starts unset.
+    assert getattr(obj, _default_material_prop(ROLE_STRUCTURAL_SHELL)) is steel
+    assert getattr(obj, _default_material_prop(ROLE_THERMAL_INSULATION)) is wool
+    other_role = next(r for r in ALL_LAYER_ROLES if r not in (ROLE_STRUCTURAL_SHELL, ROLE_THERMAL_INSULATION))
+    assert getattr(obj, _default_material_prop(other_role)) is None
 
 
 def test_setproperties_leaves_manually_assigned_default_materials_alone(monkeypatch):
@@ -94,12 +106,12 @@ def test_setproperties_leaves_manually_assigned_default_materials_alone(monkeypa
     _bare_network().setProperties(obj)
 
     custom = FakeMaterial("Aluminium")
-    obj.DefaultCasingMaterial = custom
+    setattr(obj, _default_material_prop(ROLE_STRUCTURAL_SHELL), custom)
 
     # A second setProperties() call (e.g. onDocumentRestored) must not
     # clobber an already-assigned default.
     _bare_network().setProperties(obj)
-    assert obj.DefaultCasingMaterial is custom
+    assert getattr(obj, _default_material_prop(ROLE_STRUCTURAL_SHELL)) is custom
 
 
 def test_setproperties_defaults_missing_material_gracefully(monkeypatch):
@@ -111,7 +123,7 @@ def test_setproperties_defaults_missing_material_gracefully(monkeypatch):
     obj = FakeNetworkObj()
     _bare_network().setProperties(obj)  # must not raise
 
-    assert obj.DefaultCasingMaterial is None
+    assert getattr(obj, _default_material_prop(ROLE_STRUCTURAL_SHELL)) is None
 
 
 def test_setproperties_hides_internal_managed_folder_links(monkeypatch):
@@ -132,39 +144,32 @@ def test_setproperties_hides_internal_managed_folder_links(monkeypatch):
     assert obj._editor_modes["Topology"] == 2
 
 
-def test_apply_network_type_defaults_writes_insulation_thickness_and_materials():
+def test_apply_network_type_defaults_writes_materials_by_role():
     obj = FakeNetworkObj()
-    obj.DefaultInsulationThickness = 0.0
-    obj.DefaultCasingMaterial = None
-    obj.DefaultInsulationMaterial = None
+    setattr(obj, _default_material_prop(ROLE_STRUCTURAL_SHELL), None)
+    setattr(obj, _default_material_prop(ROLE_THERMAL_INSULATION), None)
 
     steel = FakeMaterial("Galvanized-Steel")
 
     changed = network_mod.DuctNetwork.applyNetworkTypeDefaults(
         obj,
-        default_insulation_thickness=40.0,
-        default_casing_material=steel,
+        default_materials_by_role={ROLE_STRUCTURAL_SHELL: steel},
     )
 
     assert changed is True
-    assert obj.DefaultInsulationThickness == 40.0
-    assert obj.DefaultCasingMaterial is steel
-    # insulation_material wasn't passed (None) -- must stay untouched.
-    assert obj.DefaultInsulationMaterial is None
+    assert getattr(obj, _default_material_prop(ROLE_STRUCTURAL_SHELL)) is steel
+    # thermal_insulation wasn't in the dict -- must stay untouched.
+    assert getattr(obj, _default_material_prop(ROLE_THERMAL_INSULATION)) is None
 
 
 def test_apply_network_type_defaults_omitted_kwargs_are_a_noop():
     obj = FakeNetworkObj()
-    obj.DefaultInsulationThickness = 25.0
-    obj.DefaultCasingMaterial = FakeMaterial("Existing")
-    obj.DefaultInsulationMaterial = FakeMaterial("Existing2")
+    setattr(obj, _default_material_prop(ROLE_STRUCTURAL_SHELL), FakeMaterial("Existing"))
 
     changed = network_mod.DuctNetwork.applyNetworkTypeDefaults(obj)
 
     assert changed is False
-    assert obj.DefaultInsulationThickness == 25.0
-    assert obj.DefaultCasingMaterial.Name == "Existing"
-    assert obj.DefaultInsulationMaterial.Name == "Existing2"
+    assert getattr(obj, _default_material_prop(ROLE_STRUCTURAL_SHELL)).Name == "Existing"
 
 
 # ----------------------------------------------------------------------
@@ -173,38 +178,38 @@ def test_apply_network_type_defaults_omitted_kwargs_are_a_noop():
 
 class FakeDuctObj:
     def __init__(self, casing=None, insulation=None):
-        self.CasingMaterial = casing
-        self.InsulationMaterial = insulation
+        self.PropertiesList = [
+            _construction_schema.material_property_name("casing"),
+            _construction_schema.material_property_name("insulation"),
+        ]
+        setattr(self, _construction_schema.material_property_name("casing"), casing)
+        setattr(self, _construction_schema.material_property_name("insulation"), insulation)
 
 
-def test_apply_material_selection_sets_only_the_given_properties():
+def test_apply_material_selection_sets_only_the_given_layers():
     obj1 = FakeDuctObj(casing=FakeMaterial("Old1"), insulation=FakeMaterial("Old2"))
     obj2 = FakeDuctObj(casing=FakeMaterial("Old3"), insulation=FakeMaterial("Old4"))
     new_insulation = FakeMaterial("New-Insulation")
 
-    network_mod.DuctNetwork.applyMaterialSelection(
-        [obj1, obj2], insulation_material=new_insulation
-    )
+    network_mod.DuctNetwork.applyMaterialSelection([obj1, obj2], {"insulation": new_insulation})
 
-    assert obj1.CasingMaterial.Name == "Old1"  # untouched (casing_material=None)
-    assert obj1.InsulationMaterial is new_insulation
-    assert obj2.CasingMaterial.Name == "Old3"
-    assert obj2.InsulationMaterial is new_insulation
+    assert obj1.Layer_casing_Material.Name == "Old1"  # untouched -- not in the dict
+    assert obj1.Layer_insulation_Material is new_insulation
+    assert obj2.Layer_casing_Material.Name == "Old3"
+    assert obj2.Layer_insulation_Material is new_insulation
 
 
-def test_apply_material_selection_skips_none_objects_and_missing_properties():
-    class NoMaterialProps:
-        pass
+def test_apply_material_selection_skips_none_objects_and_missing_layers():
+    class NoLayerProps:
+        PropertiesList = []
 
-    obj = NoMaterialProps()
-    network_mod.DuctNetwork.applyMaterialSelection(
-        [None, obj], casing_material=FakeMaterial("X")
-    )  # must not raise
-    assert not hasattr(obj, "CasingMaterial")
+    obj = NoLayerProps()
+    network_mod.DuctNetwork.applyMaterialSelection([None, obj], {"casing": FakeMaterial("X")})  # must not raise
+    assert not hasattr(obj, "Layer_casing_Material")
 
 
-def test_apply_material_selection_both_none_is_a_true_noop():
+def test_apply_material_selection_empty_dict_is_a_true_noop():
     obj = FakeDuctObj(casing=FakeMaterial("Keep1"), insulation=FakeMaterial("Keep2"))
-    network_mod.DuctNetwork.applyMaterialSelection([obj])
-    assert obj.CasingMaterial.Name == "Keep1"
-    assert obj.InsulationMaterial.Name == "Keep2"
+    network_mod.DuctNetwork.applyMaterialSelection([obj], {})
+    assert obj.Layer_casing_Material.Name == "Keep1"
+    assert obj.Layer_insulation_Material.Name == "Keep2"

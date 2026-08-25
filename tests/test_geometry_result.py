@@ -1,70 +1,76 @@
 """
-Tests for the GeometryResult/ComponentGeometry contract every geometry
-backend dispatch (PartScript, static, legacy generator) is normalized into
-by HVACLibraryRegistry.build_geometry() -- see library/geometry_result.py.
+Tests for the GeometryResult/LayerGeometry contract every geometry backend
+dispatch (PartScript, static, legacy generator) is normalized into by
+HVACLibraryRegistry.build_geometry() -- see library/geometry_result.py.
 """
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 
 from freecad.HVAC.library import geometry_result as gr
+from freecad.HVAC.library.construction import LayerGeometry
 
 
 class _Shape:
     """Stand-in for a Part.Shape -- identity is all these tests care about."""
 
 
-def test_normalize_wraps_legacy_shape_dict_as_casing_with_null_insulation():
-    casing_shape = _Shape()
-    result = gr.normalize({"shape": casing_shape, "connection_lengths": [{"edge_key": "A"}]})
+def test_normalize_wraps_legacy_shape_dict_as_a_single_layer():
+    shape = _Shape()
+    result = gr.normalize({"shape": shape, "connection_lengths": [{"edge_key": "A"}]})
 
-    assert result.casing.shape is casing_shape
-    assert result.casing.material_role == "casing"
-    assert result.insulation.shape is None
-    assert result.insulation.material_role == "insulation"
+    assert set(result.layers.keys()) == {"shape"}
+    assert result.layers["shape"].shape is shape
     assert result.connection_lengths == [{"edge_key": "A"}]
 
 
-def test_normalize_accepts_components_dict_with_plain_dict_values():
+def test_normalize_accepts_layers_dict_with_plain_dict_values():
     casing_shape = _Shape()
     insulation_shape = _Shape()
     result = gr.normalize({
-        "components": {
+        "layers": {
             "casing": {"shape": casing_shape},
-            "insulation": {"shape": insulation_shape, "material_role": "insulation"},
+            "insulation": {"shape": insulation_shape},
         },
     })
 
-    assert result.casing.shape is casing_shape
-    assert result.insulation.shape is insulation_shape
+    assert result.layers["casing"].shape is casing_shape
+    assert result.layers["insulation"].shape is insulation_shape
 
 
-def test_normalize_accepts_components_dict_with_component_geometry_values():
+def test_normalize_accepts_layers_dict_with_layer_geometry_values():
     casing_shape = _Shape()
     result = gr.normalize({
-        "components": {
-            "casing": gr.ComponentGeometry(shape=casing_shape, material_role="casing"),
+        "layers": {
+            "casing": LayerGeometry(shape=casing_shape, roles=["structural_shell"]),
         },
     })
 
-    assert result.casing.shape is casing_shape
-    # "insulation" wasn't mentioned at all -- normalize() must still fill it in.
-    assert result.insulation is not None
-    assert result.insulation.shape is None
+    assert result.layers["casing"].shape is casing_shape
+    assert result.layers["casing"].roles == ["structural_shell"]
 
 
-def test_normalize_always_yields_both_casing_and_insulation_keys():
-    # Even a components dict that only mentions a third, unrelated role.
-    result = gr.normalize({"components": {"flange": {"shape": _Shape()}}})
-    assert set(result.components.keys()) >= {"casing", "insulation", "flange"}
-    assert result.casing.shape is None
-    assert result.insulation.shape is None
+def test_normalize_does_not_invent_layers_beyond_what_the_backend_returned():
+    # Only whatever roles/ids a backend actually mentions -- no forced
+    # casing/insulation keys any more; arbitrary layer counts are allowed.
+    result = gr.normalize({"layers": {"liner": {"shape": _Shape()}}})
+    assert set(result.layers.keys()) == {"liner"}
 
 
-def test_normalize_passthrough_of_a_geometry_result_fills_missing_roles():
-    partial = gr.GeometryResult(components={"casing": gr.ComponentGeometry(shape=_Shape(), material_role="casing")})
+def test_normalize_supports_arbitrary_layer_counts():
+    result = gr.normalize({
+        "layers": {
+            "liner": {"shape": _Shape()},
+            "absorber": {"shape": _Shape()},
+            "jacket": {"shape": _Shape()},
+        },
+    })
+    assert set(result.layers.keys()) == {"liner", "absorber", "jacket"}
+
+
+def test_normalize_passthrough_of_a_geometry_result_returns_the_same_object():
+    partial = gr.GeometryResult(layers={"casing": LayerGeometry(shape=_Shape())})
     result = gr.normalize(partial)
-    assert result is partial  # same object, just filled in
-    assert result.insulation.shape is None
+    assert result is partial
 
 
 def test_normalize_preserves_trim_planes_and_computed_properties():

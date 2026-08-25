@@ -69,6 +69,32 @@ def test_through_elbow_rectangular_uses_partscript_backend():
     assert not any(n.startswith("insulation") for n in by_name)
 
 
+def test_circular_acoustic_straight_declares_a_three_layer_construction():
+    reg = _load_registry()
+    smacna = reg._libraries["smacna"]
+    type_def = smacna.get_type("circular_acoustic_straight")
+    assert type_def is not None
+    assert type_def.geometry.backend == "partscript"
+    assert os.path.isfile(os.path.join(smacna.root_path, type_def.geometry.file))
+
+    by_id = {ldef.id: ldef for ldef in type_def.construction}
+    assert set(by_id.keys()) == {"liner", "absorber", "jacket"}
+    assert by_id["liner"].roles == ["flow_surface", "acoustic_liner"]
+    assert by_id["absorber"].roles == ["acoustic_absorber"]
+    assert by_id["jacket"].roles == ["outer_jacket", "structural_shell"]
+    # Every layer's material default is explicit -- never left to fall back
+    # on roles[0], since "flow_surface" (liner's own first-listed role)
+    # isn't a material-bearing role the way "acoustic_liner" is.
+    assert by_id["liner"].default_material_role == "acoustic_liner"
+    assert by_id["absorber"].default_material_role == "acoustic_absorber"
+    assert by_id["jacket"].default_material_role == "structural_shell"
+
+    # Lower priority than circular_straight (50) -- a real, manually-
+    # selectable model type, but never displaces the plain casing+
+    # insulation duct as smacna's automatic pick for a Circular segment.
+    assert type_def.selection.priority < 50
+
+
 def test_samples_library_holds_the_fcstd_and_static_diffuser_samples():
     reg = _load_registry()
     samples = reg._libraries["samples"]

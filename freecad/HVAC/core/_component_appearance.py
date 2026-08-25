@@ -22,35 +22,55 @@
 ################################################################################
 
 """
-Renders CasingShape/InsulationShape with their own native CasingMaterial/
-InsulationMaterial (Materials::PropertyMaterial -- see utils/materials.py),
-on a single ViewProvider/FeaturePython object, using FreeCAD's own native
-per-face appearance mechanism instead of a custom Coin scene graph:
+Renders every construction layer's own Layer_<id>_Shape with its own native
+Layer_<id>_Material (Materials::PropertyMaterial -- see utils/materials.py
+and core/_construction_schema.py), on a single ViewProvider/FeaturePython
+object, using FreeCAD's own native per-face appearance mechanism instead of
+a custom Coin scene graph:
 
-    Step 1: Shape is always Part.makeCompound([casing, insulation]) in that
-            fixed order (see core/_geometry_apply.py). CasingShape/
-            InsulationShape are the very same two shapes that compound was
-            built from, so len(CasingShape.Faces) is the compound's real,
-            exact face partition -- not a guessed or hardcoded split.
-    Step 2: build one appearance entry per face -- the first
-            len(CasingShape.Faces) entries come from CasingMaterial, the
-            rest from InsulationMaterial.
+    Step 1: Shape is always Part.makeCompound([layer shapes in
+            obj.ConstructionLayerIds order]) (see core/_geometry_apply.py).
+            Each Layer_<id>_Shape is one of the very shapes that compound
+            was built from, so len(Layer_<id>_Shape.Faces) is the
+            compound's real, exact per-layer face partition -- not a
+            guessed or hardcoded split.
+    Step 2: build one appearance entry per face, walking layers in that
+            same declared order -- each layer's own faces get its own
+            Layer_<id>_Material's appearance.
     Step 3: assign that per-face list to ViewObject.ShapeAppearance (the
             native per-face App::Material list FreeCAD >= 1.0 renders
             with).
 
 Best-effort throughout: an unassigned/unrecognized material never raises,
-it just leaves that component's faces at FreeCAD's own default appearance.
+it just leaves that layer's faces at FreeCAD's own default appearance.
 """
 
 import FreeCAD
 
 from ..utils import materials as hvac_materials
+from . import _construction_schema
 
-# Property names whose change should trigger a re-render -- passed to
-# ViewProvider.updateData(obj, prop) by DuctSegmentViewProvider/
-# DuctComponentViewProvider.
-TRIGGER_PROPERTIES = ("CasingShape", "InsulationShape", "CasingMaterial", "InsulationMaterial")
+
+def _trigger_property_names(obj):
+    """
+    Property names whose change should trigger a re-render for this
+    object's own current construction -- passed to
+    ViewProvider.updateData(obj, prop) by DuctSegmentViewProvider/
+    DuctComponentViewProvider. Computed per-object (not a fixed tuple)
+    since which Layer_<id>_* properties exist depends on the object's
+    currently-selected type.
+    """
+    names = []
+    for layer_id in getattr(obj, "ConstructionLayerIds", []) or []:
+        names.append(_construction_schema.shape_property_name(layer_id))
+        names.append(_construction_schema.material_property_name(layer_id))
+    return names
+
+
+def is_trigger_property(obj, prop):
+    """True if a changed property named `prop` on `obj` should trigger a re-render."""
+    return prop in _trigger_property_names(obj)
+
 
 # Guards against a real FreeCAD re-entrancy quirk: querying a
 # Materials::PropertyMaterial value's own appearance (e.g.
@@ -75,11 +95,11 @@ def _face_count(shape):
 
 def apply_component_appearance(vobj):
     """
-    Re-render `vobj` (a DuctSegment/DuctComponent ViewObject)'s
-    CasingShape/InsulationShape faces from their own native
-    CasingMaterial/InsulationMaterial. Safe to call any time; does nothing
-    if the object has no faces at all, no ShapeAppearance property (older
-    FreeCAD), or neither material resolves to a usable appearance.
+    Re-render `vobj` (a DuctSegment/DuctComponent ViewObject)'s construction
+    layer faces from their own native Layer_<id>_Material. Safe to call any
+    time; does nothing if the object has no faces at all, no
+    ShapeAppearance property (older FreeCAD), or no layer resolves to a
+    usable appearance.
     """
     obj = getattr(vobj, "Object", None)
     if obj is None or not hasattr(vobj, "ShapeAppearance"):
@@ -90,25 +110,29 @@ def apply_component_appearance(vobj):
         return
     _rendering.add(key)
     try:
-        casing_faces = _face_count(getattr(obj, "CasingShape", None))
-        insulation_faces = _face_count(getattr(obj, "InsulationShape", None))
-        if casing_faces + insulation_faces == 0:
+        layer_ids = list(getattr(obj, "ConstructionLayerIds", []) or [])
+        layer_faces = []
+        layer_appearances = []
+        for layer_id in layer_ids:
+            layer_faces.append(_face_count(getattr(obj, _construction_schema.shape_property_name(layer_id), None)))
+            layer_appearances.append(
+                hvac_materials.get_view_appearance(getattr(obj, _construction_schema.material_property_name(layer_id), None))
+            )
+
+        if sum(layer_faces) == 0:
+            return
+        if all(appearance is None for appearance in layer_appearances):
             return
 
-        casing_appearance = hvac_materials.get_view_appearance(getattr(obj, "CasingMaterial", None))
-        insulation_appearance = hvac_materials.get_view_appearance(getattr(obj, "InsulationMaterial", None))
-        if casing_appearance is None and insulation_appearance is None:
-            return
-
-        # A side with no usable material still needs an entry per its own
+        # A layer with no usable material still needs an entry per its own
         # face (the list length must match the compound's total face
         # count), so it falls back to FreeCAD's own default appearance
-        # rather than shifting the other side's entries out of alignment.
+        # rather than shifting the other layers' entries out of alignment.
         default_appearance = FreeCAD.Material()
-        entries = (
-            [casing_appearance or default_appearance] * casing_faces
-            + [insulation_appearance or default_appearance] * insulation_faces
-        )
+        entries = []
+        for face_count, appearance in zip(layer_faces, layer_appearances):
+            entries.extend([appearance or default_appearance] * face_count)
+
         try:
             vobj.ShapeAppearance = entries
         except Exception:

@@ -70,6 +70,7 @@ Common fields, both segments and junctions:
 | `profiles` | allowed cross-section profiles, e.g. `["Circular"]`, `["Rectangular"]` |
 | `constraints` | e.g. `{"degree": 1}` restricting how many ports a junction may have |
 | `properties` | list of property defs (below) |
+| `construction` | optional list of construction layer defs (below); omit entirely for a type with just one, roleless implicit layer |
 | `geometry` | `{"backend": "partscript"\|"static", "file"\|"descriptor": "..."}` |
 | `generator` | legacy alternative to `geometry`: `{"module": "...", "function": "..."}` |
 | `lengths_module` / `lengths_function` | optional, junctions: computes per-port trim lengths separately from the shape |
@@ -98,10 +99,73 @@ established groups are `"Dimensions"` (sizes/thicknesses) and `"Options"`
 See `samples/README.md` for the three geometry backends (`partscript`,
 `static`, and the legacy `generator` function -- including its use as a
 FCStd-template loader via `HVACLibraryAPI.shape_from_fcstd`), how to choose
-between them, and the `{"shape": ...}`/`{"components": {...}}` result
-contract every backend's return value is normalized into (see
+between them, and the `{"shape": ...}`/`{"layers": {...}}` result contract
+every backend's return value is normalized into (see
 `freecad/HVAC/library/geometry_result.py` and ARCHITECTURE.md's "Component
 geometry & materials").
+
+### Construction layers
+
+A type's own `"construction"` block declares how many physical layers its
+wall is built from, in build order (e.g. a bare duct wall, or a wall plus
+insulation, or a casing plus an acoustic fill plus a perforated liner) and
+what each one *means* -- its FreeCAD-standardized semantic role(s), from
+`freecad/HVAC/library/construction.py`'s fixed `LayerRole` vocabulary
+(`flow_surface`, `structural_shell`, `thermal_insulation`,
+`acoustic_absorber`, `acoustic_liner`, `vapor_barrier`, `outer_jacket`,
+`fire_protection`). A layer may declare more than one role (e.g. a
+single-wall duct's only layer is both `flow_surface` and
+`structural_shell`).
+
+```json
+"construction": [
+  {
+    "id": "casing",
+    "roles": ["flow_surface", "structural_shell"],
+    "thickness_property": "Thickness"
+  },
+  {
+    "id": "insulation",
+    "roles": ["thermal_insulation"],
+    "default_material_role": "thermal_insulation",
+    "thickness_property": "InsulationThickness"
+  }
+]
+```
+
+- `id`: library-chosen, stable within this type-def (e.g. `"casing"`,
+  `"liner"`, `"absorber"`) -- pairs a layer's def with the geometry backend's
+  own `{"layers": {"<id>": {"shape": ...}}}` return value (see
+  `freecad/HVAC/library/geometry_result.py`) and with that layer's own
+  `Layer_<id>_Shape`/`Layer_<id>_Material` FreeCAD properties (see
+  `core/_construction_schema.py`). Application/core code must never branch
+  on this id -- only on `roles`.
+- `roles`: the standardized `LayerRole` values this layer plays.
+- `default_material_role` (optional): which network-level
+  `DefaultMaterial_<Role>` property (see `core/Network.py`) this layer
+  falls back to when it has no material of its own yet.
+- `default_material_uuid` (optional): an explicit default material,
+  overriding `default_material_role`.
+- `thickness_property` (optional): the name of one of this type-def's own
+  declared `properties` that holds this layer's thickness -- purely
+  informational metadata for detailing/mass-calculation consumers; core
+  never interprets it (a layer's generated Shape is the source of truth for
+  its own volume).
+
+A type-def with no `"construction"` block at all (not yet migrated) behaves
+as a single, roleless implicit layer. Geometry backends compose whatever
+primitives they need to build each declared layer's own solid --
+`HVACLibraryAPI.build_concentric_layers` is the shared primitive for the
+common "N concentric shells around a shared set of ports" case (a wall,
+optionally wrapped by further layers growing inward/outward from it); see
+`freecad/HVAC/library/library_api.py`.
+
+Downstream code (materials, appearance, and airflow/acoustic/thermal/
+detailing) queries construction only by role, via
+`core/Construction.py`'s `Construction.layers_with_role(role)` /
+`flow_surface()` / `structural_layers()` / `thermal_layers()` /
+`acoustic_layers()` -- reachable off a segment/component's own
+`getConstruction()`. It must never assume a particular layer id exists.
 
 ## Type selection (automatic matching)
 

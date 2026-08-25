@@ -1,8 +1,13 @@
 """
-Tests for the component-geometry/material property contract added to
-DuctSegment/DuctComponent (CasingShape/InsulationShape/CasingMaterial/
-InsulationMaterial), and that DuctJunction stays geometry-free -- see
-ARCHITECTURE.md's "Component geometry & materials" section.
+Tests for the construction-layer property contract on DuctSegment/
+DuctComponent: setProperties() itself no longer declares any fixed
+Casing/Insulation shape/material properties -- those are now
+Layer_<id>_Shape/Layer_<id>_Material pairs added dynamically per the
+selected type's own declared construction (core/_construction_schema.py,
+covered by tests/test_construction_schema.py). This file just guards that
+setProperties() stays free of any such fixed properties, and that
+DuctJunction stays entirely geometry-free -- see ARCHITECTURE.md's
+"Component geometry & materials" section.
 """
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
@@ -55,7 +60,15 @@ def _bare_component(obj):
     return dc
 
 
-def test_segment_setproperties_adds_casing_and_insulation_geometry_and_materials(monkeypatch):
+def _assert_no_fixed_casing_insulation_properties(obj):
+    for name in ("CasingShape", "InsulationShape", "CasingMaterial", "InsulationMaterial"):
+        assert name not in obj.PropertiesList, name
+    # No layer property either -- those only ever get added by
+    # apply_construction_schema(), never by setProperties() itself.
+    assert not any(name.startswith("Layer_") for name in obj.PropertiesList)
+
+
+def test_segment_setproperties_declares_no_fixed_layer_properties(monkeypatch):
     monkeypatch.setattr(
         segment_mod.hvaclib.HVACLibraryService, "get_active_hvac_library", staticmethod(lambda: None)
     )
@@ -63,26 +76,12 @@ def test_segment_setproperties_adds_casing_and_insulation_geometry_and_materials
     ds = _bare_segment(obj)
     ds.setProperties(obj)
 
-    assert obj._prop_types["CasingShape"] == "Part::PropertyPartShape"
-    assert obj._prop_types["InsulationShape"] == "Part::PropertyPartShape"
-    assert obj._prop_types["CasingMaterial"] == "Materials::PropertyMaterial"
-    assert obj._prop_types["InsulationMaterial"] == "Materials::PropertyMaterial"
-
-    # Shapes are read-only in the property editor; materials use FreeCAD's
-    # own native material editor, so they're never read-only here.
-    assert obj._editor_modes["CasingShape"] == 1
-    assert obj._editor_modes["InsulationShape"] == 1
-    assert "CasingMaterial" not in obj._editor_modes
-    assert "InsulationMaterial" not in obj._editor_modes
-
-    # Prop_NoRecompute (16): picking a material never changes this object's
-    # own geometry, only its ViewProvider's rendered appearance -- it must
-    # not force a recompute.
-    assert obj._prop_attrs["CasingMaterial"] == 16
-    assert obj._prop_attrs["InsulationMaterial"] == 16
+    _assert_no_fixed_casing_insulation_properties(obj)
+    assert "ConstructionLayerIds" in obj.PropertiesList
+    assert obj._editor_modes["ConstructionLayerIds"] == 2
 
 
-def test_component_setproperties_adds_casing_and_insulation_geometry_and_materials(monkeypatch):
+def test_component_setproperties_declares_no_fixed_layer_properties(monkeypatch):
     monkeypatch.setattr(
         component_mod.hvaclib.HVACLibraryService, "get_active_hvac_library", staticmethod(lambda: None)
     )
@@ -90,18 +89,9 @@ def test_component_setproperties_adds_casing_and_insulation_geometry_and_materia
     dc = _bare_component(obj)
     dc.setProperties(obj)
 
-    assert obj._prop_types["CasingShape"] == "Part::PropertyPartShape"
-    assert obj._prop_types["InsulationShape"] == "Part::PropertyPartShape"
-    assert obj._prop_types["CasingMaterial"] == "Materials::PropertyMaterial"
-    assert obj._prop_types["InsulationMaterial"] == "Materials::PropertyMaterial"
-
-    assert obj._editor_modes["CasingShape"] == 1
-    assert obj._editor_modes["InsulationShape"] == 1
-    assert "CasingMaterial" not in obj._editor_modes
-    assert "InsulationMaterial" not in obj._editor_modes
-
-    assert obj._prop_attrs["CasingMaterial"] == 16
-    assert obj._prop_attrs["InsulationMaterial"] == 16
+    _assert_no_fixed_casing_insulation_properties(obj)
+    assert "ConstructionLayerIds" in obj.PropertiesList
+    assert obj._editor_modes["ConstructionLayerIds"] == 2
 
 
 def test_junction_setproperties_has_no_geometry_or_material_properties():
@@ -112,19 +102,20 @@ def test_junction_setproperties_has_no_geometry_or_material_properties():
     dj.Object = obj
     dj.setProperties(obj)
 
-    for name in ("CasingShape", "InsulationShape", "CasingMaterial", "InsulationMaterial"):
-        assert name not in obj.PropertiesList
+    _assert_no_fixed_casing_insulation_properties(obj)
+    assert "ConstructionLayerIds" not in obj.PropertiesList
 
 
 def test_setproperties_never_creates_a_document_object_for_materials(monkeypatch):
     """
-    Regression guard for the native-material migration: a
-    Materials::PropertyMaterial value lives directly on CasingMaterial/
-    InsulationMaterial (see the type-assertions above) -- setProperties()
-    must never create a separate per-element material document object
-    (the old App::MaterialObjectPython/App::PropertyLinkGlobal pattern).
-    FakeObj has no addObject()/doc-creation method at all, so any such call
-    would raise AttributeError rather than silently succeed.
+    Regression guard for the native-material migration: a construction
+    layer's material lives directly on its own Layer_<id>_Material property
+    (Materials::PropertyMaterial -- see test_construction_schema.py) --
+    setProperties() must never create a separate per-element material
+    document object (the old App::MaterialObjectPython/
+    App::PropertyLinkGlobal pattern). FakeObj has no addObject()/doc-creation
+    method at all, so any such call would raise AttributeError rather than
+    silently succeed.
     """
     monkeypatch.setattr(
         segment_mod.hvaclib.HVACLibraryService, "get_active_hvac_library", staticmethod(lambda: None)

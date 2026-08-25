@@ -5,6 +5,7 @@ import types
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 
 from freecad.HVAC.library.Library import HVACLibrary, HVACTypeDef, HVACLibraryRegistry
+from freecad.HVAC.library.construction import ConstructionLayerDef
 
 
 def _type_def(id_, category, family, profiles=None):
@@ -116,10 +117,8 @@ def test_build_geometry_dispatches_legacy_generator_and_aliases_params_as_proper
 
         # build_geometry always normalizes a backend's raw return value into
         # a GeometryResult -- a legacy {"shape": ...} generator's shape
-        # becomes the "casing" component, with "insulation" defaulted to no
-        # shape (see library/geometry_result.py).
-        assert result.casing.shape == "SHAPE"
-        assert result.insulation.shape is None
+        # becomes a single layer, id "shape" (see library/geometry_result.py).
+        assert result.layers["shape"].shape == "SHAPE"
         assert captured["params"] == {"Diameter": 100.0}
         assert captured["properties"] is captured["params"]
     finally:
@@ -141,3 +140,122 @@ def test_load_type_def_file_parses_generator_module_and_function(tmp_path):
 
     assert type_def.generator_module == "junctions"
     assert type_def.generator_function == "build_elbow"
+
+
+def test_load_type_def_file_parses_construction_block(tmp_path):
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps({
+        "id": "circular_straight",
+        "label": "Circular Straight",
+        "category": "segment",
+        "family": ["straight_segment"],
+        "generator": {"module": "segments", "function": "build_circular_straight"},
+        "construction": [
+            {
+                "id": "casing",
+                "roles": ["flow_surface", "structural_shell"],
+                "thickness_property": "Thickness",
+            },
+            {
+                "id": "insulation",
+                "roles": ["thermal_insulation"],
+                "default_material_role": "thermal_insulation",
+                "thickness_property": "InsulationThickness",
+            },
+        ],
+    }))
+
+    reg = HVACLibraryRegistry()
+    type_def = reg._load_type_def_file(str(type_file))
+
+    assert [ldef.id for ldef in type_def.construction] == ["casing", "insulation"]
+    assert type_def.construction[0].roles == ["flow_surface", "structural_shell"]
+    assert type_def.construction[0].thickness_property == "Thickness"
+    assert type_def.construction[1].default_material_role == "thermal_insulation"
+
+
+def test_load_type_def_file_defaults_construction_to_empty_list(tmp_path):
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps({
+        "id": "circular_straight",
+        "label": "Circular Straight",
+        "category": "segment",
+        "family": ["straight_segment"],
+        "generator": {"module": "segments", "function": "build_circular_straight"},
+    }))
+
+    reg = HVACLibraryRegistry()
+    type_def = reg._load_type_def_file(str(type_file))
+
+    assert type_def.construction == []
+
+
+def test_build_geometry_stamps_layer_roles_from_construction_defs():
+    fake_module = types.ModuleType("fake_hvac_lib_pkg.segments")
+
+    def build(context):
+        return {"layers": {"casing": {"shape": "CASING"}, "insulation": {"shape": "INSULATION"}}}
+
+    fake_module.build = build
+    sys.modules["fake_hvac_lib_pkg.segments"] = fake_module
+    try:
+        lib = HVACLibrary(
+            id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg"
+        )
+        type_def = HVACTypeDef(
+            id="circular_straight",
+            label="Circular Straight",
+            category="segment",
+            topology="generic",
+            family=["straight_segment"],
+            generator_module="segments",
+            generator_function="build",
+            construction=[
+                ConstructionLayerDef(id="casing", roles=["flow_surface", "structural_shell"]),
+                ConstructionLayerDef(id="insulation", roles=["thermal_insulation"]),
+            ],
+        )
+        lib.add_type(type_def)
+
+        reg = HVACLibraryRegistry()
+        reg.register_library(lib)
+
+        result = reg.build_geometry("lib", type_def, {"params": {}})
+
+        assert result.layers["casing"].roles == ["flow_surface", "structural_shell"]
+        assert result.layers["insulation"].roles == ["thermal_insulation"]
+    finally:
+        sys.modules.pop("fake_hvac_lib_pkg.segments", None)
+
+
+def test_build_geometry_leaves_roles_empty_for_layers_with_no_matching_construction_def():
+    fake_module = types.ModuleType("fake_hvac_lib_pkg.segments_unmigrated")
+
+    def build(context):
+        return {"shape": "SHAPE"}
+
+    fake_module.build = build
+    sys.modules["fake_hvac_lib_pkg.segments_unmigrated"] = fake_module
+    try:
+        lib = HVACLibrary(
+            id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg"
+        )
+        type_def = HVACTypeDef(
+            id="rectangular_straight",
+            label="Rectangular Straight",
+            category="segment",
+            topology="generic",
+            family=["straight_segment"],
+            generator_module="segments_unmigrated",
+            generator_function="build",
+        )
+        lib.add_type(type_def)
+
+        reg = HVACLibraryRegistry()
+        reg.register_library(lib)
+
+        result = reg.build_geometry("lib", type_def, {"params": {}})
+
+        assert result.layers["shape"].roles == []
+    finally:
+        sys.modules.pop("fake_hvac_lib_pkg.segments_unmigrated", None)

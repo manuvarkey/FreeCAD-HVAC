@@ -31,8 +31,10 @@ translate = FreeCAD.Qt.translate
 
 from ..utils import hvaclib
 from . import _type_schema
+from . import _construction_schema
 from . import _geometry_apply
 from . import _component_appearance
+from . import Construction as _construction
 
 
 class DuctSegment:
@@ -187,6 +189,7 @@ class DuctSegment:
         self._addProperty(obj, "App::PropertyString", "Profile", "HVAC", "Segment profile")
         self._addProperty(obj, "App::PropertyString", "AnalysisJson", "HVAC", "Serialized segment analysis")
         self._addProperty(obj, "App::PropertyStringList", "TypeSchemaPropertyNames", "HVAC", "Internal: property names added by the last-applied type schema (for stale cleanup)")
+        self._addProperty(obj, "App::PropertyStringList", "ConstructionLayerIds", "HVAC", "Internal: construction layer ids of the last-applied type (see core/_construction_schema.py)")
 
         self._addProperty(obj, "App::PropertyEnumeration", "Attachment", "Placement", "Section attachment relative to route")
         self._addProperty(obj, "App::PropertyVector", "Offset", "Placement", "Global user offset")
@@ -197,29 +200,17 @@ class DuctSegment:
         self._addProperty(obj, "App::PropertyLength", "Diameter", "Dimensions", "Circular duct diameter")
         self._addProperty(obj, "App::PropertyLength", "Width", "Dimensions", "Rectangular duct width")
         self._addProperty(obj, "App::PropertyLength", "Height", "Dimensions", "Rectangular duct height")
-        self._addProperty(obj, "App::PropertyLength", "InsulationThickness", "Parameters", "Insulation thickness")
         self._addProperty(obj, "App::PropertyLength", "Roughness", "Parameters", "Wall roughness; 0 uses the network's DefaultRoughness")
         self._addProperty(obj, "App::PropertyFloat", "Velocity", "Parameters", "Target velocity (m/s) override for duct sizing on this segment only; 0 uses the network's SizingMethod/TargetVelocity")
 
-        # Per-component shapes (see library/geometry_result.py) -- Shape
-        # itself is only the aggregate compound of these, derived each
-        # execute() by core/_geometry_apply.py; never the other way around.
-        self._addProperty(obj, "Part::PropertyPartShape", "CasingShape", "Geometry", "Duct wall/casing solid")
-        self._addProperty(obj, "Part::PropertyPartShape", "InsulationShape", "Geometry", "Insulation solid (empty if insulation is disabled for this type)")
-        # Materials::PropertyMaterial -- a native FreeCAD material (see
-        # utils/materials.py), not a link to a per-object material document
-        # object: FreeCAD's own Material subsystem is authoritative for
-        # storage, the browser/editor UI, and appearance. Prop_NoRecompute
-        # (16) since picking a material never changes this object's own
-        # geometry -- only its ViewProvider's rendered appearance.
-        self._addProperty(obj, "Materials::PropertyMaterial", "CasingMaterial", "Materials", "Native FreeCAD material for the casing", attr=16)
-        self._addProperty(obj, "Materials::PropertyMaterial", "InsulationMaterial", "Materials", "Native FreeCAD material for the insulation", attr=16)
-
-        for prop in ("CasingShape", "InsulationShape"):
-            try:
-                obj.setEditorMode(prop, 1)
-            except Exception:
-                pass
+        # Per-construction-layer Layer_<id>_Shape/Layer_<id>_Material
+        # properties are added/removed by applyTypeSchema() (via
+        # core/_construction_schema.py) to match the selected type's own
+        # declared construction -- not fixed properties here, since the
+        # number and names of layers are entirely library-defined. Shape
+        # itself is only the aggregate compound of those layers, derived
+        # each execute() by core/_geometry_apply.py; never the other way
+        # around.
 
         if "RectangularSizingMode" not in obj.PropertiesList:
             obj.addProperty(
@@ -310,6 +301,7 @@ class DuctSegment:
             "PathKind",
             "AnalysisJson",
             "TypeSchemaPropertyNames",
+            "ConstructionLayerIds",
             "StartTrimPlaneJson",
             "EndTrimPlaneJson",
         ):
@@ -343,37 +335,39 @@ class DuctSegment:
         if not getattr(obj, "Height", 0):
             obj.Height = float(getattr(owner, "DefaultHeight", 100.0))
 
-        if not getattr(obj, "InsulationThickness", 0):
-            obj.InsulationThickness = float(getattr(owner, "DefaultInsulationThickness", 0.0))
-
         if not getattr(obj, "ProfileXAxis", None):
             obj.ProfileXAxis = FreeCAD.Vector(0, 0, 0)
 
-        if not getattr(obj.CasingMaterial, "Name", ""):
-            default_material = getattr(owner, "DefaultCasingMaterial", None)
-            if default_material is not None and getattr(default_material, "Name", ""):
-                obj.CasingMaterial = default_material
+        # Construction layer materials can't be defaulted here yet -- which
+        # layers exist depends on the type this segment hasn't been given
+        # yet (TypeId is still unset at construction time). applyTypeSchema()
+        # applies layer material defaults itself, every time the
+        # construction schema is (re)established, not just once here.
 
-        if not getattr(obj.InsulationMaterial, "Name", ""):
-            default_material = getattr(owner, "DefaultInsulationMaterial", None)
-            if default_material is not None and getattr(default_material, "Name", ""):
-                obj.InsulationMaterial = default_material
-                
     def applyTypeSchema(self):
         obj = self.Object
-        # Diameter/Width/Height/InsulationThickness are permanent core
-        # properties (see setProperties) shared across every segment type
-        # regardless of whether the active type's schema declares them --
-        # never removed by the shared helper; their editor mode alone
-        # tracks relevance. A type-def (e.g. circular_straight) may still
-        # dual-declare one of these in its own `properties` list purely to
-        # pull its current value into build_geometry's `params`, exactly
-        # like Diameter already does.
-        return _type_schema.apply_type_schema(
-            obj, getattr(obj, "LibraryId", ""), getattr(obj, "TypeId", ""),
-            protected_names=("Diameter", "Width", "Height", "InsulationThickness"),
+        # Diameter/Width/Height are permanent core properties (see
+        # setProperties) shared across every segment type regardless of
+        # whether the active type's schema declares them -- never removed
+        # by the shared helper; their editor mode alone tracks relevance. A
+        # type-def (e.g. circular_straight) may still dual-declare one of
+        # these in its own `properties` list purely to pull its current
+        # value into build_geometry's `params`, exactly like Diameter
+        # already does.
+        library_id = getattr(obj, "LibraryId", "")
+        type_id = getattr(obj, "TypeId", "")
+        changed = _type_schema.apply_type_schema(
+            obj, library_id, type_id,
+            protected_names=("Diameter", "Width", "Height"),
         )
-    
+        changed = _construction_schema.apply_construction_schema(obj, library_id, type_id) or changed
+        _construction_schema.apply_default_layer_materials(obj, library_id, type_id)
+        return changed
+
+    def getConstruction(self):
+        """This segment's own construction layers, queryable by semantic role -- see core/Construction.py."""
+        return _construction.construction_for(self.Object)
+
     def resolveSourceEdge(self):
         """
         Resolve the live source edge for this segment using:
@@ -821,10 +815,10 @@ class DuctSegmentViewProvider:
         pass
 
     def updateData(self, obj, prop):
-        # Re-render CasingShape/InsulationShape from their own linked
-        # materials whenever the shapes or the material links themselves
-        # change -- see core/_component_appearance.py.
-        if prop in _component_appearance.TRIGGER_PROPERTIES:
+        # Re-render every construction layer's own shape from its own
+        # linked material whenever a layer's shape or material link
+        # changes -- see core/_component_appearance.py.
+        if _component_appearance.is_trigger_property(obj, prop):
             vobj = getattr(self, "ViewObject", None)
             if vobj is not None:
                 _component_appearance.apply_component_appearance(vobj)

@@ -971,12 +971,13 @@ class CommandEditType:
 
 class CommandEditMaterial:
     """
-    Assign native FreeCAD casing/insulation materials to selected duct
-    segment(s)/component(s), via one TaskPanel covering both properties
-    (see ui/TaskPanel.py:TaskPanelEditMaterial) -- FreeCAD's generic
-    property editor has no interactive picker for Materials::PropertyMaterial
-    on an arbitrary object (confirmed: no shipped FreeCAD workbench relies
-    on inline editing for it either -- CAM's own "Assign Material" feature
+    Assign native FreeCAD materials to each of the selected duct
+    segment(s)/component(s)' own construction layers, via one TaskPanel
+    covering every layer present on the selection (see
+    ui/TaskPanel.py:TaskPanelEditMaterial) -- FreeCAD's generic property
+    editor has no interactive picker for Materials::PropertyMaterial on an
+    arbitrary object (confirmed: no shipped FreeCAD workbench relies on
+    inline editing for it either -- CAM's own "Assign Material" feature
     builds its own dialog the same way).
     """
 
@@ -989,7 +990,7 @@ class CommandEditMaterial:
             'MenuText': QT_TRANSLATE_NOOP('HVAC_EditMaterial', 'Edit Material'),
             'ToolTip': QT_TRANSLATE_NOOP(
                 'HVAC_EditMaterial',
-                'Assign native FreeCAD casing/insulation materials to selected duct segment(s)/component(s)'
+                'Assign native FreeCAD materials to each construction layer of the selected duct segment(s)/component(s)'
             ),
             'CmdType': 'ForEdit',
         }

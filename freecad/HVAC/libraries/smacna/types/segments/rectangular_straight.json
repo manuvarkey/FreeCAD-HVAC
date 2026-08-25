@@ -2,8 +2,12 @@
   "id": "rectangular_straight",
   "label": "Rectangular Straight",
   "category": "segment",
-  "family": ["straight_segment"],
-  "profiles": ["Rectangular"],
+  "family": [
+    "straight_segment"
+  ],
+  "profiles": [
+    "Rectangular"
+  ],
   "selection": {
     "kind": "model",
     "priority": 50
@@ -57,6 +61,17 @@
       "group": "Options",
       "description": "Include the flange at port 2 (end)",
       "default": true
+    }
+  ],
+  "construction": [
+    {
+      "id": "casing",
+      "roles": [
+        "flow_surface",
+        "structural_shell"
+      ],
+      "default_material_role": "structural_shell",
+      "thickness_property": "Thickness"
     }
   ],
   "geometry": {

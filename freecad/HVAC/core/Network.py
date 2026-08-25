@@ -40,6 +40,8 @@ from ..core.NetworkParser import DuctNetworkParser
 from ..core.Segment import DuctSegment
 from ..core.Junction import DuctJunction, DuctJunctionVirtual
 from ..core.Component import DuctComponent
+from ..core import _construction_schema
+from ..library.construction import ALL_LAYER_ROLES, ROLE_STRUCTURAL_SHELL, ROLE_THERMAL_INSULATION, role_property_suffix
 
 
 class DuctManagedFolder:
@@ -302,36 +304,24 @@ class DuctNetwork:
                 "Default rectangular duct height"
             )
 
-        if "DefaultInsulationThickness" not in obj.PropertiesList:
-            obj.addProperty(
-                "App::PropertyLength",
-                "DefaultInsulationThickness",
-                "HVAC Types",
-                "Default insulation thickness for new segments"
-            )
-
         # Materials::PropertyMaterial, not App::PropertyLinkGlobal -- see
-        # the matching comment in Segment.py's setProperties(). Applied
-        # onto new segments/components by their own applyOwnerDefaults()
-        # (Segment.py/Component.py) when they don't already have a
-        # material of their own.
-        if "DefaultCasingMaterial" not in obj.PropertiesList:
-            obj.addProperty(
-                "Materials::PropertyMaterial",
-                "DefaultCasingMaterial",
-                "HVAC Types",
-                "Default casing material for new segments/components",
-                16,  # Prop_NoRecompute
-            )
-
-        if "DefaultInsulationMaterial" not in obj.PropertiesList:
-            obj.addProperty(
-                "Materials::PropertyMaterial",
-                "DefaultInsulationMaterial",
-                "HVAC Types",
-                "Default insulation material for new segments/components",
-                16,  # Prop_NoRecompute
-            )
+        # the matching comment in Segment.py's setProperties(). One
+        # property per standardized LayerRole (see library/construction.py)
+        # -- not per library-defined layer id, since roles are the fixed,
+        # small vocabulary core owns; a type's own construction layers fall
+        # back to their first declared role's default here when they don't
+        # specify their own default_material_uuid (see
+        # core/_construction_schema.py's apply_default_layer_materials()).
+        for role in ALL_LAYER_ROLES:
+            prop_name = "DefaultMaterial_" + role_property_suffix(role)
+            if prop_name not in obj.PropertiesList:
+                obj.addProperty(
+                    "Materials::PropertyMaterial",
+                    prop_name,
+                    "HVAC Types",
+                    "Default material for construction layers playing the '{}' role".format(role),
+                    16,  # Prop_NoRecompute
+                )
 
         if not getattr(obj, "DefaultLibraryId", ""):
             lib = hvaclib.HVACLibraryService.get_active_hvac_library()
@@ -358,18 +348,20 @@ class DuctNetwork:
         if not getattr(obj, "DefaultHeight", 0):
             obj.DefaultHeight = 100.0
 
-        if not getattr(obj, "DefaultInsulationThickness", 0):
-            obj.DefaultInsulationThickness = 25.0
-
-        if not getattr(obj.DefaultCasingMaterial, "Name", ""):
-            material = hvac_materials.get_material_by_uuid(hvac_materials.GALVANIZED_STEEL_UUID)
+        # Only the two roles every shipped single/dual-layer type actually
+        # uses get a seeded default (same two cards a fresh network has
+        # always defaulted to); other roles start unset until a library's
+        # own construction layer declares a default_material_role for them.
+        def _seed_role_default(role, uuid):
+            prop_name = "DefaultMaterial_" + role_property_suffix(role)
+            if getattr(getattr(obj, prop_name, None), "Name", ""):
+                return  # already set (e.g. restored from an existing document)
+            material = hvac_materials.get_material_by_uuid(uuid)
             if material is not None:
-                obj.DefaultCasingMaterial = material
+                setattr(obj, prop_name, material)
 
-        if not getattr(obj.DefaultInsulationMaterial, "Name", ""):
-            material = hvac_materials.get_material_by_uuid(hvac_materials.NITRILE_RUBBER_UUID)
-            if material is not None:
-                obj.DefaultInsulationMaterial = material
+        _seed_role_default(ROLE_STRUCTURAL_SHELL, hvac_materials.GALVANIZED_STEEL_UUID)
+        _seed_role_default(ROLE_THERMAL_INSULATION, hvac_materials.NITRILE_RUBBER_UUID)
 
         # -------------------------------------------------
         # Air properties used for airflow/pressure-drop calculation
@@ -579,13 +571,16 @@ class DuctNetwork:
         default_diameter=None,
         default_width=None,
         default_height=None,
-        default_insulation_thickness=None,
-        default_casing_material=None,
-        default_insulation_material=None,
+        default_materials_by_role=None,
     ):
         """
         Apply network-level default type settings.
         (Used as callback for command)
+
+        default_materials_by_role: optional {role: material} -- only the
+        roles actually present are written (keyed by a ROLE_* string from
+        library/construction.py; see role_property_suffix() for the
+        DefaultMaterial_<Role> property each maps to).
         """
         if network_obj is None:
             return
@@ -620,17 +615,11 @@ class DuctNetwork:
             network_obj.DefaultHeight = float(default_height)
             changed = True
 
-        if default_insulation_thickness is not None and abs(float(getattr(network_obj, "DefaultInsulationThickness", 0.0)) - float(default_insulation_thickness)) > 1e-9:
-            network_obj.DefaultInsulationThickness = float(default_insulation_thickness)
-            changed = True
-
-        if default_casing_material is not None:
-            network_obj.DefaultCasingMaterial = default_casing_material
-            changed = True
-
-        if default_insulation_material is not None:
-            network_obj.DefaultInsulationMaterial = default_insulation_material
-            changed = True
+        for role, material in dict(default_materials_by_role or {}).items():
+            prop_name = "DefaultMaterial_" + role_property_suffix(role)
+            if material is not None and hasattr(network_obj, prop_name):
+                setattr(network_obj, prop_name, material)
+                changed = True
 
         if changed:
             network_obj.touch()
@@ -748,35 +737,21 @@ class DuctNetwork:
                     obj.TypeId = default_type_id
                     changed = True
 
-            # Explicit reset always re-applies the network's current default
-            # materials -- unlike applyOwnerDefaults() (only fills in a
-            # material a *new* object doesn't have yet), this discards
-            # whatever CasingMaterial/InsulationMaterial the object already
-            # had, same "reset always wins" convention as LibraryId/TypeId
-            # above.
-            default_casing_material = getattr(net, "DefaultCasingMaterial", None)
-            if (
-                hasattr(obj, "CasingMaterial")
-                and default_casing_material is not None
-                and getattr(default_casing_material, "Name", "")
-            ):
-                obj.CasingMaterial = default_casing_material
-                changed = True
-
-            default_insulation_material = getattr(net, "DefaultInsulationMaterial", None)
-            if (
-                hasattr(obj, "InsulationMaterial")
-                and default_insulation_material is not None
-                and getattr(default_insulation_material, "Name", "")
-            ):
-                obj.InsulationMaterial = default_insulation_material
-                changed = True
-
             if proxy and hasattr(proxy, "applyTypeSchema"):
                 try:
                     changed = proxy.applyTypeSchema() or changed
                 except Exception:
                     pass
+
+            # Explicit reset always re-applies the network's current default
+            # materials -- unlike apply_default_layer_materials() (only
+            # fills in a material a *new* object/layer doesn't have yet),
+            # this discards whatever material each construction layer
+            # already had, same "reset always wins" convention as
+            # LibraryId/TypeId above. Runs after applyTypeSchema() so
+            # ConstructionLayerIds reflects whatever type was just reset to.
+            if _construction_schema.reset_layer_materials_to_network_defaults(obj):
+                changed = True
 
             try:
                 obj.touch()
@@ -2007,22 +1982,27 @@ class DuctNetwork:
                     proxy.requestSync(force_recompute=True)
 
     @staticmethod
-    def applyMaterialSelection(objects, casing_material=None, insulation_material=None):
+    def applyMaterialSelection(objects, materials):
         """
-        Set CasingMaterial/InsulationMaterial on selected duct segment(s)/
-        component(s) (used as callback for HVAC_EditMaterial). Unlike
+        Set Layer_<id>_Material on selected duct segment(s)/component(s)
+        (used as callback for HVAC_EditMaterial). `materials` is a
+        {layer_id: material} dict -- only layer ids present on a given
+        object are written, so a mixed selection of different types just
+        skips whichever layer ids don't apply to a given object. Unlike
         applyPlacementSelection, this never touches the object or re-syncs
-        the owner network -- CasingMaterial/InsulationMaterial are
-        Prop_NoRecompute, since picking a material never changes an
-        object's own geometry, only its ViewProvider's rendered appearance.
+        the owner network -- Layer_<id>_Material is Prop_NoRecompute, since
+        picking a material never changes an object's own geometry, only its
+        ViewProvider's rendered appearance.
         """
         for obj in objects or []:
             if obj is None:
                 continue
-            if casing_material is not None and hasattr(obj, "CasingMaterial"):
-                obj.CasingMaterial = casing_material
-            if insulation_material is not None and hasattr(obj, "InsulationMaterial"):
-                obj.InsulationMaterial = insulation_material
+            for layer_id, material in dict(materials or {}).items():
+                if material is None:
+                    continue
+                prop_name = _construction_schema.material_property_name(layer_id)
+                if prop_name in obj.PropertiesList:
+                    setattr(obj, prop_name, material)
 
     ## Trim map generation from junctions
     

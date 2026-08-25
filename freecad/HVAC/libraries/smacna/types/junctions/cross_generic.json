@@ -3,8 +3,19 @@
   "label": "Cross - Generic",
   "category": "junction",
   "topology": "cross",
-  "family": ["cross.cross", "cross.cross.3d", "cross.double_wye", "cross.double_wye.3d", "cross.generic"],
-  "profiles": ["Circular", "Rectangular", "Oval", "Generic"],
+  "family": [
+    "cross.cross",
+    "cross.cross.3d",
+    "cross.double_wye",
+    "cross.double_wye.3d",
+    "cross.generic"
+  ],
+  "profiles": [
+    "Circular",
+    "Rectangular",
+    "Oval",
+    "Generic"
+  ],
   "selection": {
     "kind": "model",
     "priority": 50
@@ -89,6 +100,17 @@
       "group": "Options",
       "description": "Include the flange at port D",
       "default": true
+    }
+  ],
+  "construction": [
+    {
+      "id": "casing",
+      "roles": [
+        "flow_surface",
+        "structural_shell"
+      ],
+      "default_material_role": "structural_shell",
+      "thickness_property": "Thickness"
     }
   ],
   "generator": {

@@ -31,4 +31,4 @@ def generate(context):
         profile_x_axis=profile_x_axis,
     )
     shape = outer.cut(inner)
-    return {"shape": shape}
+    return {"layers": {"casing": {"shape": shape}}}

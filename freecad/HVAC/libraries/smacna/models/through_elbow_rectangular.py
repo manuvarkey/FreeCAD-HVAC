@@ -143,7 +143,7 @@ def generate(context):
     shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
     return {
-        "shape": shape,
+        "layers": {"casing": {"shape": shape}},
         "connection_lengths": api.build_trim_rec_from_port_lengths(
             [
                 (port0, trim0),

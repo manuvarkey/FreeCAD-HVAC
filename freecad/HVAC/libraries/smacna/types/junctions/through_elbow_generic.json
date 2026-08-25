@@ -3,8 +3,17 @@
   "label": "Elbow - Generic",
   "category": "junction",
   "topology": "through",
-  "family": ["through.bend", "through.bend.3d", "through.bend_90", "through.bend_90.3d"],
-  "profiles": ["Circular", "Rectangular", "Oval"],
+  "family": [
+    "through.bend",
+    "through.bend.3d",
+    "through.bend_90",
+    "through.bend_90.3d"
+  ],
+  "profiles": [
+    "Circular",
+    "Rectangular",
+    "Oval"
+  ],
   "selection": {
     "kind": "model",
     "priority": 50
@@ -61,6 +70,25 @@
       "group": "Parameters",
       "description": "Insulation thickness wrapped around the outside of the elbow; 0 disables insulation",
       "default": 0.0
+    }
+  ],
+  "construction": [
+    {
+      "id": "casing",
+      "roles": [
+        "flow_surface",
+        "structural_shell"
+      ],
+      "default_material_role": "structural_shell",
+      "thickness_property": "Thickness"
+    },
+    {
+      "id": "insulation",
+      "roles": [
+        "thermal_insulation"
+      ],
+      "default_material_role": "thermal_insulation",
+      "thickness_property": "InsulationThickness"
     }
   ],
   "generator": {

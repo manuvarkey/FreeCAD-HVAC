@@ -2,8 +2,12 @@
   "id": "oval_straight",
   "label": "Oval Straight",
   "category": "segment",
-  "family": ["straight_segment"],
-  "profiles": ["Oval"],
+  "family": [
+    "straight_segment"
+  ],
+  "profiles": [
+    "Oval"
+  ],
   "selection": {
     "kind": "model",
     "priority": 50
@@ -29,6 +33,17 @@
       "group": "Dimensions",
       "description": "Sheet metal thickness",
       "default": 0.8
+    }
+  ],
+  "construction": [
+    {
+      "id": "casing",
+      "roles": [
+        "flow_surface",
+        "structural_shell"
+      ],
+      "default_material_role": "structural_shell",
+      "thickness_property": "Thickness"
     }
   ],
   "geometry": {
