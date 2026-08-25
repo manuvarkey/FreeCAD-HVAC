@@ -110,6 +110,8 @@ def register_material_resources():
         "User parameter:BaseApp/Preferences/Mod/Material/Resources/Modules/FreeCAD-HVAC"
     )
     config.SetString("ModuleDir", materials_path)
+    config.SetString("ModuleIcon", hvaclib.get_icon_path("Logo.svg"))
+    config.SetBool("ModuleReadOnly", True)
 
 
 def _parse_color(raw):
