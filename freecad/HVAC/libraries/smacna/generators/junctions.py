@@ -253,12 +253,14 @@ def build_through_generic(context):
             return build_transition(context)
 
     # Neither bend nor straight/offset -- fall back to an invisible marker.
-    # through_generic.json declares a single "casing" construction layer
-    # (the same id build_elbow/build_transition already use above), so
-    # remap the marker's own legacy {"shape": ...} return onto that id.
+    # Remap the marker's legacy shape onto this type's casing layer. There
+    # is no physical insulation geometry for the marker fallback.
     marker = build_terminal_marker(context)
     return {
-        "layers": {"casing": {"shape": marker.get("shape")}},
+        "layers": {
+            "casing": {"shape": marker.get("shape")},
+            "insulation": {"shape": None},
+        },
         "connection_lengths": marker.get("connection_lengths", []),
     }
 
@@ -428,8 +430,23 @@ def build_transition(context):
 
     shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
+    insulation_thickness = float(props.get("InsulationThickness", 0.0) or 0.0)
+    insulation_shape = None
+    if insulation_thickness > 0.0:
+        grown_wire1 = api.make_section_wire_from_port(
+            api.grow_port_section(port1, insulation_thickness)
+        )
+        grown_wire2 = api.make_section_wire_from_port(
+            api.grow_port_section(port2, insulation_thickness)
+        )
+        insulation_outer = api.make_loft([grown_wire1, grown_wire2], solid=True, ruled=True)
+        insulation_shape = insulation_outer.cut(outer_shape)
+
     return {
-        "layers": {"casing": {"shape": shape}},
+        "layers": {
+            "casing": {"shape": shape},
+            "insulation": {"shape": insulation_shape},
+        },
         "connection_lengths": api.build_trim_rec_from_port_lengths(
             [
                 (ports[0], trim1),
@@ -629,9 +646,10 @@ def build_tee(context):
     port_branch = api.copy_port(branch, position=pos_branch)
     port_mid_branch = api.copy_port(branch, position=pos_mid_branch)
     thickness = float(props.get("Thickness", 0.8) or 0.8)
-    parts = [api.make_tee(
+    casing_shape = api.make_tee(
         [port_a, port_mid, port_b], [port_branch, port_mid_branch], thickness
-    )]
+    )
+    parts = [casing_shape]
 
     # Flanges at the 3 duct-facing ends, extruded inward into the fitting's
     # own body -- same convention as build_elbow/build_transition.
@@ -652,8 +670,26 @@ def build_tee(context):
 
     shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
+    insulation_thickness = float(props.get("InsulationThickness", 0.0) or 0.0)
+    insulation_shape = None
+    if insulation_thickness > 0.0:
+        grown_run = [
+            api.grow_port_section(port, insulation_thickness)
+            for port in (port_a, port_mid, port_b)
+        ]
+        grown_branch = [
+            api.grow_port_section(port, insulation_thickness)
+            for port in (port_branch, port_mid_branch)
+        ]
+        insulation_shape = api.make_tee(
+            grown_run, grown_branch, insulation_thickness
+        )
+
     return {
-        "layers": {"casing": {"shape": shape}},
+        "layers": {
+            "casing": {"shape": shape},
+            "insulation": {"shape": insulation_shape},
+        },
         "connection_lengths": api.build_trim_rec_from_port_lengths(
             [
                 (run_a, run_trim_a),
@@ -696,9 +732,11 @@ def build_wye(context):
     c_trim_sug = _safe_trim(props.get("TrimLengthC", 0.0), 0.5 * c_size_hint)
 
     thickness = float(props.get("Thickness", 0.8) or 0.8)
+    center_inset = max(0.05 * max(a_size_hint, b_size_hint, c_size_hint), 1.0)
     wye = api.make_wye(
         [port_a, port_b, port_c], center,
         [a_trim_sug, b_trim_sug, c_trim_sug], thickness,
+        center_inset,
     )
     outer_port_a, outer_port_b, outer_port_c = wye["outer_ports"]
     parts = [wye["shape"]]
@@ -726,8 +764,24 @@ def build_wye(context):
 
     shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
+    insulation_thickness = float(props.get("InsulationThickness", 0.0) or 0.0)
+    insulation_shape = None
+    if insulation_thickness > 0.0:
+        grown_ports = [
+            api.grow_port_section(port, insulation_thickness)
+            for port in (port_a, port_b, port_c)
+        ]
+        insulation_shape = api.make_wye(
+            grown_ports, center,
+            [a_trim_sug, b_trim_sug, c_trim_sug], insulation_thickness,
+            center_inset,
+        )["shape"]
+
     return {
-        "layers": {"casing": {"shape": shape}},
+        "layers": {
+            "casing": {"shape": shape},
+            "insulation": {"shape": insulation_shape},
+        },
         "connection_lengths": api.build_trim_rec_from_port_lengths(
             [
                 (port_a, a_trim_sug),
@@ -805,8 +859,10 @@ def build_manifold(context):
 
     outer_legs = []
     void_legs = []
+    insulation_outer_legs = []
     flange_parts = []
     trim_records = []
+    insulation_thickness = float(props.get("InsulationThickness", 0.0) or 0.0)
 
     for idx, port in enumerate(ports):
         size_hint = _section_size_hint(api, port)
@@ -829,10 +885,20 @@ def build_manifold(context):
 
         trim_sug = _safe_trim(raw_trim, 0.5 * size_hint)
 
-        outer_leg, void_leg, outer_port = _make_leg_to_center(api, port, center, trim_sug, thickness)
+        center_inset = max(0.05 * size_hint, 1.0)
+        outer_leg, void_leg, outer_port = _make_leg_to_center(
+            api, port, center, trim_sug, thickness, center_inset
+        )
         outer_legs.append(outer_leg)
         void_legs.append(void_leg)
         trim_records.append((port, trim_sug))
+
+        if insulation_thickness > 0.0:
+            grown_port = api.grow_port_section(port, insulation_thickness)
+            grown_outer_leg, _grown_void, _grown_outer_port = _make_leg_to_center(
+                api, grown_port, center, trim_sug, insulation_thickness, center_inset
+            )
+            insulation_outer_legs.append(grown_outer_leg)
 
         show_flange = props.get(show_flange_key_num, None)
         if show_flange is None and show_flange_key_alpha is not None:
@@ -855,7 +921,15 @@ def build_manifold(context):
 
     shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
+    insulation_shape = None
+    if insulation_outer_legs:
+        insulation_outer_shape = api.fuse_shapes(insulation_outer_legs)
+        insulation_shape = insulation_outer_shape.cut(outer_shape)
+
     return {
-        "layers": {"casing": {"shape": shape}},
+        "layers": {
+            "casing": {"shape": shape},
+            "insulation": {"shape": insulation_shape},
+        },
         "connection_lengths": api.build_trim_rec_from_port_lengths(trim_records),
     }

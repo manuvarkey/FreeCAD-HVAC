@@ -5,7 +5,7 @@ HVAC_PARTSCRIPT_API = 1
 
 def generate(context):
     """
-    A straight duct built from three concentric construction layers (see
+    Sample straight duct built from three concentric construction layers (see
     the type-def's own "construction" block): a perforated liner facing
     the airstream, an acoustic absorber fill, and an outer structural
     jacket. Demonstrates HVACLibraryAPI.build_concentric_layers() -- no

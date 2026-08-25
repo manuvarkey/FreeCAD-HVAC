@@ -43,10 +43,10 @@ first if present). This is the preferred backend for new parametric types --
 no JSON schema beyond pointing at the file, and the model author has the same
 raw `Part` access a generator function has.
 
-This library doesn't ship its own PartScript example (there's nothing backend-
-specific to demonstrate beyond "it's a Python file"); see the live models
-instead: `smacna/models/circular_straight.py`, `oval_straight.py`,
-`rectangular_straight.py`.
+Example here: `types/segments/circular_acoustic_straight.json` ->
+`models/circular_acoustic_straight.py`. It demonstrates a PartScript that
+returns three concentric construction layers: acoustic liner, absorber, and
+outer jacket.
 
 ## 2. Static BREP/STEP (`"geometry": {"backend": "static", "descriptor": "..."}`)
 

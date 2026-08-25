@@ -30,11 +30,17 @@ def test_smacna_straight_segments_use_partscript_backend():
         assert os.path.isfile(os.path.join(smacna.root_path, type_def.geometry.file))
 
 
-def test_circular_straight_flanges_default_off():
+def test_circular_and_oval_straight_flanges_default_off():
     reg = _load_registry()
-    type_def = reg._libraries["smacna"].get_type("circular_straight")
-    flags = {p.name: p.default for p in type_def.properties if p.name.startswith("ShowFlange")}
-    assert flags == {"ShowFlange1": False, "ShowFlange2": False}
+    smacna = reg._libraries["smacna"]
+    for type_id in ("circular_straight", "oval_straight"):
+        type_def = smacna.get_type(type_id)
+        flags = {
+            p.name: p.default
+            for p in type_def.properties
+            if p.name.startswith("ShowFlange")
+        }
+        assert flags == {"ShowFlange1": False, "ShowFlange2": False}
 
 
 def test_rectangular_straight_flanges_default_on():
@@ -44,11 +50,24 @@ def test_rectangular_straight_flanges_default_on():
     assert flags == {"ShowFlange1": True, "ShowFlange2": True}
 
 
-def test_oval_straight_has_no_flange_properties():
+def test_smacna_default_construction_includes_insulation():
     reg = _load_registry()
-    type_def = reg._libraries["smacna"].get_type("oval_straight")
-    names = {p.name for p in type_def.properties}
-    assert not any(n.startswith("Flange") or n.startswith("ShowFlange") for n in names)
+    layers = {layer.id: layer for layer in reg._libraries["smacna"].default_construction}
+    assert set(layers) == {"shape", "insulation"}
+    assert layers["insulation"].roles == ["thermal_insulation"]
+    assert layers["insulation"].default_material_role == "thermal_insulation"
+
+
+def test_all_smacna_casing_types_declare_insulation():
+    reg = _load_registry()
+    smacna = reg._libraries["smacna"]
+    for type_def in smacna.types_by_id.values():
+        layer_ids = {layer.id for layer in type_def.construction}
+        if "casing" not in layer_ids:
+            continue
+        properties = {prop.name: prop for prop in type_def.properties}
+        assert "insulation" in layer_ids, type_def.id
+        assert properties["InsulationThickness"].group == "Dimensions", type_def.id
 
 
 def test_through_elbow_rectangular_uses_partscript_backend():
@@ -60,22 +79,26 @@ def test_through_elbow_rectangular_uses_partscript_backend():
     assert os.path.isfile(os.path.join(reg._libraries["smacna"].root_path, type_def.geometry.file))
 
     by_name = {p.name: p for p in type_def.properties}
-    input_names = {"CenterlineRadius", "Thickness", "FlangeHeight", "FlangeThickness", "ShowFlange1", "ShowFlange2"}
+    input_names = {
+        "CenterlineRadius", "Thickness", "FlangeHeight", "FlangeThickness",
+        "ShowFlange1", "ShowFlange2", "InsulationThickness",
+    }
     assert input_names == set(by_name.keys())
 
     for name in input_names:
         assert by_name[name].editor_mode == 0, name
 
-    assert not any(n.startswith("insulation") for n in by_name)
 
-
-def test_circular_acoustic_straight_declares_a_three_layer_construction():
+def test_circular_acoustic_straight_is_a_samples_three_layer_construction():
     reg = _load_registry()
     smacna = reg._libraries["smacna"]
-    type_def = smacna.get_type("circular_acoustic_straight")
+    samples = reg._libraries["samples"]
+    assert smacna.get_type("circular_acoustic_straight") is None
+
+    type_def = samples.get_type("circular_acoustic_straight")
     assert type_def is not None
     assert type_def.geometry.backend == "partscript"
-    assert os.path.isfile(os.path.join(smacna.root_path, type_def.geometry.file))
+    assert os.path.isfile(os.path.join(samples.root_path, type_def.geometry.file))
 
     by_id = {ldef.id: ldef for ldef in type_def.construction}
     assert set(by_id.keys()) == {"liner", "absorber", "jacket"}
@@ -89,13 +112,10 @@ def test_circular_acoustic_straight_declares_a_three_layer_construction():
     assert by_id["absorber"].default_material_role == "acoustic_absorber"
     assert by_id["jacket"].default_material_role == "outer_jacket"
 
-    # Lower priority than circular_straight (50) -- a real, manually-
-    # selectable model type, but never displaces the plain casing+
-    # insulation duct as smacna's automatic pick for a Circular segment.
-    assert type_def.selection.priority < 50
+    assert type_def.selection.priority == 50
 
 
-def test_samples_library_holds_the_fcstd_and_static_diffuser_samples():
+def test_samples_library_holds_all_sample_models():
     reg = _load_registry()
     samples = reg._libraries["samples"]
 
@@ -104,6 +124,11 @@ def test_samples_library_holds_the_fcstd_and_static_diffuser_samples():
     assert rect.generator_module == "segments"
     assert rect.generator_function == "build_rectangular_straight_fcstd"
     assert os.path.isfile(os.path.join(samples.root_path, "models", "rectangular_straight.FCStd"))
+
+    acoustic = samples.get_type("circular_acoustic_straight")
+    assert acoustic is not None
+    assert acoustic.geometry.backend == "partscript"
+    assert os.path.isfile(os.path.join(samples.root_path, acoustic.geometry.file))
 
     diffuser = samples.get_type("end_diffuser_static")
     assert diffuser is not None

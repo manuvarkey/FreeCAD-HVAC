@@ -52,6 +52,7 @@ def generate(context):
     flange_thickness = float(params.get("FlangeThickness", 1.0) or 1.0)
     show_flange1 = bool(params.get("ShowFlange1", True))
     show_flange2 = bool(params.get("ShowFlange2", True))
+    insulation_thickness = float(params.get("InsulationThickness", 0.0) or 0.0)
 
     # CenterlineRadius is a genuine design choice (fabrication radius), not
     # something dictated by the network -- kept as a plain user input, with
@@ -93,8 +94,19 @@ def generate(context):
 
     shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 
+    insulation_shape = None
+    if insulation_thickness > 0.0:
+        insulation_shape = api.build_concentric_layers(
+            [sweep_port_0, sweep_port_1],
+            [(0.0, insulation_thickness)],
+            path=elbow["path"],
+        )[0]
+
     return {
-        "layers": {"casing": {"shape": shape}},
+        "layers": {
+            "casing": {"shape": shape},
+            "insulation": {"shape": insulation_shape},
+        },
         "connection_lengths": api.build_trim_rec_from_port_lengths(
             [
                 (port0, trim0),

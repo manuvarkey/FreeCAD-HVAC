@@ -8,6 +8,11 @@
         "id": "shape",
         "roles": ["flow_surface", "structural_shell"],
         "default_material_role": "flow_surface"
+      },
+      {
+        "id": "insulation",
+        "roles": ["thermal_insulation"],
+        "default_material_role": "thermal_insulation"
       }
     ]
   },

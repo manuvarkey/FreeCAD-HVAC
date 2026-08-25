@@ -84,6 +84,13 @@
       "group": "Options",
       "description": "Include the flange at the branch port",
       "default": true
+    },
+    {
+      "name": "InsulationThickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Insulation thickness wrapped around the outside of the fitting; 0 disables insulation",
+      "default": 0.0
     }
   ],
   "construction": {
@@ -96,6 +103,12 @@
         ],
         "default_material_role": "structural_shell",
         "thickness_property": "Thickness"
+      },
+      {
+        "id": "insulation",
+        "roles": ["thermal_insulation"],
+        "default_material_role": "thermal_insulation",
+        "thickness_property": "InsulationThickness"
       }
     ]
   },

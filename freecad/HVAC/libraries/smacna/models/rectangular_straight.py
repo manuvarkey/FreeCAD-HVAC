@@ -30,6 +30,7 @@ def generate(context):
     flange_thickness = float(params.get("FlangeThickness", 1.0) or 1.0)
     show_flange1 = bool(params.get("ShowFlange1", True))
     show_flange2 = bool(params.get("ShowFlange2", True))
+    insulation_thickness = float(params.get("InsulationThickness", 0.0) or 0.0)
     profile_x_axis = context.get("profile_x_axis")
 
     start = api.vec(sp)
@@ -61,5 +62,18 @@ def generate(context):
             )
         )
 
-    shape = api.fuse_shapes(parts)
-    return {"layers": {"casing": {"shape": shape}}}
+    casing_shape = api.fuse_shapes(parts)
+    insulation_shape = None
+    if insulation_thickness > 0.0:
+        insulation_shape = api.make_hollow_straight(
+            start, end, "Rectangular",
+            {"Width": width + 2.0 * insulation_thickness, "Height": height + 2.0 * insulation_thickness},
+            insulation_thickness, profile_x_axis,
+        )
+
+    return {
+        "layers": {
+            "casing": {"shape": casing_shape},
+            "insulation": {"shape": insulation_shape},
+        }
+    }

@@ -10,7 +10,7 @@
   ],
   "selection": {
     "kind": "model",
-    "priority": 10
+    "priority": 50
   },
   "properties": [
     {
