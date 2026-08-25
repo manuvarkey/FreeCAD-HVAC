@@ -157,7 +157,7 @@ class HVAC(Gui.Workbench):
         try:
             Gui.Control.clearTaskWatcher()
             for obs in self.observers:
-                Gui.Selection.rmvObserver(obj)
+                FreeCAD.removeDocumentObserver(obs)
         except Exception:
             pass
         self.watchers = []
