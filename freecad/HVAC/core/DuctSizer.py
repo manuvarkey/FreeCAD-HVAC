@@ -43,6 +43,7 @@ from .FlowNetwork import solve_flow_components
 from ..analysis.balancing import PressureBalanceCoordinator
 from ..analysis.model import SizingSettings
 from ..analysis.sizing import ConstantFrictionRateSizer, ConstantVelocitySizer, LocalStaticRegainSizer
+from . import _analysis_adapter
 
 _RECT_MODE_MAP = {
     "FixedAspectRatio": "aspect_ratio",
@@ -107,7 +108,9 @@ class DuctSizer:
         sizer_cls = _SIZERS.get(settings.method, ConstantVelocitySizer)
         pure_result = sizer_cls().size(network_model, components, settings)
 
-        result = DuctSizingResult(warnings=list(flow_warnings) + list(pure_result.warnings))
+        result = DuctSizingResult(warnings=list(flow_warnings) + _analysis_adapter.humanize_diagnostics(
+            pure_result.warnings, segment_map, junction_map, component_map
+        ))
         for edge_key, sres in pure_result.segments.items():
             obj = segment_map[edge_key]
             result.segments.append(SegmentSizeResult(
@@ -128,7 +131,9 @@ class DuctSizer:
                 result.warnings.append(
                     "Pressure balancing: node '{}' branch '{}' has an unresolved deficit of {:.1f} Pa "
                     "-- consider a balancing damper here (required loss coefficient K ≈ {:.2f}).".format(
-                        req.junction_id, req.branch_port, req.pressure_deficit_pa, req.required_k
+                        _analysis_adapter.element_identifier(junction_map.get(req.junction_id)) or req.junction_id,
+                        _analysis_adapter.element_identifier(segment_map.get(req.branch_port)) or req.branch_port,
+                        req.pressure_deficit_pa, req.required_k
                     )
                 )
 

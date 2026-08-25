@@ -55,27 +55,7 @@ def _inset_port(api, port, thickness):
     section_params shrinks. Used to build the inner-bore wire/wall of a
     hollow sheet-metal fitting alongside its outer-wall counterpart.
     """
-    profile = api.port_profile(port)
-    params = api.port_section_params(port)
-    thickness = float(thickness)
-
-    if profile == "Circular":
-        diameter = float(params.get("Diameter", 0.0) or 0.0) - 2.0 * thickness
-        if diameter <= 0.0:
-            raise ValueError("Thickness is too large for port Diameter")
-        new_params = dict(params, Diameter=diameter)
-    elif profile in ("Rectangular", "Oval"):
-        width = float(params.get("Width", 0.0) or 0.0) - 2.0 * thickness
-        height = float(params.get("Height", 0.0) or 0.0) - 2.0 * thickness
-        if width <= 0.0 or height <= 0.0:
-            raise ValueError("Thickness is too large for port Width/Height")
-        new_params = dict(params, Width=width, Height=height)
-    else:
-        raise ValueError("Unsupported profile '{}' for hollow wall".format(profile))
-
-    out = api.copy_port(port)
-    out["section_params"] = new_params
-    return out
+    return api.inset_port_section(port, thickness)
 
 
 def _grown_section_params(api, port, delta):
@@ -106,26 +86,7 @@ def _make_flange(api, port, inward_direction, flange_thickness, flange_height):
     fitting's own body, overlapping its wall, matching the straight-duct/
     PartScript-elbow flange convention.
     """
-    profile = api.port_profile(port)
-    center = api.port_position(port)
-    x_axis = api.port_profile_x_axis(port)
-
-    outer_face = api.make_section_face(
-        profile=profile,
-        section_params=_grown_section_params(api, port, flange_height),
-        center=center,
-        direction=inward_direction,
-        profile_x_axis=x_axis,
-    )
-    inner_face = api.make_section_face(
-        profile=profile,
-        section_params=api.port_section_params(port),
-        center=center,
-        direction=inward_direction,
-        profile_x_axis=x_axis,
-    )
-    extrusion = api.unit(inward_direction) * float(flange_thickness)
-    return outer_face.extrude(extrusion).cut(inner_face.extrude(extrusion))
+    return api.make_flange(port, inward_direction, flange_thickness, flange_height)
 
 # --------------------------------------------------------------------------
 # Marker geometry
@@ -334,49 +295,20 @@ def build_elbow(context):
 
     thickness = float(props.get("Thickness", 0.8) or 0.8)
 
-    # Symmetric elbow trim distance measured from the virtual corner
-    trim = radius / math.tan(theta / 2.0)
-    c1, c2 = api.closest_points_on_lines(p0, -u0, p1, -u1)
-
-    # Tangency points on the two offset segment centerlines
-    s0 = c1 + (u0 * trim)
-    s1 = c2 + (u1 * trim)
-
-    # Calculate trim distances from the tangency points to the original ports
-    trim0 = max(0.0, (s0 - p0).dot(u0))
-    trim1 = max(0.0, (s1 - p1).dot(u1))
-
-    # Find arc center and point on arc using bisector
-    arc_center = api.arc_center_from_points_tangents_radius(s0, s1, u0, u1, radius)
-    bisector = u0 + u1
-    if bisector.Length <= 1e-12:
-        raise ValueError("Elbow bisector is undefined")
-    bisector.normalize()
-    mid_point = arc_center - bisector * float(radius)
-
-    # Generate arc wire
-    arc_edge = Part.Arc(s0, mid_point, s1).toShape()
-    path_wire = Part.Wire([arc_edge])
-
-    # Generate a sweep between ports
-    sweep_port_0 = api.copy_port(ports[0], position=s0)
-    sweep_port_1 = api.copy_port(ports[1], position=s1)
-    outer_wire_1 = api.make_section_wire_from_port(sweep_port_0)
-    outer_wire_2 = api.make_section_wire_from_port(sweep_port_1)
-    outer_shape = api.make_pipe_shell(path_wire, [outer_wire_1, outer_wire_2])
+    elbow = api.make_elbow(ports[0], ports[1], radius, thickness)
+    path_wire = elbow["path"]
+    sweep_port_0, sweep_port_1 = elbow["ports"]
+    trim0, trim1 = elbow["trim_lengths"]
+    outer_shape = api.make_pipe_shell(
+        path_wire, [api.make_section_wire_from_port(sweep_port_0), api.make_section_wire_from_port(sweep_port_1)]
+    )
 
     # Hollow sheet-metal wall: sweep a second, uniformly-inset profile along
     # the *same* centerline arc and cut it from the outer sweep. This is a
     # schematic constant-cross-section-inset approximation (not a true
     # constant-thickness offset surface -- the wall thins slightly through
     # the bend), matching the fidelity already used elsewhere in this module.
-    inner_sweep_port_0 = _inset_port(api, sweep_port_0, thickness)
-    inner_sweep_port_1 = _inset_port(api, sweep_port_1, thickness)
-    inner_wire_1 = api.make_section_wire_from_port(inner_sweep_port_0)
-    inner_wire_2 = api.make_section_wire_from_port(inner_sweep_port_1)
-    inner_shape = api.make_pipe_shell(path_wire, [inner_wire_1, inner_wire_2])
-
-    casing_shape = outer_shape.cut(inner_shape)
+    casing_shape = elbow["shape"]
     parts = [casing_shape]
 
     # Flanges are extruded inward from each tangent plane, into the elbow's
@@ -620,23 +552,8 @@ def _make_leg_to_center(api, port, center, trim_length, thickness, inner_inset=N
     Returns (outer_shape, void_shape, outer_port) -- outer_port is handed
     back so the caller can place a flange at the duct-facing end.
     """
-    u = api.port_direction(port)
-    outer_pos = api.port_position(port) + (u * (float(trim_length)))
-    outer_port = api.copy_port(port, position=outer_pos)
-
-    if inner_inset is None:
-        inner_inset = max(0.05 * _section_size_hint(api, port), 1.0)
-    inner_port = _make_center_merge_port(api, port, center, inner_inset)
-
-    outer_wire = api.make_section_wire_from_port(outer_port)
-    inner_wire = api.make_section_wire_from_port(inner_port)
-    outer_shape = api.make_loft([outer_wire, inner_wire], solid=True, ruled=True)
-
-    hollow_outer_wire = api.make_section_wire_from_port(_inset_port(api, outer_port, thickness))
-    hollow_inner_wire = api.make_section_wire_from_port(_inset_port(api, inner_port, thickness))
-    void_shape = api.make_loft([hollow_outer_wire, hollow_inner_wire], solid=True, ruled=True)
-
-    return outer_shape, void_shape, outer_port
+    leg = api.make_branch_leg(port, center, trim_length, thickness, inner_inset)
+    return leg["outer_shape"], leg["void_shape"], leg["outer_port"]
 
 
 # --------------------------------------------------------------------------
@@ -706,39 +623,15 @@ def build_tee(context):
     else:
         mid_pos = c1b - api.port_direction(port_b) * branch_hint
         port_mid = api.copy_port(port_b, position=mid_pos)
-    section_a = api.make_section_wire_from_port(port_a)
-    section_b = api.make_section_wire_from_port(port_b)
-    section_mid = api.make_section_wire_from_port(port_mid)
-    leg_main = api.make_loft([section_a, section_mid, section_b])
-
     # Branch leg
     pos_branch = center_branch + api.port_direction(branch) * branch_trim
     pos_mid_branch = center_branch
     port_branch = api.copy_port(branch, position=pos_branch)
     port_mid_branch = api.copy_port(branch, position=pos_mid_branch)
-    section_branch = api.make_section_wire_from_port(port_branch)
-    section_mid_branch = api.make_section_wire_from_port(port_mid_branch)
-    branch_leg = api.make_loft([section_branch, section_mid_branch])
-
-    # Fuse shapes
-    outer_shape = api.fuse_shapes([leg_main, branch_leg])
-
-    # Hollow sheet-metal wall: rebuild both legs from thickness-inset ports
-    # and cut their fused union from the outer fused union once (rather than
-    # per-leg), matching the fidelity used for build_elbow/build_transition.
     thickness = float(props.get("Thickness", 0.8) or 0.8)
-    inner_section_a = api.make_section_wire_from_port(_inset_port(api, port_a, thickness))
-    inner_section_b = api.make_section_wire_from_port(_inset_port(api, port_b, thickness))
-    inner_section_mid = api.make_section_wire_from_port(_inset_port(api, port_mid, thickness))
-    inner_leg_main = api.make_loft([inner_section_a, inner_section_mid, inner_section_b])
-
-    inner_section_branch = api.make_section_wire_from_port(_inset_port(api, port_branch, thickness))
-    inner_section_mid_branch = api.make_section_wire_from_port(_inset_port(api, port_mid_branch, thickness))
-    inner_branch_leg = api.make_loft([inner_section_branch, inner_section_mid_branch])
-
-    inner_shape = api.fuse_shapes([inner_leg_main, inner_branch_leg])
-
-    parts = [outer_shape.cut(inner_shape)]
+    parts = [api.make_tee(
+        [port_a, port_mid, port_b], [port_branch, port_mid_branch], thickness
+    )]
 
     # Flanges at the 3 duct-facing ends, extruded inward into the fitting's
     # own body -- same convention as build_elbow/build_transition.
@@ -798,22 +691,17 @@ def build_wye(context):
     b_size_hint = _section_size_hint(api, port_b)
     c_size_hint = _section_size_hint(api, port_c)
     
-    a_dir = api.port_direction(port_a)
-    b_dir = api.port_direction(port_b)
-    c_dir = api.port_direction(port_c)
-
     a_trim_sug = _safe_trim(props.get("TrimLengthA", 0.0), 0.5 * a_size_hint)
     b_trim_sug = _safe_trim(props.get("TrimLengthB", 0.0), 0.5 * b_size_hint)
     c_trim_sug = _safe_trim(props.get("TrimLengthC", 0.0), 0.5 * c_size_hint)
 
     thickness = float(props.get("Thickness", 0.8) or 0.8)
-    leg_a, void_a, outer_port_a = _make_leg_to_center(api, port_a, center, a_trim_sug, thickness)
-    leg_b, void_b, outer_port_b = _make_leg_to_center(api, port_b, center, b_trim_sug, thickness)
-    leg_c, void_c, outer_port_c = _make_leg_to_center(api, port_c, center, c_trim_sug, thickness)
-
-    outer_shape = api.fuse_shapes([leg_a, leg_b, leg_c])
-    inner_shape = api.fuse_shapes([void_a, void_b, void_c])
-    parts = [outer_shape.cut(inner_shape)]
+    wye = api.make_wye(
+        [port_a, port_b, port_c], center,
+        [a_trim_sug, b_trim_sug, c_trim_sug], thickness,
+    )
+    outer_port_a, outer_port_b, outer_port_c = wye["outer_ports"]
+    parts = [wye["shape"]]
 
     # Flanges at the 3 duct-facing ends, extruded inward into the fitting's
     # own body -- same convention as build_elbow/build_transition.

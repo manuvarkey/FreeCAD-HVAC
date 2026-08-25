@@ -4,43 +4,20 @@ HVAC_PARTSCRIPT_API = 1
 
 
 def _hollow_prism(api, sp, ep, outer_width, outer_height, inner_width, inner_height, profile_x_axis):
-    outer = api.make_straight_shape(
-        start_point=sp,
-        end_point=ep,
-        profile="Rectangular",
-        section_params={"Width": outer_width, "Height": outer_height},
-        profile_x_axis=profile_x_axis,
+    thickness = 0.5 * (outer_width - inner_width)
+    return api.make_hollow_straight(
+        sp, ep, "Rectangular", {"Width": outer_width, "Height": outer_height},
+        thickness, profile_x_axis,
     )
-    inner = api.make_straight_shape(
-        start_point=sp,
-        end_point=ep,
-        profile="Rectangular",
-        section_params={"Width": inner_width, "Height": inner_height},
-        profile_x_axis=profile_x_axis,
-    )
-    return outer.cut(inner)
 
 
 def _make_flange(api, position, inward_direction, thickness, duct_width, duct_height, flange_height, profile_x_axis):
-    outer_face = api.make_section_face(
-        profile="Rectangular",
-        section_params={
-            "Width": duct_width + 2.0 * flange_height,
-            "Height": duct_height + 2.0 * flange_height,
-        },
-        center=position,
-        direction=inward_direction,
-        profile_x_axis=profile_x_axis,
-    )
-    inner_face = api.make_section_face(
-        profile="Rectangular",
-        section_params={"Width": duct_width, "Height": duct_height},
-        center=position,
-        direction=inward_direction,
-        profile_x_axis=profile_x_axis,
-    )
-    extrusion = api.unit(inward_direction) * thickness
-    return outer_face.extrude(extrusion).cut(inner_face.extrude(extrusion))
+    port = {
+        "position": position, "direction": inward_direction, "profile": "Rectangular",
+        "section_params": {"Width": duct_width, "Height": duct_height},
+        "profile_x_axis": profile_x_axis,
+    }
+    return api.make_flange(port, inward_direction, thickness, flange_height)
 
 
 def generate(context):

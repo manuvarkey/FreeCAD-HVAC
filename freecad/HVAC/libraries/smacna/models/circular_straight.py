@@ -1,17 +1,6 @@
 from operator import itemgetter
 
-import Part
-
 HVAC_PARTSCRIPT_API = 1
-
-
-def _make_tube(position, direction, length, outer_diameter, inner_diameter):
-    outer = Part.makeCylinder(outer_diameter * 0.5, length, position, direction)
-    if inner_diameter <= 0.0:
-        return outer
-    inner = Part.makeCylinder(inner_diameter * 0.5, length, position, direction)
-    return outer.cut(inner)
-
 
 def generate(context):
     api, sp, ep, params = itemgetter("hvac_api", "start_point", "end_point", "params")(context)
@@ -36,15 +25,19 @@ def generate(context):
     # feature now (see smacna/generators/features.py::generate_transverse_flange
     # and this type-def's own "construction.features" block) -- casing is
     # just the bare tube.
-    casing_shape = _make_tube(start, direction, length, diameter, inner_diameter)
+    casing_shape = api.make_hollow_straight(
+        start, end, "Circular", {"Diameter": diameter}, thickness,
+        context.get("profile_x_axis"),
+    )
 
     # Insulation, when enabled, is a second tube wrapped around the outside
     # of the casing -- same span, from the casing's own outer diameter out
     # to outer diameter + 2*InsulationThickness.
     insulation_shape = None
     if insulation_thickness > 0.0:
-        insulation_shape = _make_tube(
-            start, direction, length, diameter + 2.0 * insulation_thickness, diameter
+        insulation_shape = api.make_hollow_straight(
+            start, end, "Circular", {"Diameter": diameter + 2.0 * insulation_thickness},
+            insulation_thickness, context.get("profile_x_axis")
         )
 
     return {

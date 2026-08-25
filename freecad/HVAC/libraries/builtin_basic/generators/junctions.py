@@ -233,36 +233,10 @@ def build_elbow(context):
     if radius < size_hint / 2:
         radius = 0.6 * size_hint
 
-    # Symmetric elbow trim distance measured from the virtual corner
-    trim = radius / math.tan(theta / 2.0)
-    c1, c2 = api.closest_points_on_lines(p0, -u0, p1, -u1)
-    
-    # Tangency points on the two offset segment centerlines
-    s0 = c1 + (u0 * trim)
-    s1 = c2 + (u1 * trim)
-    
-    # Calculate trim distances from the tangency points to the original ports
-    trim0 = max(0.0, (s0 - p0).dot(u0))
-    trim1 = max(0.0, (s1 - p1).dot(u1))
-    
-    # Find arc center and point on arc using bisector
-    arc_center = api.arc_center_from_points_tangents_radius(s0, s1, u0, u1, radius)
-    bisector = u0 + u1
-    if bisector.Length <= 1e-12:
-        raise ValueError("Elbow bisector is undefined")
-    bisector.normalize()
-    mid_point = arc_center - bisector * float(radius)
-    
-    # Generate arc wire
-    arc_edge = Part.Arc(s0, mid_point, s1).toShape()
-    path_wire = Part.Wire([arc_edge])
-    
-    # Generate a sweep between ports
-    sweep_port_0 = api.copy_port(ports[0], position=s0)
-    sweep_port_1 = api.copy_port(ports[1], position=s1)
-    wire_1 = api.make_section_wire_from_port(sweep_port_0)
-    wire_2 = api.make_section_wire_from_port(sweep_port_1)
-    shape = api.make_pipe_shell(path_wire, [wire_1, wire_2])
+    elbow = api.make_elbow(ports[0], ports[1], radius)
+    sweep_port_0, sweep_port_1 = elbow["ports"]
+    trim0, trim1 = elbow["trim_lengths"]
+    shape = elbow["shape"]
     
     return {
         "shape": shape,

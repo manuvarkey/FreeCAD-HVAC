@@ -32,6 +32,7 @@ _METAL_CARDS = [
     "Metal/Galvanized-Steel.FCMat",
     "Metal/Aluminium.FCMat",
     "Metal/Stainless-Steel.FCMat",
+    "Metal/Perforated-Galvanized-Steel.FCMat",
 ]
 _INSULATION_CARDS = [
     "Insulation/Glass-Wool.FCMat",
@@ -39,6 +40,7 @@ _INSULATION_CARDS = [
     "Insulation/Nitrile-Rubber.FCMat",
     "Insulation/Polyurethane-Foam.FCMat",
     "Insulation/Expanded-Polystyrene.FCMat",
+    "Insulation/Nitrile-Rubber-Open-Cell.FCMat",
 ]
 _EXPECTED_CARDS = _METAL_CARDS + _INSULATION_CARDS
 

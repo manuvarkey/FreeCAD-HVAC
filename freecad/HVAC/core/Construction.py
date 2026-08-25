@@ -48,6 +48,7 @@ from ..library.construction import (
     ROLE_ACOUSTIC_LINER,
 )
 from . import _construction_schema
+from ..utils import materials as hvac_materials
 
 
 @dataclass
@@ -57,6 +58,7 @@ class ConstructionLayer:
     roles: list = field(default_factory=list)
     shape: object = None
     material: object = None
+    thickness_mm: "float | None" = None
 
     def has_role(self, role):
         return role in self.roles
@@ -117,6 +119,66 @@ class Construction:
             if ROLE_ACOUSTIC_ABSORBER in layer.roles or ROLE_ACOUSTIC_LINER in layer.roles
         ]
 
+    def hydraulic_roughness(self, default=None):
+        """Absolute roughness of the airstream-facing material, in mm.
+
+        Material cards may call the property ``HydraulicRoughness`` or the
+        shorter ``Roughness``.  Returning the caller's fallback keeps older
+        cards and unassigned layers compatible with the network default.
+        """
+        layer = self.flow_surface()
+        if layer is None:
+            return default
+        value = hvac_materials.get_hydraulic_roughness_mm(layer.material)
+        return value if value is not None else default
+
+    def acoustic_impedance(self, frequency_hz=None, default=None):
+        """Return the construction's declared acoustic impedance in Pa*s/m.
+
+        A frequency argument is accepted for a stable future-facing API;
+        current native cards expose a scalar value.  The flow-facing liner
+        takes precedence, followed by an absorber and then any other layer.
+        """
+        del frequency_hz
+        ordered = []
+        flow = self.flow_surface()
+        if flow is not None:
+            ordered.append(flow)
+        ordered.extend(layer for layer in self.acoustic_layers() if layer not in ordered)
+        ordered.extend(layer for layer in self._layers if layer not in ordered)
+        for layer in ordered:
+            value = hvac_materials.get_physical_value_as(
+                layer.material, "AcousticImpedance", "Pa*s/m"
+            )
+            if value is not None:
+                return value
+        return default
+
+    def overall_u_value(self, inside_surface_resistance=0.0,
+                        outside_surface_resistance=0.0, default=None):
+        """Overall thermal transmittance in W/(m^2*K).
+
+        Layer resistance is ``thickness / conductivity``.  Layers without
+        a declared thickness or native ThermalConductivity are ignored; if
+        no physical resistance is available, ``default`` is returned.
+        Optional surface resistances are in m^2*K/W.
+        """
+        resistance = float(inside_surface_resistance) + float(outside_surface_resistance)
+        physical_layers = 0
+        for layer in self._layers:
+            if layer.thickness_mm is None or layer.thickness_mm <= 0.0:
+                continue
+            conductivity = hvac_materials.get_physical_value_as(
+                layer.material, "ThermalConductivity", "W/m/K"
+            )
+            if conductivity is None or conductivity <= 0.0:
+                continue
+            resistance += (float(layer.thickness_mm) / 1000.0) / conductivity
+            physical_layers += 1
+        if physical_layers == 0 or resistance <= 0.0:
+            return default
+        return 1.0 / resistance
+
     def features(self):
         return list(self._features)
 
@@ -158,6 +220,12 @@ def construction_for(obj):
                 roles=list(layer_def.roles) if layer_def is not None else [],
                 shape=getattr(obj, _construction_schema.shape_property_name(layer_id), None),
                 material=getattr(obj, _construction_schema.material_property_name(layer_id), None),
+                thickness_mm=(
+                    float(getattr(obj, layer_def.thickness_property))
+                    if layer_def is not None and layer_def.thickness_property
+                    and hasattr(obj, layer_def.thickness_property)
+                    else None
+                ),
             )
         )
 

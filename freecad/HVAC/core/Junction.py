@@ -753,7 +753,7 @@ class DuctJunctionVirtualViewProvider:
         pass
 
     def getIcon(self):
-        return hvaclib.get_icon_path("Junction.svg")
+        return hvaclib.get_icon_path("DuctsIcon.svg")
 
     def onDelete(self, vobj, subelements):
         # User must be able to delete these directly from the tree.

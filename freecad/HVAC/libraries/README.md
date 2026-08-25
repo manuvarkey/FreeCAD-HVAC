@@ -46,6 +46,13 @@ reason to diverge.
   "id": "smacna",
   "label": "SMACNA",
   "generators_package": "freecad.HVAC.libraries.smacna.generators",
+  "default_construction": {
+    "layers": [{
+      "id": "shape",
+      "roles": ["flow_surface", "structural_shell"],
+      "default_material_role": "flow_surface"
+    }]
+  },
   "type_roots": ["types/segments", "types/junctions"]
 }
 ```
@@ -55,6 +62,9 @@ reason to diverge.
 - `label`: display name.
 - `generators_package`: the Python package `import_generator(library_id, module)`
   imports `<generators_package>.<module>` from, for the legacy `"generator"` backend.
+- `default_construction`: optional construction layers inherited by every
+  type that does not declare its own `construction.layers`. This keeps the
+  material construction uniform for simple parts within one library.
 - `type_roots`: directories (relative to the library root) scanned for `*.json` type-defs.
 
 ## Type-def JSON (`HVACTypeDef`, see `freecad/HVAC/library/Library.py`)
@@ -70,7 +80,7 @@ Common fields, both segments and junctions:
 | `profiles` | allowed cross-section profiles, e.g. `["Circular"]`, `["Rectangular"]` |
 | `constraints` | e.g. `{"degree": 1}` restricting how many ports a junction may have |
 | `properties` | list of property defs (below) |
-| `construction` | optional `{"layers": [...], "features": [...]}` object (below); omit entirely for a type with just one, roleless implicit layer and no features |
+| `construction` | optional `{"layers": [...], "features": [...]}` object (below); when omitted, inherits the library manifest's `default_construction`, or falls back to one roleless implicit layer if the manifest has no default |
 | `geometry` | `{"backend": "partscript"\|"static", "file"\|"descriptor": "..."}` |
 | `generator` | legacy alternative to `geometry`: `{"module": "...", "function": "..."}` |
 | `lengths_module` / `lengths_function` | optional, junctions: computes per-port trim lengths separately from the shape |

@@ -35,10 +35,12 @@ or a library type-def.
 """
 
 import json
+import re
 
 from ..analysis.model import ComponentModel, NetworkModel, NodeModel, PortModel, SectionModel, SegmentModel, AirState
 from ..library.library_api import HVACLibraryAPI
 from ..utils import hvaclib
+from .Construction import construction_for
 
 # A segment's own RectangularSizingMode enum value ("UseNetworkDefault" means
 # "no override") -> the plain mode string SegmentModel/SizingSettings use.
@@ -47,6 +49,35 @@ RECT_MODE_MAP = {
     "FixedHeight": "fixed_height",
     "FixedWidth": "fixed_width",
 }
+
+
+def element_identifier(obj):
+    """User-facing element reference: documentation Number, then Label/Name."""
+    number = str(getattr(obj, "Number", "") or "").strip()
+    label = str(getattr(obj, "Label", "") or "").strip()
+    name = str(getattr(obj, "Name", "") or "").strip()
+    return number or label or name
+
+
+def humanize_diagnostics(messages, segment_map, junction_map, component_map=None):
+    """Replace internal edge/node/component keys in diagnostics with element IDs."""
+    aliases = {}
+    for mapping in (segment_map, junction_map, component_map or {}):
+        for internal, obj in mapping.items():
+            display = element_identifier(obj)
+            if display and display != str(internal):
+                aliases[str(internal)] = display
+    patterns = [
+        (re.compile(r"(?<![A-Za-z0-9_]){}(?![A-Za-z0-9_])".format(re.escape(key))), value)
+        for key, value in sorted(aliases.items(), key=lambda item: len(item[0]), reverse=True)
+    ]
+    out = []
+    for message in messages:
+        text = str(message)
+        for pattern, value in patterns:
+            text = pattern.sub(value, text)
+        out.append(text)
+    return out
 
 
 def build_network_model(net_obj):
@@ -114,7 +145,7 @@ def _build_segment_model(seg_obj, default_roughness_mm):
 
     roughness_mm = float(getattr(seg_obj, "Roughness", 0.0) or 0.0)
     if roughness_mm <= 0.0:
-        roughness_mm = default_roughness_mm
+        roughness_mm = construction_for(seg_obj).hydraulic_roughness(default_roughness_mm)
 
     rect_mode_raw = str(getattr(seg_obj, "RectangularSizingMode", "UseNetworkDefault") or "UseNetworkDefault")
     rect_mode_override = RECT_MODE_MAP.get(rect_mode_raw, "") if rect_mode_raw != "UseNetworkDefault" else ""

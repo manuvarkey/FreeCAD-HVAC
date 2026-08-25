@@ -55,6 +55,23 @@ from . import hvaclib
 # General.UUID.
 GALVANIZED_STEEL_UUID = "7d01e7c6-c1b7-4374-b361-a00232c94d20"
 NITRILE_RUBBER_UUID = "4f16dfeb-1bc6-41a8-8a40-30942e30cd2a"
+NITRILE_RUBBER_OPEN_CELL_UUID = "1b7baf06-8e33-4b63-a1f1-a9a39bd3ab2e"
+PERFORATED_GALVANIZED_STEEL_UUID = "31e7402b-d640-4f04-b60d-b86904ba73cf"
+ALUMINIUM_UUID = "ff83dff9-a970-455c-9641-ead756d61b8a"
+
+# Typical absolute roughness for the stock sheet materials, in mm.  Native
+# FreeCAD's standard material models do not currently define a roughness
+# field, so these values bridge the shipped cards into airflow calculations;
+# a material that declares HydraulicRoughness/Roughness itself still wins.
+_STOCK_HYDRAULIC_ROUGHNESS_MM = {
+    "galvanised steel": 0.09,
+    "galvanized steel": 0.09,
+    "perforated galvanised steel": 0.15,
+    "perforated galvanized steel": 0.15,
+    "aluminium": 0.0015,
+    "aluminum": 0.0015,
+    "stainless steel": 0.0015,
+}
 
 
 def get_material_by_uuid(uuid):
@@ -150,6 +167,41 @@ def get_physical_value(material, name):
     if math.isnan(number):
         return None
     return number
+
+
+def get_physical_value_as(material, name, unit=None):
+    """Return a native physical property converted to ``unit`` when possible.
+
+    Real FreeCAD quantities expose ``getValueAs``.  Lightweight material
+    implementations (including library clients and tests) often expose a
+    plain number instead; those values are treated as already being in the
+    requested unit.  ``None`` has the same meaning as in
+    :func:`get_physical_value`.
+    """
+    if not _is_assigned(material):
+        return None
+    try:
+        if not material.hasPhysicalProperty(name):
+            return None
+        value = material.getPhysicalValue(name)
+        if value is None:
+            return None
+        if unit and hasattr(value, "getValueAs"):
+            value = value.getValueAs(unit)
+        number = float(getattr(value, "Value", value))
+    except Exception:
+        return None
+    return None if math.isnan(number) else number
+
+
+def get_hydraulic_roughness_mm(material):
+    """Absolute roughness in mm from a material card, or a shipped-card default."""
+    for property_name in ("HydraulicRoughness", "Roughness"):
+        value = get_physical_value_as(material, property_name, "mm")
+        if value is not None and value >= 0.0:
+            return value
+    name = str(getattr(material, "Name", "") or "").strip().lower()
+    return _STOCK_HYDRAULIC_ROUGHNESS_MM.get(name)
 
 
 def get_view_appearance(material):

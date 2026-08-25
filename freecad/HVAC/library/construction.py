@@ -98,9 +98,9 @@ class ConstructionLayerDef:
     default_material_uuid: an explicit default material, taking priority
         over default_material_role when set.
     thickness_property: name of the type-def property holding this layer's
-        thickness, if any -- purely informational metadata for detailing/
-        mass-calculation consumers; core never interprets it itself (the
-        layer's actual generated Shape is the source of truth for volume).
+        thickness, if any. Construction queries use it for thermal
+        resistance; the generated Shape remains the source of truth for
+        geometry and volume.
     """
     id: str
     roles: list = field(default_factory=list)

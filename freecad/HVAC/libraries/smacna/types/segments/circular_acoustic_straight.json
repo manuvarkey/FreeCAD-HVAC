@@ -79,7 +79,7 @@
           "outer_jacket",
           "structural_shell"
         ],
-        "default_material_role": "structural_shell",
+        "default_material_role": "outer_jacket",
         "thickness_property": "Thickness"
       }
     ]

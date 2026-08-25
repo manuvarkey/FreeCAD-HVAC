@@ -57,4 +57,7 @@ def solve_flow_components(net_obj):
     """
     network_model, segment_map, junction_map, component_map = _analysis_adapter.build_network_model(net_obj)
     components, warnings = _flow.solve_flow_components(network_model)
+    warnings = _analysis_adapter.humanize_diagnostics(
+        warnings, segment_map, junction_map, component_map
+    )
     return network_model, segment_map, junction_map, component_map, components, warnings

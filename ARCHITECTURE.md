@@ -404,12 +404,11 @@ isn't loaded automatically just by activating the HVAC workbench.
 `TaskPanelNetworkTypeDefaults`, the "Network Defaults" command) for one
 `DefaultMaterial_<Role>` property per standardized `LayerRole` (not per
 library-defined layer id -- roles are the fixed, small vocabulary core
-owns), defaulted for the two roles every shipped single/dual-layer type
-actually uses (`structural_shell`/`thermal_insulation`, this addon's own
-Galvanized Steel/Nitrile Rubber cards,
-`utils/materials.GALVANIZED_STEEL_UUID`/`NITRILE_RUBBER_UUID`) the first
-time a network is created -- other roles start unset until a library's own
-construction layer declares a `default_material_role` for them.
+owns). Fresh networks seed flow surfaces and structural shells with
+Galvanised Steel, thermal insulation with closed-cell Nitrile Rubber,
+acoustic absorbers with open-cell Nitrile Rubber, acoustic liners with
+Perforated Galvanised Steel, and vapor barriers/outer jackets with
+Aluminium. Fire protection remains project-specific and unset.
 `core/_construction_schema.apply_default_layer_materials()` (called from
 `DuctSegment.applyTypeSchema()`/`DuctComponent.applyTypeSchema()` every
 time a type's construction schema is (re)established, not just once at

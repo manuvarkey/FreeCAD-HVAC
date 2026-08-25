@@ -41,7 +41,11 @@ from ..core.Segment import DuctSegment
 from ..core.Junction import DuctJunction, DuctJunctionVirtual
 from ..core.Component import DuctComponent
 from ..core import _construction_schema
-from ..library.construction import ALL_LAYER_ROLES, ROLE_STRUCTURAL_SHELL, ROLE_THERMAL_INSULATION, role_property_suffix
+from ..library.construction import (
+    ALL_LAYER_ROLES, ROLE_FLOW_SURFACE, ROLE_STRUCTURAL_SHELL,
+    ROLE_THERMAL_INSULATION, ROLE_ACOUSTIC_ABSORBER, ROLE_ACOUSTIC_LINER,
+    ROLE_VAPOR_BARRIER, ROLE_OUTER_JACKET, role_property_suffix,
+)
 
 
 class DuctManagedFolder:
@@ -90,7 +94,7 @@ class DuctManagedFolderViewProvider:
         pass
 
     def getIcon(self):
-        return hvaclib.get_icon_path("Folder.svg")  # optional
+        return hvaclib.get_icon_path("DuctsIcon.svg")
 
     def onDelete(self, vobj, subelements):
         obj = vobj.Object
@@ -348,10 +352,9 @@ class DuctNetwork:
         if not getattr(obj, "DefaultHeight", 0):
             obj.DefaultHeight = 100.0
 
-        # Only the two roles every shipped single/dual-layer type actually
-        # uses get a seeded default (same two cards a fresh network has
-        # always defaulted to); other roles start unset until a library's
-        # own construction layer declares a default_material_role for them.
+        # Seed the standard construction-role materials. Fire protection is
+        # intentionally left unset because its required system is project-
+        # and code-specific rather than one universal stock material.
         def _seed_role_default(role, uuid):
             prop_name = "DefaultMaterial_" + role_property_suffix(role)
             if getattr(getattr(obj, prop_name, None), "Name", ""):
@@ -362,6 +365,11 @@ class DuctNetwork:
 
         _seed_role_default(ROLE_STRUCTURAL_SHELL, hvac_materials.GALVANIZED_STEEL_UUID)
         _seed_role_default(ROLE_THERMAL_INSULATION, hvac_materials.NITRILE_RUBBER_UUID)
+        _seed_role_default(ROLE_FLOW_SURFACE, hvac_materials.GALVANIZED_STEEL_UUID)
+        _seed_role_default(ROLE_ACOUSTIC_ABSORBER, hvac_materials.NITRILE_RUBBER_OPEN_CELL_UUID)
+        _seed_role_default(ROLE_ACOUSTIC_LINER, hvac_materials.PERFORATED_GALVANIZED_STEEL_UUID)
+        _seed_role_default(ROLE_VAPOR_BARRIER, hvac_materials.ALUMINIUM_UUID)
+        _seed_role_default(ROLE_OUTER_JACKET, hvac_materials.ALUMINIUM_UUID)
 
         # -------------------------------------------------
         # Air properties used for airflow/pressure-drop calculation

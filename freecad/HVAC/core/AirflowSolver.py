@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from .FlowNetwork import FlowSolveError as AirflowSolveError
 from .FlowNetwork import solve_flow_components
 from ..analysis.pressure import K_DEFAULT, PressureSolver
+from . import _analysis_adapter
 
 
 @dataclass
@@ -96,7 +97,9 @@ class AirflowSolver:
 
         result = AirflowSolveResult(warnings=list(flow_warnings))
         trees, pressure_warnings = PressureSolver().solve(network_model, components)
-        result.warnings.extend(pressure_warnings)
+        result.warnings.extend(_analysis_adapter.humanize_diagnostics(
+            pressure_warnings, segment_map, junction_map, component_map
+        ))
 
         for tree in trees:
             result.components.append(
@@ -143,11 +146,14 @@ class AirflowSolver:
             obj.CalcTotalFlowRate = jres.total_flow_lps
             obj.CalcStaticPressure = jres.static_pressure_pa
             obj.IsFlowSource = jres.is_source
-            obj.CalcLossWarning = jres.warning
+            warning = _analysis_adapter.humanize_diagnostics(
+                [jres.warning], segment_map, junction_map, component_map
+            )[0] if jres.warning else ""
+            obj.CalcLossWarning = warning
 
             junc_results.append(JunctionResult(
                 key=node_id, obj=obj, total_flow_lps=jres.total_flow_lps,
-                static_pressure_pa=jres.static_pressure_pa, is_source=jres.is_source, warning=jres.warning,
+                static_pressure_pa=jres.static_pressure_pa, is_source=jres.is_source, warning=warning,
             ))
 
         # Per-Inline-component results -- written directly onto each

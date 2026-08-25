@@ -214,6 +214,7 @@ class HVACLibrary:
     label: str
     root_path: str
     generators_package: str = ""
+    default_construction: list[ConstructionLayerDef] = field(default_factory=list)
     types_by_id: dict = field(default_factory=dict)
     _index_dirty: bool = field(default=True, repr=False, compare=False)
     _model_match_index: dict = field(default_factory=dict, repr=False, compare=False)
@@ -812,12 +813,16 @@ class HVACLibraryRegistry:
         label = manifest.get("label", lib_id)
         generators_package = manifest.get("generators_package", "")
         type_roots = manifest.get("type_roots", ["types"])
+        default_construction = self._parse_construction_layers(
+            (manifest.get("default_construction", {}) or {}).get("layers", [])
+        )
 
         library = HVACLibrary(
             id=lib_id,
             label=label,
             root_path=lib_dir,
             generators_package=generators_package,
+            default_construction=default_construction,
         )
 
         for rel_root in type_roots:
@@ -837,7 +842,31 @@ class HVACLibraryRegistry:
                     continue
                 fpath = os.path.join(dirpath, fn)
                 type_def = self._load_type_def_file(fpath)
+                if not type_def.construction:
+                    type_def.construction = [
+                        ConstructionLayerDef(
+                            id=layer.id,
+                            roles=list(layer.roles),
+                            default_material_role=layer.default_material_role,
+                            default_material_uuid=layer.default_material_uuid,
+                            thickness_property=layer.thickness_property,
+                        )
+                        for layer in library.default_construction
+                    ]
                 library.add_type(type_def)
+
+    @staticmethod
+    def _parse_construction_layers(layers_raw):
+        return [
+            ConstructionLayerDef(
+                id=layer_raw["id"],
+                roles=list(layer_raw.get("roles", []) or []),
+                default_material_role=layer_raw.get("default_material_role"),
+                default_material_uuid=layer_raw.get("default_material_uuid"),
+                thickness_property=layer_raw.get("thickness_property"),
+            )
+            for layer_raw in (layers_raw or [])
+        ]
 
     def _load_type_def_file(self, filepath):
         """Parse one type-def JSON file into an HVACTypeDef -- a plain field-by-field mapping."""
@@ -893,17 +922,7 @@ class HVACLibraryRegistry:
         # single, roleless implicit layer with no features.
         construction_raw = raw.get("construction", {}) or {}
 
-        construction = []
-        for layer_raw in construction_raw.get("layers", []) or []:
-            construction.append(
-                ConstructionLayerDef(
-                    id=layer_raw["id"],
-                    roles=list(layer_raw.get("roles", []) or []),
-                    default_material_role=layer_raw.get("default_material_role"),
-                    default_material_uuid=layer_raw.get("default_material_uuid"),
-                    thickness_property=layer_raw.get("thickness_property"),
-                )
-            )
+        construction = self._parse_construction_layers(construction_raw.get("layers", []))
 
         features = []
         for feature_raw in construction_raw.get("features", []) or []:

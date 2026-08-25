@@ -15,6 +15,27 @@ from freecad.HVAC.core import Construction as construction_mod
 from freecad.HVAC.library.construction import ConstructionLayerDef, ConstructionFeatureDef
 
 
+class _Quantity:
+    def __init__(self, value):
+        self.Value = value
+
+    def getValueAs(self, unit):
+        return self
+
+
+class _PhysicalMaterial:
+    Name = "Material"
+
+    def __init__(self, **values):
+        self.values = values
+
+    def hasPhysicalProperty(self, name):
+        return name in self.values
+
+    def getPhysicalValue(self, name):
+        return _Quantity(self.values[name])
+
+
 class FakeObj:
     def __init__(self, library_id, type_id, layer_ids, shapes=None, materials=None):
         self.LibraryId = library_id
@@ -116,6 +137,41 @@ def test_layers_with_multiple_roles_are_returned_from_every_matching_query(monke
     assert liner is construction.flow_surface()
     assert liner.has_role("acoustic_liner")
     assert not liner.has_role("thermal_insulation")
+
+
+def test_construction_exposes_material_roughness_and_thermal_u_value(monkeypatch):
+    _patch_registry(monkeypatch, _FakeTypeDef([
+        ConstructionLayerDef(
+            id="casing", roles=["flow_surface", "structural_shell"],
+            thickness_property="Thickness",
+        ),
+        ConstructionLayerDef(
+            id="insulation", roles=["thermal_insulation"],
+            thickness_property="InsulationThickness",
+        ),
+    ]))
+    obj = FakeObj(
+        "smacna", "circular_straight", ["casing", "insulation"],
+        materials={
+            "casing": _PhysicalMaterial(HydraulicRoughness=0.09, ThermalConductivity=50.0),
+            "insulation": _PhysicalMaterial(ThermalConductivity=0.04),
+        },
+    )
+    obj.Thickness = 1.0
+    obj.InsulationThickness = 25.0
+
+    construction = construction_mod.construction_for(obj)
+
+    assert construction.hydraulic_roughness() == 0.09
+    expected_resistance = 0.001 / 50.0 + 0.025 / 0.04
+    assert abs(construction.overall_u_value() - 1.0 / expected_resistance) < 1e-9
+
+
+def test_construction_physical_queries_return_caller_fallback_when_unavailable():
+    construction = construction_mod.Construction([])
+    assert construction.hydraulic_roughness(0.15) == 0.15
+    assert construction.acoustic_impedance(default=412.0) == 412.0
+    assert construction.overall_u_value(default=0.0) == 0.0
 
 
 def test_construction_for_a_not_yet_migrated_type_has_no_roles(monkeypatch):

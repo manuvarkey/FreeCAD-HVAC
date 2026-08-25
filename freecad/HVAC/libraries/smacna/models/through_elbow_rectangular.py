@@ -1,7 +1,5 @@
 import math
 
-import Part
-
 HVAC_PARTSCRIPT_API = 1
 
 
@@ -11,39 +9,16 @@ def _inset_rectangular_port(api, port, thickness):
     every side) -- position/direction/profile are unchanged. Used to sweep
     the inner-bore wire alongside the outer-wall wire.
     """
-    width = api.port_width(port) - 2.0 * thickness
-    height = api.port_height(port) - 2.0 * thickness
-    if width <= 0.0 or height <= 0.0:
-        raise ValueError("Thickness is too large for port Width/Height")
-
-    out = api.copy_port(port)
-    params = dict(api.port_section_params(port))
-    params["Width"] = width
-    params["Height"] = height
-    out["section_params"] = params
-    return out
+    return api.inset_port_section(port, thickness)
 
 
 def _make_flange(api, position, inward_direction, thickness, duct_width, duct_height, flange_height, profile_x_axis):
-    outer_face = api.make_section_face(
-        profile="Rectangular",
-        section_params={
-            "Width": duct_width + 2.0 * flange_height,
-            "Height": duct_height + 2.0 * flange_height,
-        },
-        center=position,
-        direction=inward_direction,
-        profile_x_axis=profile_x_axis,
-    )
-    inner_face = api.make_section_face(
-        profile="Rectangular",
-        section_params={"Width": duct_width, "Height": duct_height},
-        center=position,
-        direction=inward_direction,
-        profile_x_axis=profile_x_axis,
-    )
-    extrusion = api.unit(inward_direction) * thickness
-    return outer_face.extrude(extrusion).cut(inner_face.extrude(extrusion))
+    port = {
+        "position": position, "direction": inward_direction, "profile": "Rectangular",
+        "section_params": {"Width": duct_width, "Height": duct_height},
+        "profile_x_axis": profile_x_axis,
+    }
+    return api.make_flange(port, inward_direction, thickness, flange_height)
 
 
 def generate(context):
@@ -86,59 +61,35 @@ def generate(context):
     if radius < size_hint / 2.0:
         radius = 0.6 * size_hint
 
-    # Symmetric tangent trim distance from the virtual corner (same
-    # derivation as generators/junctions.py:build_elbow).
-    trim = radius / math.tan(theta / 2.0)
-    c1, c2 = api.closest_points_on_lines(p0, u0 * -1.0, p1, u1 * -1.0)
-
-    s0 = c1 + (u0 * trim)
-    s1 = c2 + (u1 * trim)
-
-    trim0 = max(0.0, (s0 - p0).dot(u0))
-    trim1 = max(0.0, (s1 - p1).dot(u1))
-
-    arc_center = api.arc_center_from_points_tangents_radius(s0, s1, u0, u1, radius)
-    bisector = u0 + u1
-    if bisector.Length <= 1e-12:
-        raise ValueError("Elbow bisector is undefined")
-    bisector.normalize()
-    mid_point = arc_center - bisector * float(radius)
-
-    arc_edge = Part.Arc(s0, mid_point, s1).toShape()
-    path_wire = Part.Wire([arc_edge])
-
-    sweep_port_0 = api.copy_port(port0, position=s0)
-    sweep_port_1 = api.copy_port(port1, position=s1)
-
-    outer_wire_1 = api.make_section_wire_from_port(sweep_port_0)
-    outer_wire_2 = api.make_section_wire_from_port(sweep_port_1)
-    outer_shape = api.make_pipe_shell(path_wire, [outer_wire_1, outer_wire_2])
+    elbow = api.make_elbow(port0, port1, radius, thickness)
+    sweep_port_0, sweep_port_1 = elbow["ports"]
+    trim0, trim1 = elbow["trim_lengths"]
 
     # Hollow sheet-metal wall: sweep a second, uniformly-inset profile along
     # the *same* centerline arc and cut it from the outer sweep. Schematic
     # constant-cross-section-inset approximation, not a true constant-
     # thickness offset surface -- matches the fidelity used elsewhere in
     # this library (see generators/junctions.py:build_elbow).
-    inner_sweep_port_0 = _inset_rectangular_port(api, sweep_port_0, thickness)
-    inner_sweep_port_1 = _inset_rectangular_port(api, sweep_port_1, thickness)
-    inner_wire_1 = api.make_section_wire_from_port(inner_sweep_port_0)
-    inner_wire_2 = api.make_section_wire_from_port(inner_sweep_port_1)
-    inner_shape = api.make_pipe_shell(path_wire, [inner_wire_1, inner_wire_2])
-
-    parts = [outer_shape.cut(inner_shape)]
+    parts = [elbow["shape"]]
 
     # Flanges are extruded inward from each tangent plane, into the elbow's
     # own body (overlapping the wall), matching the straight-duct convention.
     # port_direction() points *away* from the junction, along the connected
-    # segment (see JunctionPort in NetworkParser.py) -- s0/s1 sit further out
-    # along u0/u1 than the fitting's interior, so "into the elbow" from each
-    # tangent plane is -u0 / -u1, not +u0/+u1.
+    # segment (see JunctionPort in NetworkParser.py). The primitive's trimmed
+    # ports sit further out along u0/u1 than the fitting's interior, so
+    # "into the elbow" from each tangent plane is -u0 / -u1.
     if show_flange1 and flange_height > 0.0 and flange_thickness > 0.0:
         profile_x0 = api.port_profile_x_axis(sweep_port_0)
-        parts.append(_make_flange(api, s0, u0 * -1.0, flange_thickness, w0, h0, flange_height, profile_x0))
+        parts.append(_make_flange(
+            api, api.port_position(sweep_port_0), u0 * -1.0,
+            flange_thickness, w0, h0, flange_height, profile_x0,
+        ))
     if show_flange2 and flange_height > 0.0 and flange_thickness > 0.0:
         profile_x1 = api.port_profile_x_axis(sweep_port_1)
-        parts.append(_make_flange(api, s1, u1 * -1.0, flange_thickness, w1, h1, flange_height, profile_x1))
+        parts.append(_make_flange(
+            api, api.port_position(sweep_port_1), u1 * -1.0,
+            flange_thickness, w1, h1, flange_height, profile_x1,
+        ))
 
     shape = api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
 

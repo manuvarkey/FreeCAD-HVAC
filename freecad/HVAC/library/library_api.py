@@ -1141,6 +1141,217 @@ class HVACLibraryAPI:
         except Exception:
             return out
 
+    @staticmethod
+    def inset_port_section(port, thickness):
+        """Copy ``port`` with its section uniformly inset by ``thickness`` mm."""
+        return HVACLibraryAPI.grow_port_section(port, -float(thickness))
+
+    @staticmethod
+    def make_flange(port, inward_direction, thickness, height):
+        """Build a flat annular flange collar around any supported port profile."""
+        thickness = float(thickness)
+        height = float(height)
+        if thickness <= 0.0 or height <= 0.0:
+            raise ValueError("Flange thickness and height must be > 0")
+        outer_port = HVACLibraryAPI.grow_port_section(port, height)
+        outer_face = HVACLibraryAPI.make_section_face_from_port(
+            HVACLibraryAPI.copy_port(outer_port, direction=inward_direction)
+        )
+        inner_face = HVACLibraryAPI.make_section_face_from_port(
+            HVACLibraryAPI.copy_port(port, direction=inward_direction)
+        )
+        extrusion = HVACLibraryAPI.unit(inward_direction) * thickness
+        return outer_face.extrude(extrusion).cut(inner_face.extrude(extrusion))
+
+    @staticmethod
+    def make_hollow_loft(ports, thickness, solid=True, ruled=True):
+        """Loft matching outer ports and subtract a uniform wall-thickness inset."""
+        ports = list(ports or [])
+        if len(ports) < 2:
+            raise ValueError("make_hollow_loft requires at least 2 ports")
+        outer = HVACLibraryAPI.make_loft(
+            [HVACLibraryAPI.make_section_wire_from_port(p) for p in ports], solid, ruled
+        )
+        inner = HVACLibraryAPI.make_loft(
+            [HVACLibraryAPI.make_section_wire_from_port(
+                HVACLibraryAPI.inset_port_section(p, thickness)
+            ) for p in ports], solid, ruled
+        )
+        return outer.cut(inner)
+
+    @staticmethod
+    def make_hollow_straight(start_point, end_point, profile, section_params,
+                             thickness, profile_x_axis=None):
+        """Build a constant-section straight with a uniform hollow wall."""
+        outer = HVACLibraryAPI.make_straight_shape(
+            start_point, end_point, profile, section_params, profile_x_axis
+        )
+        port = {
+            "position": start_point, "direction": HVACLibraryAPI.vec(end_point) - HVACLibraryAPI.vec(start_point),
+            "profile": profile, "section_params": dict(section_params),
+            "profile_x_axis": profile_x_axis,
+        }
+        inner_port = HVACLibraryAPI.inset_port_section(port, thickness)
+        inner = HVACLibraryAPI.make_straight_shape(
+            start_point, end_point, profile,
+            HVACLibraryAPI.port_section_params(inner_port), profile_x_axis,
+        )
+        return outer.cut(inner)
+
+    @staticmethod
+    def make_hollow_pipe_shell(path, ports, thickness):
+        """Sweep matching outer ports along ``path`` and subtract the inner sweep."""
+        ports = list(ports or [])
+        if len(ports) < 2:
+            raise ValueError("make_hollow_pipe_shell requires at least 2 ports")
+        outer = HVACLibraryAPI.make_pipe_shell(
+            path, [HVACLibraryAPI.make_section_wire_from_port(p) for p in ports]
+        )
+        inner = HVACLibraryAPI.make_pipe_shell(
+            path,
+            [HVACLibraryAPI.make_section_wire_from_port(
+                HVACLibraryAPI.inset_port_section(p, thickness)
+            ) for p in ports],
+        )
+        return outer.cut(inner)
+
+    @staticmethod
+    def make_elbow_path(port0, port1, radius):
+        """Create the tangent arc and trimmed ports for a two-port elbow.
+
+        Returns a dict containing ``path``, ``ports`` and ``trim_lengths``;
+        callers can feed the first two directly to ``make_pipe_shell`` or
+        ``make_hollow_pipe_shell``.
+        """
+        p0 = HVACLibraryAPI.port_position(port0)
+        p1 = HVACLibraryAPI.port_position(port1)
+        u0 = HVACLibraryAPI.port_direction(port0)
+        u1 = HVACLibraryAPI.port_direction(port1)
+        theta = HVACLibraryAPI.angle_between(u0, u1)
+        if theta <= 1e-6 or abs(theta - math.pi) <= 1e-6:
+            raise ValueError("Elbow requires non-collinear, non-opposite directions")
+        radius = float(radius)
+        if radius <= 0.0:
+            raise ValueError("Elbow radius must be > 0")
+        trim = radius / math.tan(theta / 2.0)
+        c0, c1 = HVACLibraryAPI.closest_points_on_lines(p0, u0 * -1.0, p1, u1 * -1.0)
+        s0 = c0 + u0 * trim
+        s1 = c1 + u1 * trim
+        center = HVACLibraryAPI.arc_center_from_points_tangents_radius(s0, s1, u0, u1, radius)
+        bisector = u0 + u1
+        if bisector.Length <= 1e-12:
+            raise ValueError("Elbow bisector is undefined")
+        bisector.normalize()
+        midpoint = center - bisector * radius
+        return {
+            "path": HVACLibraryAPI.arc_wire(s0, midpoint, s1),
+            "ports": [
+                HVACLibraryAPI.copy_port(port0, position=s0),
+                HVACLibraryAPI.copy_port(port1, position=s1),
+            ],
+            "trim_lengths": [
+                max(0.0, (s0 - p0).dot(u0)),
+                max(0.0, (s1 - p1).dot(u1)),
+            ],
+        }
+
+    @staticmethod
+    def make_elbow(port0, port1, radius, thickness=None):
+        """Build a solid or hollow elbow and return its shape/path/trim data."""
+        result = HVACLibraryAPI.make_elbow_path(port0, port1, radius)
+        if thickness is not None and float(thickness) > 0.0:
+            shape = HVACLibraryAPI.make_hollow_pipe_shell(
+                result["path"], result["ports"], thickness
+            )
+        else:
+            shape = HVACLibraryAPI.make_pipe_shell(
+                result["path"],
+                [HVACLibraryAPI.make_section_wire_from_port(p) for p in result["ports"]],
+            )
+        result["shape"] = shape
+        return result
+
+    @staticmethod
+    def make_tee(run_ports, branch_ports, thickness):
+        """Fuse a run loft and branch loft, then cut their fused inner voids."""
+        groups = [list(run_ports or []), list(branch_ports or [])]
+        if any(len(group) < 2 for group in groups):
+            raise ValueError("make_tee requires at least 2 ports in each loft")
+        outer_shapes = [
+            HVACLibraryAPI.make_loft(
+                [HVACLibraryAPI.make_section_wire_from_port(p) for p in group]
+            )
+            for group in groups
+        ]
+        inner_shapes = [
+            HVACLibraryAPI.make_loft(
+                [HVACLibraryAPI.make_section_wire_from_port(
+                    HVACLibraryAPI.inset_port_section(p, thickness)
+                ) for p in group]
+            )
+            for group in groups
+        ]
+        return HVACLibraryAPI.fuse_shapes(outer_shapes).cut(
+            HVACLibraryAPI.fuse_shapes(inner_shapes)
+        )
+
+    @staticmethod
+    def make_wye(ports, center, trim_lengths, thickness, center_inset=None):
+        """Build a hollow multi-leg wye/manifold around a common center."""
+        ports = list(ports or [])
+        trim_lengths = list(trim_lengths or [])
+        if len(ports) < 3 or len(trim_lengths) != len(ports):
+            raise ValueError("make_wye requires matching ports/trim lengths and at least 3 ports")
+        legs = [
+            HVACLibraryAPI.make_branch_leg(
+                port, center, trim, thickness, center_inset
+            )
+            for port, trim in zip(ports, trim_lengths)
+        ]
+        outer = HVACLibraryAPI.fuse_shapes([leg["outer_shape"] for leg in legs])
+        void = HVACLibraryAPI.fuse_shapes([leg["void_shape"] for leg in legs])
+        return {
+            "shape": outer.cut(void),
+            "outer_ports": [leg["outer_port"] for leg in legs],
+        }
+
+    @staticmethod
+    def make_branch_leg(port, center, trim_length, thickness=None, center_inset=None):
+        """Build one lofted leg from a duct-facing port towards a branch center.
+
+        Returns ``shape`` and the trimmed ``outer_port``.  With a positive
+        thickness the shape is hollow; otherwise it is a solid loft.
+        """
+        direction = HVACLibraryAPI.port_direction(port)
+        outer_port = HVACLibraryAPI.copy_port(
+            port,
+            position=HVACLibraryAPI.port_position(port) + direction * float(trim_length),
+        )
+        if center_inset is None:
+            params = HVACLibraryAPI.port_section_params(port)
+            size = max([float(v or 0.0) for v in params.values()] or [1.0])
+            center_inset = max(0.05 * size, 1.0)
+        inner_port = HVACLibraryAPI.copy_port(
+            port, position=HVACLibraryAPI.vec(center) - direction * float(center_inset)
+        )
+        leg_ports = [outer_port, inner_port]
+        outer_shape = HVACLibraryAPI.make_loft(
+            [HVACLibraryAPI.make_section_wire_from_port(p) for p in leg_ports]
+        )
+        void_shape = None
+        shape = outer_shape
+        if thickness is not None and float(thickness) > 0.0:
+            void_shape = HVACLibraryAPI.make_loft(
+                [HVACLibraryAPI.make_section_wire_from_port(
+                    HVACLibraryAPI.inset_port_section(p, thickness)
+                ) for p in leg_ports]
+            )
+            shape = outer_shape.cut(void_shape)
+        return {
+            "shape": shape, "outer_shape": outer_shape, "void_shape": void_shape,
+            "outer_port": outer_port, "inner_port": inner_port,
+        }
+
     # ------------------------------------------------------------------
     # Construction layer helpers
     # ------------------------------------------------------------------

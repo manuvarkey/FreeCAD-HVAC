@@ -2,10 +2,9 @@
 Focused tests for DuctNetwork's own default-value properties added for the
 multilayer construction feature: one Materials::PropertyMaterial property
 per standardized LayerRole (DefaultMaterial_<Role> -- see
-library/construction.py's ALL_LAYER_ROLES/role_property_suffix), seeded for
-the two roles every shipped single/dual-layer type actually uses
-(structural_shell/thermal_insulation, this addon's own Galvanized Steel/
-Nitrile Rubber cards) -- plus the Network.applyNetworkTypeDefaults()/
+library/construction.py's ALL_LAYER_ROLES/role_property_suffix), seeded with
+the stock material requested for each standard role (except project-specific
+fire protection) -- plus the Network.applyNetworkTypeDefaults()/
 applyMaterialSelection() callbacks that read/write them. See
 ARCHITECTURE.md's "Component geometry & materials" section.
 """
@@ -14,7 +13,11 @@ import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/Materials/MatG
 
 from freecad.HVAC.core import Network as network_mod
 from freecad.HVAC.core import _construction_schema
-from freecad.HVAC.library.construction import ALL_LAYER_ROLES, ROLE_STRUCTURAL_SHELL, ROLE_THERMAL_INSULATION, role_property_suffix
+from freecad.HVAC.library.construction import (
+    ALL_LAYER_ROLES, ROLE_FLOW_SURFACE, ROLE_STRUCTURAL_SHELL,
+    ROLE_THERMAL_INSULATION, ROLE_ACOUSTIC_ABSORBER, ROLE_ACOUSTIC_LINER,
+    ROLE_VAPOR_BARRIER, ROLE_OUTER_JACKET, role_property_suffix,
+)
 
 
 class FakeMaterial:
@@ -73,11 +76,17 @@ def test_setproperties_adds_one_default_material_property_per_role(monkeypatch):
     _patch_library_lookups(monkeypatch)
     steel = FakeMaterial("Galvanized-Steel")
     wool = FakeMaterial("Nitrile-Rubber")
+    open_cell = FakeMaterial("Nitrile-Rubber-Open-Cell")
+    perforated = FakeMaterial("Perforated-Galvanized-Steel")
+    aluminium = FakeMaterial("Aluminium")
 
     def fake_get_material_by_uuid(uuid):
         return {
             network_mod.hvac_materials.GALVANIZED_STEEL_UUID: steel,
             network_mod.hvac_materials.NITRILE_RUBBER_UUID: wool,
+            network_mod.hvac_materials.NITRILE_RUBBER_OPEN_CELL_UUID: open_cell,
+            network_mod.hvac_materials.PERFORATED_GALVANIZED_STEEL_UUID: perforated,
+            network_mod.hvac_materials.ALUMINIUM_UUID: aluminium,
         }.get(uuid)
 
     monkeypatch.setattr(network_mod.hvac_materials, "get_material_by_uuid", fake_get_material_by_uuid)
@@ -90,12 +99,14 @@ def test_setproperties_adds_one_default_material_property_per_role(monkeypatch):
         assert prop_name in obj.PropertiesList, prop_name
         assert obj._prop_attrs[prop_name] == 16  # Prop_NoRecompute
 
-    # Only the two roles every shipped single/dual-layer type actually uses
-    # get a seeded default -- everything else starts unset.
+    # Every role with a requested stock material gets its role-specific default.
+    assert getattr(obj, _default_material_prop(ROLE_FLOW_SURFACE)) is steel
     assert getattr(obj, _default_material_prop(ROLE_STRUCTURAL_SHELL)) is steel
     assert getattr(obj, _default_material_prop(ROLE_THERMAL_INSULATION)) is wool
-    other_role = next(r for r in ALL_LAYER_ROLES if r not in (ROLE_STRUCTURAL_SHELL, ROLE_THERMAL_INSULATION))
-    assert getattr(obj, _default_material_prop(other_role)) is None
+    assert getattr(obj, _default_material_prop(ROLE_ACOUSTIC_ABSORBER)) is open_cell
+    assert getattr(obj, _default_material_prop(ROLE_ACOUSTIC_LINER)) is perforated
+    assert getattr(obj, _default_material_prop(ROLE_VAPOR_BARRIER)) is aluminium
+    assert getattr(obj, _default_material_prop(ROLE_OUTER_JACKET)) is aluminium
 
 
 def test_setproperties_leaves_manually_assigned_default_materials_alone(monkeypatch):

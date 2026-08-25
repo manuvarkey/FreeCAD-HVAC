@@ -110,6 +110,9 @@ def test_default_material_uuids_match_the_shipped_cards():
     # loudly rather than silently defaulting new networks to no material.
     assert hvac_materials.GALVANIZED_STEEL_UUID == _card_uuid("Metal/Galvanized-Steel.FCMat")
     assert hvac_materials.NITRILE_RUBBER_UUID == _card_uuid("Insulation/Nitrile-Rubber.FCMat")
+    assert hvac_materials.NITRILE_RUBBER_OPEN_CELL_UUID == _card_uuid("Insulation/Nitrile-Rubber-Open-Cell.FCMat")
+    assert hvac_materials.PERFORATED_GALVANIZED_STEEL_UUID == _card_uuid("Metal/Perforated-Galvanized-Steel.FCMat")
+    assert hvac_materials.ALUMINIUM_UUID == _card_uuid("Metal/Aluminium.FCMat")
 
 
 def test_get_material_by_uuid_returns_manager_lookup(monkeypatch):
@@ -167,6 +170,11 @@ def test_get_physical_value_none_for_nan_value():
     # FreeCAD reports a modeled-but-never-set property as NaN, not missing.
     material = FakeMaterial(name="Steel", physical={"ThermalConductivity": FakeQuantity(float("nan"))})
     assert hvac_materials.get_physical_value(material, "ThermalConductivity") is None
+
+
+def test_stock_material_roughness_is_available_without_a_custom_material_schema():
+    assert hvac_materials.get_hydraulic_roughness_mm(FakeMaterial(name="Galvanised Steel")) == 0.09
+    assert hvac_materials.get_hydraulic_roughness_mm(FakeMaterial(name="Aluminium")) == 0.0015
 
 
 # ----------------------------------------------------------------------

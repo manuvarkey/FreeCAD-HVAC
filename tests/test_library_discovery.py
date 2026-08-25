@@ -87,7 +87,7 @@ def test_circular_acoustic_straight_declares_a_three_layer_construction():
     # isn't a material-bearing role the way "acoustic_liner" is.
     assert by_id["liner"].default_material_role == "acoustic_liner"
     assert by_id["absorber"].default_material_role == "acoustic_absorber"
-    assert by_id["jacket"].default_material_role == "structural_shell"
+    assert by_id["jacket"].default_material_role == "outer_jacket"
 
     # Lower priority than circular_straight (50) -- a real, manually-
     # selectable model type, but never displaces the plain casing+
@@ -109,3 +109,25 @@ def test_samples_library_holds_the_fcstd_and_static_diffuser_samples():
     assert diffuser is not None
     assert diffuser.geometry.backend == "static"
     assert os.path.isfile(os.path.join(samples.root_path, diffuser.geometry.descriptor))
+
+
+def test_every_shipped_type_has_a_role_bearing_material_construction():
+    reg = _load_registry()
+    for library in reg.list_libraries():
+        for type_def in library.types_by_id.values():
+            assert type_def.construction, "{}:{}".format(library.id, type_def.id)
+            assert all(layer.roles for layer in type_def.construction), (
+                library.id, type_def.id
+            )
+
+
+def test_every_declared_layer_thickness_property_is_in_dimensions_group():
+    reg = _load_registry()
+    for library in reg.list_libraries():
+        for type_def in library.types_by_id.values():
+            properties = {p.name: p for p in type_def.properties}
+            for layer in type_def.construction:
+                if layer.thickness_property:
+                    assert properties[layer.thickness_property].group == "Dimensions", (
+                        library.id, type_def.id, layer.thickness_property
+                    )

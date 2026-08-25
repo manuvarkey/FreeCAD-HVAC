@@ -31,21 +31,20 @@ name -- see freecad/HVAC/libraries/README.md's "Construction features"
 section for the full contract.
 """
 
-import Part
-
-
-def _make_flange_collar(position, inward_direction, thickness, duct_outer_diameter, flange_height):
+def _make_flange_collar(api, position, inward_direction, thickness, duct_outer_diameter, flange_height):
     """
     A flat, circular flange collar at `position`'s own cross-section,
     extruded `thickness` along `inward_direction` -- into the duct's own
     length (overlapping the wall), rather than protruding past the port
     into the neighboring segment/junction's space.
     """
-    outer = Part.makeCylinder(
-        duct_outer_diameter * 0.5 + flange_height, thickness, position, inward_direction
-    )
-    inner = Part.makeCylinder(duct_outer_diameter * 0.5, thickness, position, inward_direction)
-    return outer.cut(inner)
+    port = {
+        "position": position,
+        "direction": inward_direction,
+        "profile": "Circular",
+        "section_params": {"Diameter": duct_outer_diameter},
+    }
+    return api.make_flange(port, inward_direction, thickness, flange_height)
 
 
 def generate_transverse_flange(api, ctx):
@@ -72,9 +71,9 @@ def generate_transverse_flange(api, ctx):
 
     parts = []
     if show_flange1 and flange_height > 0.0 and flange_thickness > 0.0:
-        parts.append(_make_flange_collar(start, direction, flange_thickness, diameter, flange_height))
+        parts.append(_make_flange_collar(api, start, direction, flange_thickness, diameter, flange_height))
     if show_flange2 and flange_height > 0.0 and flange_thickness > 0.0:
-        parts.append(_make_flange_collar(end, direction * -1.0, flange_thickness, diameter, flange_height))
+        parts.append(_make_flange_collar(api, end, direction * -1.0, flange_thickness, diameter, flange_height))
 
     if not parts:
         return None
