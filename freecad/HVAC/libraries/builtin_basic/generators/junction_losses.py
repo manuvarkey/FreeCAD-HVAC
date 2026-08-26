@@ -36,9 +36,9 @@ generic default coefficient. Whatever is returned, these functions must not
 do any pressure-unit arithmetic themselves -- that's the solver's job.
 
 Elbow/transition/tee/wye losses are computed from real SMACNA/ASHRAE duct
-fitting tables via HVACLibraryAPI.elbow_loss/transition_loss/branch_loss
+fitting tables via HVACLossAPI.elbow_loss/transition_loss/branch_loss
 (see library/smacna_loss.py for the table data and its sourcing/accuracy
-caveats). Cross and multiport fittings use HVACLibraryAPI.manifold_loss,
+caveats). Cross and multiport fittings use HVACLossAPI.manifold_loss,
 which decomposes the junction into a sequence of the same tee/wye table
 lookups (no dedicated SMACNA table exists for 4+ port fittings) -- see its
 docstring for the single-trunk assumption and what falls back to the
@@ -53,7 +53,7 @@ def loss_through_generic(context):
     # generic), so it may be a bend, an area change, or both -- try the elbow
     # (CenterlineRadius-driven) reading first, then fall back to the
     # transition (area-change) reading.
-    api = context["hvac_api"]
+    api = context["loss_api"]
     result = api.elbow_loss(context)
     if result is not None:
         return result
@@ -61,38 +61,38 @@ def loss_through_generic(context):
 
 
 def loss_elbow_generic(context):
-    return context["hvac_api"].elbow_loss(context)
+    return context["loss_api"].elbow_loss(context)
 
 
 def loss_transition_generic(context):
-    return context["hvac_api"].transition_loss(context)
+    return context["loss_api"].transition_loss(context)
 
 
 def loss_tee_generic(context):
-    return context["hvac_api"].branch_loss(context)
+    return context["loss_api"].branch_loss(context)
 
 
 def loss_wye_generic(context):
-    return context["hvac_api"].branch_loss(context)
+    return context["loss_api"].branch_loss(context)
 
 
 def loss_cross_generic(context):
-    result = context["hvac_api"].manifold_loss(context)
+    result = context["loss_api"].manifold_loss(context)
     return result if result is not None else 0.75
 
 
 def loss_multiport_generic(context):
-    result = context["hvac_api"].manifold_loss(context)
+    result = context["loss_api"].manifold_loss(context)
     return result if result is not None else 1.0
 
 
 def loss_diffuser_generic(context):
-    return context["hvac_api"].terminal_component_loss(context)
+    return context["loss_api"].terminal_component_loss(context)
 
 
 def loss_damper_generic(context):
-    return context["hvac_api"].inline_device_loss(context)
+    return context["loss_api"].inline_device_loss(context)
 
 
 def loss_vav_generic(context):
-    return context["hvac_api"].inline_device_loss(context)
+    return context["loss_api"].inline_device_loss(context)

@@ -60,8 +60,8 @@ def build_rectangular_straight_fcstd(context):
         fcstd_path,
         context,
         params={
-            "Duct_Width": width,
-            "Duct_Height": height,
+            "Duct_Width": width + 2.0 * thickness,
+            "Duct_Height": height + 2.0 * thickness,
             "Duct_SheetThickness": thickness,
             "Flange_Height": flange_height,
             "Flange_Thickness": flange_thickness,

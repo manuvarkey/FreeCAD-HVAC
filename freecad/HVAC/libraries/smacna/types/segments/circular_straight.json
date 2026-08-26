@@ -17,7 +17,7 @@
       "name": "Diameter",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Circular duct diameter",
+      "description": "Clear-air duct diameter",
       "default": 100.0,
       "validation": {
         "exclusiveMinimum": 0.0

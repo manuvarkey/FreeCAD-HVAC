@@ -1,60 +1,36 @@
-from operator import itemgetter
-
-HVAC_PARTSCRIPT_API = 1
+HVAC_PARTSCRIPT_API = 2
 
 
 def generate(context):
-    """
-    Sample straight duct built from three concentric construction layers (see
-    the type-def's own "construction" block): a perforated liner facing
-    the airstream, an acoustic absorber fill, and an outer structural
-    jacket. Demonstrates HVACLibraryAPI.build_concentric_layers() -- no
-    special-casing needed in core/library_api.py beyond what circular_
-    straight.py/build_elbow already used for a plain casing+insulation
-    duct, just one more layer.
-    """
-    api, sp, ep, params = itemgetter("hvac_api", "start_point", "end_point", "params")(context)
-    profile_x_axis = context.get("profile_x_axis")
-
-    diameter = float(itemgetter("Diameter")(params))
-    liner_thickness = float(params.get("LinerThickness", 1.0) or 1.0)
-    absorber_thickness = float(params.get("AbsorberThickness", 25.0) or 25.0)
-    jacket_thickness = float(params.get("Thickness", 0.8) or 0.8)
-
-    start = api.vec(sp)
-    end = api.vec(ep)
+    api = context["hvac_api"]
+    p = dict(context.get("params") or context.get("properties") or {})
+    start = api.vec(context["start_point"])
+    end = api.vec(context["end_point"])
     axis = end - start
-    length = axis.Length
-    if length <= 1e-6:
-        raise ValueError("Circular acoustic straight requires non-zero length")
-    direction = api.unit(axis)
+    if axis.Length <= 1.0e-7:
+        raise ValueError("Acoustic straight duct length must be positive")
 
-    # Diameter is the liner's own inner bore (the flow surface) -- every
-    # layer's own offset is measured outward from that same nominal
-    # section, matching HVACLibraryAPI.build_concentric_layers()'s own
-    # "0 = nominal profile" convention.
-    base_port = {
-        "position": start,
-        "direction": direction,
-        "profile": "Circular",
-        "section_params": {"Diameter": diameter},
-        "profile_x_axis": profile_x_axis,
-    }
-    end_port = api.copy_port(base_port, position=end)
-
-    liner_shape, absorber_shape, jacket_shape = api.build_concentric_layers(
-        [base_port, end_port],
-        [
-            (0.0, liner_thickness),
-            (liner_thickness, liner_thickness + absorber_thickness),
-            (liner_thickness + absorber_thickness, liner_thickness + absorber_thickness + jacket_thickness),
-        ],
+    # Diameter is explicitly the clear-air diameter.
+    air = api.make_profile(
+        "Circular",
+        {"Diameter": p["Diameter"]},
+        center=start,
+        direction=axis,
+        profile_x_axis=context.get("profile_x_axis"),
     )
+    liner_t = max(float(p.get("LinerThickness", 0.0) or 0.0), 0.0)
+    absorber_t = max(float(p.get("AbsorberThickness", 0.0) or 0.0), 0.0)
+    jacket_t = max(float(p.get("JacketThickness", p.get("Thickness", 0.0)) or 0.0), 0.0)
 
-    return {
-        "layers": {
-            "liner": {"shape": liner_shape},
-            "absorber": {"shape": absorber_shape},
-            "jacket": {"shape": jacket_shape},
-        }
-    }
+    boundaries = [api.extrude(air, axis, solid=True)]
+    offsets = [liner_t, liner_t + absorber_t, liner_t + absorber_t + jacket_t]
+    for offset in offsets:
+        boundaries.append(api.extrude(api.offset_profile(air, offset), axis, solid=True))
+
+    layers = {}
+    names = ["liner", "absorber", "jacket"]
+    for i, name in enumerate(names, start=1):
+        if offsets[i - 1] - (offsets[i - 2] if i > 1 else 0.0) <= 1.0e-7:
+            continue
+        layers[name] = {"shape": api.refine(api.cut(boundaries[i], boundaries[i - 1]))}
+    return {"layers": layers}

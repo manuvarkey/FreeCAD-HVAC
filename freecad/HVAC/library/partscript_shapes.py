@@ -24,7 +24,7 @@ class PartScriptSchemaError(PartScriptError):
 
 
 _MODULE_CACHE = {}
-_PARTSCRIPT_API_VERSION = 1
+_PARTSCRIPT_API_VERSION = 2
 
 
 def _module_signature(path):

@@ -1,81 +1,50 @@
-# SPDX-License-Identifier: LGPL-2.1-or-later
-# SPDX-FileNotice: Part of the HVAC addon.
+"""SMACNA construction-feature generators.
 
-################################################################################
-#                                                                              #
-#   Copyright (c) 2026 Francisco Rosa                                          #
-#                                                                              #
-#   This addon is free software; you can redistribute it and/or modify it      #
-#   under the terms of the GNU Lesser General Public License as published      #
-#   by the Free Software Foundation; either version 2.1 of the License, or     #
-#   (at your option) any later version.                                        #
-#                                                                              #
-#   This addon is distributed in the hope that it will be useful,              #
-#   but WITHOUT ANY WARRANTY; without even the implied warranty of             #
-#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.                       #
-#                                                                              #
-#   See the GNU Lesser General Public License for more details.                #
-#                                                                              #
-#   You should have received a copy of the GNU Lesser General Public           #
-#   License along with this addon. If not, see https://www.gnu.org/licenses    #
-#                                                                              #
-################################################################################
-
-"""
-Construction feature generators for the smacna library -- resolved and
-invoked by HVACLibraryRegistry.build_geometry()'s own feature-generation
-pass (see freecad/HVAC/library/Library.py), never called directly by core.
-Every function here matches the generic `generate_<name>(api, ctx)`
-interface a type-def's own "construction.features" block references by
-name -- see freecad/HVAC/libraries/README.md's "Construction features"
-section for the full contract.
+All section dimensions supplied by the library are clear-air dimensions.  A
+feature attached to the sheet-metal casing therefore grows the port by the
+casing thickness before creating its geometry.
 """
 
-def _make_flange_collar(api, position, inward_direction, thickness, duct_outer_diameter, flange_height):
-    """
-    A flat, circular flange collar at `position`'s own cross-section,
-    extruded `thickness` along `inward_direction` -- into the duct's own
-    length (overlapping the wall), rather than protruding past the port
-    into the neighboring segment/junction's space.
-    """
-    port = {
-        "position": position,
-        "direction": inward_direction,
-        "profile": "Circular",
-        "section_params": {"Diameter": duct_outer_diameter},
-    }
-    return api.make_flange(port, inward_direction, thickness, flange_height)
+
+def _full_parameters(ctx):
+    full = dict(ctx.context.get("params") or ctx.context.get("properties") or {})
+    full.update(dict(ctx.parameters or {}))
+    return full
 
 
 def generate_transverse_flange(api, ctx):
-    """
-    Circular transverse-joint flange collar(s) at a straight duct's own two
-    port planes -- migrated from smacna/models/circular_straight.py's old
-    inline flange-fusing (now a standalone construction feature; see
-    smacna/types/segments/circular_straight.json's "construction.features"
-    block). Builds whichever of the two ports' collars ShowFlange1/
-    ShowFlange2 enables, as one compound shape (a feature always returns a
-    single Part.Shape or None -- see library/construction.py's
-    ConstructionFeatureDef/library/Library.py's build_geometry()).
-    """
-    params = ctx.parameters
-    diameter = float(params["Diameter"])
-    flange_height = float(params.get("FlangeHeight", 25.0) or 25.0)
-    flange_thickness = float(params.get("FlangeThickness", 1.0) or 1.0)
-    show_flange1 = bool(params.get("ShowFlange1", True))
-    show_flange2 = bool(params.get("ShowFlange2", True))
+    p = _full_parameters(ctx)
+    thickness = max(float(p.get("Thickness", 0.0) or 0.0), 0.0)
+    flange_t = max(float(p.get("FlangeThickness", 0.0) or 0.0), 0.0)
+    flange_h = max(float(p.get("FlangeHeight", 0.0) or 0.0), 0.0)
+    if flange_t <= 1.0e-7 or flange_h <= 1.0e-7:
+        return None
 
     start = api.vec(ctx.context["start_point"])
     end = api.vec(ctx.context["end_point"])
-    direction = api.unit(end - start)
+    axis = api.unit(end - start)
+    profile = str(p.get("Profile", "Circular"))
+    if profile == "Circular":
+        section = {"Diameter": float(p["Diameter"]) + 2.0 * thickness}
+    else:
+        section = {
+            "Width": float(p["Width"]) + 2.0 * thickness,
+            "Height": float(p["Height"]) + 2.0 * thickness,
+        }
 
-    parts = []
-    if show_flange1 and flange_height > 0.0 and flange_thickness > 0.0:
-        parts.append(_make_flange_collar(api, start, direction, flange_thickness, diameter, flange_height))
-    if show_flange2 and flange_height > 0.0 and flange_thickness > 0.0:
-        parts.append(_make_flange_collar(api, end, direction * -1.0, flange_thickness, diameter, flange_height))
-
-    if not parts:
+    port0 = {
+        "position": start,
+        "direction": axis * -1.0,
+        "profile": profile,
+        "section_params": section,
+        "profile_x_axis": ctx.context.get("profile_x_axis"),
+    }
+    port1 = api.copy_port(port0, position=end, direction=axis)
+    shapes = []
+    if bool(p.get("ShowFlange1", True)):
+        shapes.append(api.make_flange(port0, axis, flange_t, flange_h))
+    if bool(p.get("ShowFlange2", True)):
+        shapes.append(api.make_flange(port1, axis * -1.0, flange_t, flange_h))
+    if not shapes:
         return None
-
-    return api.fuse_shapes(parts) if len(parts) > 1 else parts[0]
+    return api.refine(api.fuse(*shapes))

@@ -54,7 +54,7 @@ def test_resolve_params_rejects_invalid_value():
 def test_partscript_optional_validate_and_generate(tmp_path):
     script = tmp_path / "model.py"
     script.write_text(
-        "HVAC_PARTSCRIPT_API = 1\n"
+        "HVAC_PARTSCRIPT_API = 2\n"
         "def validate(context):\n"
         "    if context['params']['D'] <= 0: raise ValueError('D')\n"
         "def generate(context):\n"
@@ -69,7 +69,7 @@ def test_partscript_optional_validate_and_generate(tmp_path):
 def test_partscript_accepts_layers_contract_with_one_real_shape_among_several(tmp_path):
     script = tmp_path / "model.py"
     script.write_text(
-        "HVAC_PARTSCRIPT_API = 1\n"
+        "HVAC_PARTSCRIPT_API = 2\n"
         "def generate(context):\n"
         "    return {'layers': {\n"
         "        'casing': {'shape': context['test_shape']},\n"
@@ -83,7 +83,7 @@ def test_partscript_accepts_layers_contract_with_one_real_shape_among_several(tm
 def test_partscript_rejects_layers_contract_with_no_real_shape_anywhere(tmp_path):
     script = tmp_path / "model.py"
     script.write_text(
-        "HVAC_PARTSCRIPT_API = 1\n"
+        "HVAC_PARTSCRIPT_API = 2\n"
         "def generate(context):\n"
         "    return {'layers': {'casing': {'shape': None}}}\n"
     )

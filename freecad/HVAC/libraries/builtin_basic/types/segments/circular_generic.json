@@ -2,8 +2,12 @@
   "id": "circular_generic",
   "label": "Circular Generic",
   "category": "segment",
-  "family": ["curved_segment"],
-  "profiles": ["Circular"],
+  "family": [
+    "curved_segment"
+  ],
+  "profiles": [
+    "Circular"
+  ],
   "selection": {
     "kind": "model",
     "priority": 50
@@ -13,7 +17,7 @@
       "name": "Diameter",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Circular duct diameter",
+      "description": "Clear-air duct diameter",
       "default": 100.0
     }
   ],

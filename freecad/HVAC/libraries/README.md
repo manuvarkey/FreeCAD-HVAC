@@ -84,7 +84,7 @@ Common fields, both segments and junctions:
 | `geometry` | `{"backend": "partscript"\|"static", "file"\|"descriptor": "..."}` |
 | `generator` | legacy alternative to `geometry`: `{"module": "...", "function": "..."}` |
 | `lengths_module` / `lengths_function` | optional, junctions: computes per-port trim lengths separately from the shape |
-| `loss_module` / `loss_function` | optional: fitting-loss coefficient function for the airflow solver |
+| `loss_module` / `loss_function` | optional: fitting-loss coefficient function for the airflow solver; its context provides `HVACLossAPI` as `context["loss_api"]` |
 
 Junctions additionally carry a `topology` field (see below).
 
@@ -167,12 +167,9 @@ single-wall duct's only layer is both `flow_surface` and
   its own volume).
 
 A type-def with no `"construction"` block at all (not yet migrated) behaves
-as a single, roleless implicit layer. Geometry backends compose whatever
-primitives they need to build each declared layer's own solid --
-`HVACLibraryAPI.build_concentric_layers` is the shared primitive for the
-common "N concentric shells around a shared set of ports" case (a wall,
-optionally wrapped by further layers growing inward/outward from it); see
-`freecad/HVAC/library/library_api.py`.
+as a single, roleless implicit layer. Geometry backends build each declared
+layer from `HVACLibraryAPI` profiles, offsets, sweeps, lofts, and boolean
+operations; see `freecad/HVAC/library/library_api.py`.
 
 Downstream code (materials, appearance, and airflow/acoustic/thermal/
 detailing) queries construction only by role, via

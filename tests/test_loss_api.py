@@ -6,7 +6,8 @@ import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs (
 
 from freecad.HVAC.analysis import physics as airflow
 from freecad.HVAC.library import smacna_loss
-from freecad.HVAC.library.library_api import HVACLibraryAPI as api
+from freecad.HVAC.library.library_api import HVACLibraryAPI as geometry_api
+from freecad.HVAC.library.loss_api import HVACLossAPI as api
 
 
 def _port(edge_key, direction, flow_into_junction, profile="Circular", diameter=None,
@@ -37,18 +38,18 @@ def _port(edge_key, direction, flow_into_junction, profile="Circular", diameter=
 def test_port_area_circular():
     port = _port("A", (1, 0, 0), False, profile="Circular", diameter=200.0)
     expected = airflow.circular_area(airflow.mm_to_m(200.0))
-    assert api.port_area(port) == pytest.approx(expected)
+    assert geometry_api.port_area(port) == pytest.approx(expected)
 
 
 def test_port_area_rectangular():
     port = _port("A", (1, 0, 0), False, profile="Rectangular", width=400.0, height=200.0)
     expected = airflow.rectangular_area(airflow.mm_to_m(400.0), airflow.mm_to_m(200.0))
-    assert api.port_area(port) == pytest.approx(expected)
+    assert geometry_api.port_area(port) == pytest.approx(expected)
 
 
 def test_port_area_missing_dimensions_is_zero():
     port = _port("A", (1, 0, 0), False, profile="Circular", diameter=0.0)
-    assert api.port_area(port) == 0.0
+    assert geometry_api.port_area(port) == 0.0
 
 
 # ----------------------------------------------------------------------------
@@ -427,7 +428,7 @@ def test_inline_device_loss_negative_coefficient_returns_none():
 
 def test_grow_port_section_circular_grows_diameter_by_twice_delta():
     port = _port("A", (1, 0, 0), False, profile="Circular", diameter=200.0)
-    grown = api.grow_port_section(port, 25.0)
+    grown = geometry_api.grow_port_section(port, 25.0)
     assert grown["section_params"]["Diameter"] == pytest.approx(250.0)
     # Position/direction/profile/edge_key are otherwise unchanged.
     assert grown["profile"] == "Circular"
@@ -436,14 +437,14 @@ def test_grow_port_section_circular_grows_diameter_by_twice_delta():
 
 def test_grow_port_section_rectangular_grows_width_and_height_by_twice_delta():
     port = _port("A", (1, 0, 0), False, profile="Rectangular", width=300.0, height=150.0)
-    grown = api.grow_port_section(port, 50.0)
+    grown = geometry_api.grow_port_section(port, 50.0)
     assert grown["section_params"]["Width"] == pytest.approx(400.0)
     assert grown["section_params"]["Height"] == pytest.approx(250.0)
 
 
 def test_grow_port_section_oval_grows_width_and_height_by_twice_delta():
     port = _port("A", (1, 0, 0), False, profile="Oval", width=300.0, height=150.0)
-    grown = api.grow_port_section(port, 50.0)
+    grown = geometry_api.grow_port_section(port, 50.0)
     assert grown["section_params"]["Width"] == pytest.approx(400.0)
     assert grown["section_params"]["Height"] == pytest.approx(250.0)
 
@@ -451,10 +452,10 @@ def test_grow_port_section_oval_grows_width_and_height_by_twice_delta():
 def test_grow_port_section_unsupported_profile_raises():
     port = _port("A", (1, 0, 0), False, profile="Weird")
     with pytest.raises(ValueError):
-        api.grow_port_section(port, 10.0)
+        geometry_api.grow_port_section(port, 10.0)
 
 
 def test_grow_port_section_does_not_mutate_original_port():
     port = _port("A", (1, 0, 0), False, profile="Circular", diameter=200.0)
-    api.grow_port_section(port, 25.0)
+    geometry_api.grow_port_section(port, 25.0)
     assert port["section_params"]["Diameter"] == 200.0

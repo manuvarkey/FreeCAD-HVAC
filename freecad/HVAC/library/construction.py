@@ -30,7 +30,7 @@ fill plus a perforated liner, ...). Library authors invent their own layer
 *ids* ("casing", "liner", "absorber", ...) and decide how many layers a type
 has and how they're geometrically built -- that recipe lives entirely in
 library JSON/generator code (see Library.py's "construction" type-def block
-and library_api.py's build_concentric_layers()).
+and the profiles, sweeps, lofts, and booleans in library_api.py).
 
 What core owns instead is the semantic *role* vocabulary below: the fixed,
 standardized set of physical roles a layer can play. Downstream code

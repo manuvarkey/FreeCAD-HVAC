@@ -21,41 +21,70 @@
 #                                                                              #
 ################################################################################
 
+"""Stable public helpers and geometry primitives for HVAC libraries.
+
+Library generators and PartScripts receive this class as
+``context["hvac_api"]``. The API is grouped from low-level, non-shape
+helpers through direct Part geometry operations to HVAC-specific convenience
+recipes. Library code must use this surface instead of importing FreeCAD,
+Part, or internal HVAC modules directly.
+"""
+
+from dataclasses import dataclass, field
 import math
+from typing import Any, Mapping
+
 import FreeCAD
 import Part
 
-from ..utils import hvaclib
 from ..analysis import physics as airflow
-from . import smacna_loss
+
+_EPS = 1.0e-7
+
+
+@dataclass(frozen=True)
+class HVACProfile:
+    """Immutable section description paired with its generated closed wire.
+
+    ``local_points`` is populated only for polygon profiles so analytical
+    offsets can be rebuilt in the same local two-dimensional frame.
+    """
+
+    profile: str
+    params: Mapping[str, Any]
+    center: Any
+    direction: Any
+    profile_x_axis: Any
+    wire: Any = field(repr=False)
+    local_points: tuple[tuple[float, float], ...] = ()
+
 
 class HVACLibraryAPI:
-    """
-    Stable public API for built-in and external HVAC generator libraries.
+    """Stable geometry and context API exposed to HVAC library code."""
 
-    External/user-defined libraries should use only this API surface instead of
-    importing internal HVAC modules directly.
-    """
-
-    API_VERSION = 1
-    EPS = 1e-9
+    API_VERSION = 2
+    EPS = 1.0e-9
 
     # ------------------------------------------------------------------
-    # Basic vector / numeric helpers
+    # Basic helpers: vectors, contexts, ports, and trim records
     # ------------------------------------------------------------------
+
     @staticmethod
     def vec(v):
+        """Return *v* as a FreeCAD vector."""
         if hasattr(v, "x"):
             return FreeCAD.Vector(v)
         return FreeCAD.Vector(*v)
 
     @staticmethod
     def xyz(v):
+        """Return a vector-like value as an ``(x, y, z)`` tuple."""
         vv = HVACLibraryAPI.vec(v)
         return (vv.x, vv.y, vv.z)
 
     @staticmethod
     def unit(v, eps=None):
+        """Return a normalized copy of *v*, rejecting a zero-length vector."""
         eps = HVACLibraryAPI.EPS if eps is None else float(eps)
         out = HVACLibraryAPI.vec(v)
         if out.Length <= eps:
@@ -65,11 +94,13 @@ class HVACLibraryAPI:
 
     @staticmethod
     def is_zero(v, eps=None):
+        """Return whether *v* is no longer than the requested tolerance."""
         eps = HVACLibraryAPI.EPS if eps is None else float(eps)
         return HVACLibraryAPI.vec(v).Length <= eps
 
     @staticmethod
     def angle_between(u1, u2):
+        """Return the smaller angle between two vectors in radians."""
         a = HVACLibraryAPI.unit(u1)
         b = HVACLibraryAPI.unit(u2)
         dot = max(-1.0, min(1.0, float(a.dot(b))))
@@ -77,6 +108,7 @@ class HVACLibraryAPI:
 
     @staticmethod
     def average_point(points):
+        """Return the arithmetic mean of points, or the origin for an empty input."""
         pts = list(points or [])
         if not pts:
             return FreeCAD.Vector(0, 0, 0)
@@ -84,7 +116,7 @@ class HVACLibraryAPI:
         for p in pts:
             s = s + HVACLibraryAPI.vec(p)
         return s * (1.0 / float(len(pts)))
-        
+
     @staticmethod
     def distance_between_lines(origin_i, dir_i, origin_j, dir_j):
         """
@@ -105,7 +137,7 @@ class HVACLibraryAPI:
     
         # Skew lines — |(w0 · (d_i × d_j))| / |d_i × d_j|
         return abs(w0.dot(cross)) / denom
-        
+
     @staticmethod
     def closest_points_on_lines(p0, d0, p1, d1):
         """
@@ -144,7 +176,7 @@ class HVACLibraryAPI:
         c0 = p0 + d0 * t
         c1 = p1 + d1 * s
         return c0, c1
-        
+
     @staticmethod
     def virtual_corner_for_lines(p0, u0, p1, u1):
         """
@@ -174,7 +206,8 @@ class HVACLibraryAPI:
             )
     
         return corner
-        
+
+    @staticmethod
     def arc_center_from_points_tangents_radius(p0, p1, u0, u1, radius):
         """
         Compute the center of a circular arc joining p0 -> p1 with given radius,
@@ -271,6 +304,7 @@ class HVACLibraryAPI:
     # ------------------------------------------------------------------
     # Context / port helpers
     # ------------------------------------------------------------------
+
     @staticmethod
     def center_from_context(context):
         """The junction's center point, or (if not given) the average of its connected ports' positions."""
@@ -284,26 +318,32 @@ class HVACLibraryAPI:
 
     @staticmethod
     def connected_ports(context):
+        """Return a copy of the context's connected-port list."""
         return list(context.get("connected_ports", []) or [])
-        
+
     @staticmethod
     def port_position(port):
+        """Return a port's position as a FreeCAD vector."""
         return HVACLibraryAPI.vec(port["position"])
 
     @staticmethod
     def port_direction(port):
+        """Return a port's outward direction as a unit vector."""
         return HVACLibraryAPI.unit(port["direction"])
 
     @staticmethod
     def port_profile(port):
+        """Return the normalized profile name stored on a port."""
         return str(port.get("profile", "") or "")
 
     @staticmethod
     def port_section_params(port):
+        """Return a copy of a port's section-parameter mapping."""
         return dict(port.get("section_params", {}) or {})
 
     @staticmethod
     def port_profile_x_axis(port):
+        """Return a port's profile x-axis, or ``None`` when it is unavailable."""
         v = port.get("profile_x_axis", None)
         if v is None:
             return None
@@ -312,16 +352,19 @@ class HVACLibraryAPI:
 
     @staticmethod
     def port_diameter(port):
+        """Return a circular port's diameter in millimetres, defaulting to zero."""
         params = HVACLibraryAPI.port_section_params(port)
         return float(params.get("Diameter", 0.0) or 0.0)
 
     @staticmethod
     def port_width(port):
+        """Return a rectangular or oval port's width in millimetres."""
         params = HVACLibraryAPI.port_section_params(port)
         return float(params.get("Width", 0.0) or 0.0)
 
     @staticmethod
     def port_height(port):
+        """Return a rectangular or oval port's height in millimetres."""
         params = HVACLibraryAPI.port_section_params(port)
         return float(params.get("Height", 0.0) or 0.0)
 
@@ -341,421 +384,6 @@ class HVACLibraryAPI:
                 return airflow.rectangular_area(airflow.mm_to_m(w), airflow.mm_to_m(h))
             return airflow.oval_area(airflow.mm_to_m(w), airflow.mm_to_m(h))
         return 0.0
-
-    # ------------------------------------------------------------------
-    # SMACNA/ASHRAE fitting-loss orchestration
-    #
-    # These methods glue a junction's "connected_ports" context (built by
-    # AirflowSolver.py) to the pure-math tables in smacna_loss.py: pulling
-    # out the geometry/flow numbers each table needs, picking round vs
-    # rectangular/oval formulas, and identifying which port is which leg of
-    # the fitting. They are defensive (return None on any missing/invalid
-    # data) so a malformed or partially-configured junction degrades to the
-    # solver's generic fallback coefficient rather than aborting the whole
-    # calculation -- see AirflowSolver.py Phase E / Library.py call_loss.
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def elbow_loss(context):
-        """
-        90 deg elbow fitting loss. Expects exactly 2 connected_ports (one
-        inlet, one outlet) and a "CenterlineRadius" entry in properties.
-        Returns {outlet_edge_key: K} or None.
-        """
-        try:
-            ports = HVACLibraryAPI.connected_ports(context)
-            if len(ports) != 2:
-                return None
-            outlet = next((p for p in ports if p.get("flow_into_junction") is False), None)
-            if outlet is None:
-                return None
-
-            radius = float((context.get("properties") or {}).get("CenterlineRadius", 0.0) or 0.0)
-            profile = HVACLibraryAPI.port_profile(outlet)
-
-            if profile == "Circular":
-                diameter = HVACLibraryAPI.port_diameter(outlet)
-                if diameter <= 0.0 or radius <= 0.0:
-                    return None
-                zeta = smacna_loss.elbow_zeta_round(radius / diameter)
-            elif profile in ("Rectangular", "Oval"):
-                width = HVACLibraryAPI.port_width(outlet)
-                height = HVACLibraryAPI.port_height(outlet)
-                if width <= 0.0 or height <= 0.0 or radius <= 0.0:
-                    return None
-                reynolds = float(outlet.get("reynolds", 0.0) or 0.0)
-                if reynolds <= 0.0:
-                    return None
-                zeta = smacna_loss.elbow_zeta_rect(height / width, radius / width, reynolds)
-            else:
-                return None
-
-            return {outlet["edge_key"]: zeta}
-        except Exception:
-            return None
-
-    @staticmethod
-    def transition_loss(context):
-        """
-        Area-change (expansion/contraction) transition fitting loss. Expects
-        exactly 2 connected_ports and a "TransitionLength" entry in
-        properties. Returns {outlet_edge_key: K} or None.
-        """
-        try:
-            ports = HVACLibraryAPI.connected_ports(context)
-            if len(ports) != 2:
-                return None
-            outlet = next((p for p in ports if p.get("flow_into_junction") is False), None)
-            inlet = next((p for p in ports if p.get("flow_into_junction") is True), None)
-            if outlet is None or inlet is None:
-                return None
-
-            area_out = HVACLibraryAPI.port_area(outlet)
-            area_in = HVACLibraryAPI.port_area(inlet)
-            if area_out <= 0.0 or area_in <= 0.0:
-                return None
-
-            area_ratio = max(area_in, area_out) / min(area_in, area_out)
-            if area_ratio <= 1.05:
-                # Essentially the same size on both sides (e.g. a lateral
-                # offset) -- SMACNA's tables start at an area ratio of 2:1
-                # and don't cover this case; treat as negligible loss rather
-                # than clamping to the table's (much larger) minimum entry.
-                return {outlet["edge_key"]: 0.0}
-
-            length_mm = float((context.get("properties") or {}).get("TransitionLength", 0.0) or 0.0)
-            if length_mm > 0.0:
-                d_eq_in = 2.0 * math.sqrt(area_in / math.pi)
-                d_eq_out = 2.0 * math.sqrt(area_out / math.pi)
-                theta_deg = math.degrees(
-                    2.0 * math.atan(abs(d_eq_out - d_eq_in) / (2.0 * airflow.mm_to_m(length_mm)))
-                )
-            else:
-                theta_deg = 180.0  # no transition length -> treat as an abrupt change
-            theta_deg = max(0.0, min(theta_deg, 180.0))
-
-            profile = HVACLibraryAPI.port_profile(outlet)
-            if area_out > area_in:
-                # Expanding (diverging): downstream duct is larger.
-                if profile == "Circular":
-                    reynolds = float(inlet.get("reynolds", 0.0) or 0.0)
-                    if reynolds <= 0.0:
-                        return None
-                    zeta = smacna_loss.expansion_zeta_round(theta_deg, area_ratio, reynolds)
-                else:
-                    zeta = smacna_loss.expansion_zeta_rect(theta_deg, area_ratio)
-            else:
-                # Contracting (converging): downstream duct is smaller.
-                zeta = smacna_loss.contraction_zeta(theta_deg, area_ratio)
-
-            return {outlet["edge_key"]: zeta}
-        except Exception:
-            return None
-
-    @staticmethod
-    def branch_loss(context):
-        """
-        Converging (merging) or diverging (splitting) tee/wye fitting loss.
-        Expects exactly 3 connected_ports: one "common"/trunk port (the sole
-        inlet if diverging, the sole outlet if converging) and two "secondary"
-        ports (branch + straight-through), identified by which secondary
-        port's direction is closest to anti-parallel with the common port's
-        direction (the straight-through continuation of the duct run).
-
-        Returns {branch_edge_key: K_branch, straight_edge_key: K_straight},
-        each already referenced to that leg's own velocity, or None.
-        """
-        try:
-            ports = HVACLibraryAPI.connected_ports(context)
-            if len(ports) != 3:
-                return None
-
-            inlets = [p for p in ports if p.get("flow_into_junction") is True]
-            outlets = [p for p in ports if p.get("flow_into_junction") is False]
-
-            if len(inlets) == 1 and len(outlets) == 2:
-                diverging = True
-                primary, secondaries = inlets[0], outlets
-            elif len(inlets) == 2 and len(outlets) == 1:
-                diverging = False
-                primary, secondaries = outlets[0], inlets
-            else:
-                return None  # ambiguous/degenerate flow pattern
-
-            primary_dir = HVACLibraryAPI.vec(primary["direction"])
-            sec_a, sec_b = secondaries
-            dot_a = primary_dir.dot(HVACLibraryAPI.vec(sec_a["direction"]))
-            dot_b = primary_dir.dot(HVACLibraryAPI.vec(sec_b["direction"]))
-            # Both port directions point away from the junction, so the leg
-            # that continues straight through sits opposite the primary leg
-            # (most negative dot product); the other secondary is the branch.
-            straight, branch = (sec_a, sec_b) if dot_a < dot_b else (sec_b, sec_a)
-
-            v_common = float(primary.get("velocity_ms", 0.0) or 0.0)
-            if v_common <= 1e-9:
-                return {branch["edge_key"]: 0.0, straight["edge_key"]: 0.0}
-
-            a_common = HVACLibraryAPI.port_area(primary)
-            a_branch = HVACLibraryAPI.port_area(branch)
-            if a_common <= 0.0 or a_branch <= 0.0:
-                return None
-
-            branch_dir = HVACLibraryAPI.vec(branch["direction"])
-            straight_dir = HVACLibraryAPI.vec(straight["direction"])
-            cos_angle = max(-1.0, min(1.0, branch_dir.dot(straight_dir)))
-            angle_deg = 180.0 - math.degrees(math.acos(cos_angle))
-
-            ab_on_ac = a_branch / a_common
-            vb_on_vc = float(branch.get("velocity_ms", 0.0) or 0.0) / v_common
-            vs_on_vc = float(straight.get("velocity_ms", 0.0) or 0.0) / v_common
-
-            if diverging:
-                zeta_branch, zeta_straight = smacna_loss.diverging_branch_zetas(
-                    angle_deg, ab_on_ac, vb_on_vc, vs_on_vc
-                )
-            else:
-                zeta_branch, zeta_straight = smacna_loss.converging_branch_zetas(
-                    angle_deg, ab_on_ac, vb_on_vc, vs_on_vc
-                )
-
-            return {branch["edge_key"]: zeta_branch, straight["edge_key"]: zeta_straight}
-        except Exception:
-            return None
-
-    @staticmethod
-    def manifold_loss(context):
-        """
-        Cross (4-port) or multiport (5+ port) fitting loss, for the common
-        single-trunk case: exactly one port on one flow side (all inlet, or
-        all outlet) and the rest ("secondaries") on the other side.
-
-        No dedicated SMACNA/ASHRAE table exists for 4+ port fittings, so this
-        decomposes the junction into a sequence of pairwise branch (tee/wye)
-        calculations, reusing the exact same diverging_branch_zetas /
-        converging_branch_zetas tables as branch_loss: secondaries are
-        peeled off one at a time, least-straight (most branch-like) first,
-        straightest last -- mirroring how a real header/manifold is
-        typically laid out (larger/sharper takeoffs nearer the main
-        connection, the straightest path continuing furthest). Each pairwise
-        step is referenced against the PRIMARY port's own duct size and
-        direction (and, for the branch-angle lookup, the straightest
-        secondary's direction) as a stand-in for the intermediate duct
-        geometry this addon doesn't actually model between successive
-        virtual merges/splits -- an approximation, not a literal per-leg
-        geometry readout. With exactly 2 secondaries this reduces to
-        exactly the same numbers as branch_loss's 3-port calculation.
-
-        Returns {edge_key: K, ...} covering every secondary port (each
-        already referenced to that leg's own velocity), or None for a mixed
-        multi-inlet/multi-outlet ("true cross") flow pattern -- which has no
-        single trunk to decompose against -- or on any missing/invalid
-        geometry.
-        """
-        try:
-            ports = HVACLibraryAPI.connected_ports(context)
-            if len(ports) < 3:
-                return None
-
-            inlets = [p for p in ports if p.get("flow_into_junction") is True]
-            outlets = [p for p in ports if p.get("flow_into_junction") is False]
-
-            if len(inlets) == 1:
-                diverging = True
-                primary, secondaries = inlets[0], outlets
-            elif len(outlets) == 1:
-                diverging = False
-                primary, secondaries = outlets[0], inlets
-            else:
-                return None  # mixed multi-in/multi-out: no single trunk to decompose
-
-            if len(secondaries) < 2:
-                return None
-
-            a_ref = HVACLibraryAPI.port_area(primary)
-            v_primary = float(primary.get("velocity_ms", 0.0) or 0.0)
-            if a_ref <= 0.0:
-                return None
-            if v_primary <= 1e-9:
-                return {p["edge_key"]: 0.0 for p in secondaries}
-            for p in secondaries:
-                if HVACLibraryAPI.port_area(p) <= 0.0:
-                    return None
-
-            primary_dir = HVACLibraryAPI.vec(primary["direction"])
-            # Least-straight (most branch-like) first, straightest (closest
-            # continuation of the primary direction) last -- same selection
-            # rule as branch_loss, generalized to N-1 secondaries.
-            ordered = sorted(
-                secondaries,
-                key=lambda p: primary_dir.dot(HVACLibraryAPI.vec(p["direction"])),
-                reverse=True,
-            )
-            # Reference direction for every branch-angle lookup: the
-            # straightest real secondary (matches branch_loss, which uses
-            # the "straight" port's own direction rather than the primary's).
-            straight_dir = HVACLibraryAPI.vec(ordered[-1]["direction"])
-
-            zeta_fn = smacna_loss.diverging_branch_zetas if diverging else smacna_loss.converging_branch_zetas
-            result = {}
-            m = len(ordered)
-
-            def _angle_deg(branch_port):
-                branch_dir = HVACLibraryAPI.vec(branch_port["direction"])
-                cos_angle = max(-1.0, min(1.0, branch_dir.dot(straight_dir)))
-                return 180.0 - math.degrees(math.acos(cos_angle))
-
-            if diverging:
-                remaining_flow_lps = float(primary.get("flow_rate_lps", 0.0) or 0.0)
-                for i in range(m - 1):
-                    branch = ordered[i]
-                    is_penultimate = (i == m - 2)
-                    branch_flow_lps = float(branch.get("flow_rate_lps", 0.0) or 0.0)
-                    after_flow_lps = remaining_flow_lps - branch_flow_lps
-
-                    v_common_step = airflow.velocity_from_flow(
-                        airflow.lps_to_m3s(remaining_flow_lps), a_ref
-                    )
-                    if v_common_step <= 1e-9:
-                        result[branch["edge_key"]] = 0.0
-                        remaining_flow_lps = after_flow_lps
-                        continue
-
-                    if is_penultimate:
-                        # What's left after this branch IS the last real
-                        # secondary -- use its own real velocity.
-                        v_after_step = float(ordered[-1].get("velocity_ms", 0.0) or 0.0)
-                    else:
-                        v_after_step = airflow.velocity_from_flow(
-                            airflow.lps_to_m3s(after_flow_lps), a_ref
-                        )
-
-                    ab_on_ac = HVACLibraryAPI.port_area(branch) / a_ref
-                    vb_on_vc = float(branch.get("velocity_ms", 0.0) or 0.0) / v_common_step
-                    vs_on_vc = v_after_step / v_common_step
-
-                    zeta_branch, zeta_after = zeta_fn(_angle_deg(branch), ab_on_ac, vb_on_vc, vs_on_vc)
-                    result[branch["edge_key"]] = zeta_branch
-                    if is_penultimate:
-                        result[ordered[-1]["edge_key"]] = zeta_after
-
-                    remaining_flow_lps = after_flow_lps
-            else:
-                # Mirror of the diverging loop: instead of a shrinking
-                # "remaining trunk", the reference here is a growing
-                # "accumulated so far" stream, seeded with the straightest
-                # secondary's own real flow (it is the fixed "main" duct
-                # that every other, less-straight secondary merges into,
-                # one at a time) and ending at the primary's real flow once
-                # the last (second-straightest) secondary has merged in.
-                main = ordered[-1]
-                v_main = float(main.get("velocity_ms", 0.0) or 0.0)
-                accumulated_flow_lps = float(main.get("flow_rate_lps", 0.0) or 0.0)
-                for i in range(m - 1):
-                    branch = ordered[i]
-                    is_last = (i == m - 2)
-                    branch_flow_lps = float(branch.get("flow_rate_lps", 0.0) or 0.0)
-                    accumulated_after_lps = accumulated_flow_lps + branch_flow_lps
-
-                    if is_last:
-                        # This merge produces the fully-combined stream -- use the primary's own real velocity.
-                        v_common_step = v_primary
-                    else:
-                        v_common_step = airflow.velocity_from_flow(
-                            airflow.lps_to_m3s(accumulated_after_lps), a_ref
-                        )
-                    if v_common_step <= 1e-9:
-                        result[branch["edge_key"]] = 0.0
-                        accumulated_flow_lps = accumulated_after_lps
-                        continue
-
-                    if i == 0:
-                        # Nothing has merged into main yet -- use its own real velocity.
-                        v_straight_side = v_main
-                    else:
-                        v_straight_side = airflow.velocity_from_flow(
-                            airflow.lps_to_m3s(accumulated_flow_lps), a_ref
-                        )
-
-                    ab_on_ac = HVACLibraryAPI.port_area(branch) / a_ref
-                    vb_on_vc = float(branch.get("velocity_ms", 0.0) or 0.0) / v_common_step
-                    vs_on_vc = v_straight_side / v_common_step
-
-                    zeta_branch, zeta_straight = zeta_fn(_angle_deg(branch), ab_on_ac, vb_on_vc, vs_on_vc)
-                    result[branch["edge_key"]] = zeta_branch
-                    if is_last:
-                        result[main["edge_key"]] = zeta_straight
-
-                    accumulated_flow_lps = accumulated_after_lps
-
-            return result
-        except Exception:
-            return None
-
-    @staticmethod
-    def terminal_component_loss(context):
-        """
-        Generic terminal air device (diffuser/grille/register) loss: a
-        dimensionless coefficient K (from properties["LossCoefficient"]),
-        referenced to velocity at the device's own neck
-        (properties["NeckSize"]) rather than the connecting duct's own
-        velocity -- the neck is often a different size than the duct feeding
-        it. Converted to a K_effective referenced to the connecting duct's
-        velocity (K_effective = K * (V_neck / V_duct)^2, since velocity
-        pressure ~ V^2 at constant density) so it composes with the solver's
-        existing K * velocity_pressure(duct) convention used for every other
-        fitting -- no special-casing needed downstream.
-
-        Expects exactly 1 connected port (a terminal). Returns
-        {edge_key: K_effective} or None if NeckSize/LossCoefficient aren't
-        set (nothing to compute) or the port geometry is invalid.
-        """
-        try:
-            ports = HVACLibraryAPI.connected_ports(context)
-            if len(ports) != 1:
-                return None
-            port = ports[0]
-
-            properties = context.get("properties") or {}
-            neck_size_mm = float(properties.get("NeckSize", 0.0) or 0.0)
-            k = float(properties.get("LossCoefficient", 0.0) or 0.0)
-            if neck_size_mm <= 0.0 or k <= 0.0:
-                return None
-
-            duct_velocity = float(port.get("velocity_ms", 0.0) or 0.0)
-            flow_lps = float(port.get("flow_rate_lps", 0.0) or 0.0)
-            if flow_lps <= 0.0 or duct_velocity <= 1e-9:
-                return {port["edge_key"]: 0.0}
-
-            neck_area_m2 = airflow.circular_area(airflow.mm_to_m(neck_size_mm))
-            neck_velocity_ms = airflow.velocity_from_flow(airflow.lps_to_m3s(flow_lps), neck_area_m2)
-
-            k_effective = k * (neck_velocity_ms / duct_velocity) ** 2
-            return {port["edge_key"]: k_effective}
-        except Exception:
-            return None
-
-    @staticmethod
-    def inline_device_loss(context):
-        """
-        Generic inline device (damper, VAV box, ...) loss: a single
-        dimensionless coefficient K taken directly from
-        properties["LossCoefficient"], applied uniformly by the solver to
-        the connecting duct's own velocity pressure. No neck-size
-        conversion is needed here (unlike terminal_component_loss) since
-        these devices carry the same duct through both ports rather than
-        stepping down to a separate neck size.
-
-        Returns a float K, or None if LossCoefficient isn't set (nothing
-        to compute -- falls back to the solver's generic default).
-        """
-        try:
-            properties = context.get("properties") or {}
-            k = float(properties.get("LossCoefficient", 0.0) or 0.0)
-            if k <= 0.0:
-                return None
-            return k
-        except Exception:
-            return None
 
     @staticmethod
     def copy_port(port, position=None, direction=None, profile_x_axis=None, edge_key=None, segment_end=None):
@@ -779,7 +407,7 @@ class HVACLibraryAPI:
         if segment_end is not None:
             out["segment_end"] = str(segment_end)
         return out
-    
+
     @staticmethod
     def grow_port_section(port, delta):
         """
@@ -838,7 +466,7 @@ class HVACLibraryAPI:
                 }
             )
         return out
-    
+
     def build_trim_rec_from_context_uniform(context, length_value):
         """Same as build_trim_rec_from_port_lengths, but trims every connected port by the same length_value."""
         ports = list(context.get("connected_ports", []) or [])
@@ -846,42 +474,64 @@ class HVACLibraryAPI:
 
 
     # ------------------------------------------------------------------
-    # Frame helpers
+    # Basic geometry: frames, profiles, solids, booleans, and topology
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _norm_profile_name(name):
+        """Return the canonical API name for a supported profile alias."""
+        key = str(name or "").strip().lower().replace("_", "").replace("-", "").replace(" ", "")
+        aliases = {
+            "rectangle": "Rectangular",
+            "rectangular": "Rectangular",
+            "circle": "Circular",
+            "circular": "Circular",
+            "oval": "Oval",
+            "flatoval": "Oval",
+            "roundedrectangle": "RoundedRectangle",
+            "roundrect": "RoundedRectangle",
+            "polygon": "Polygon",
+        }
+        if key not in aliases:
+            raise ValueError(f"Unsupported profile type: {name!r}")
+        return aliases[key]
+
     @staticmethod
     def make_profile_frame(direction, preferred_x=None, origin=None):
-        """Build a (placement, x_axis, y_axis, z_axis) frame with z along direction, for drawing a cross-section."""
-        return hvaclib.make_profile_frame(direction, preferred_x, origin)
+        """Build a right-handed section frame whose z-axis follows *direction*."""
+        z_axis = HVACLibraryAPI.unit(direction)
+        x_axis = None
+
+        if preferred_x is not None:
+            candidate = HVACLibraryAPI.vec(preferred_x)
+            if candidate.Length > HVACLibraryAPI.EPS:
+                candidate = candidate - z_axis * candidate.dot(z_axis)
+                if candidate.Length > HVACLibraryAPI.EPS:
+                    candidate.normalize()
+                    x_axis = candidate
+
+        if x_axis is None:
+            reference = FreeCAD.Vector(0, 0, 1)
+            if abs(z_axis.dot(reference)) > 0.99:
+                reference = FreeCAD.Vector(1, 0, 0)
+            x_axis = HVACLibraryAPI.unit(reference.cross(z_axis))
+
+        y_axis = HVACLibraryAPI.unit(z_axis.cross(x_axis))
+        x_axis = HVACLibraryAPI.unit(y_axis.cross(z_axis))
+
+        matrix = FreeCAD.Matrix()
+        matrix.A11, matrix.A12, matrix.A13 = x_axis.x, y_axis.x, z_axis.x
+        matrix.A21, matrix.A22, matrix.A23 = x_axis.y, y_axis.y, z_axis.y
+        matrix.A31, matrix.A32, matrix.A33 = x_axis.z, y_axis.z, z_axis.z
+        placement = FreeCAD.Placement(matrix)
+        if origin is not None:
+            placement.Base = HVACLibraryAPI.vec(origin)
+        return placement, x_axis, y_axis, z_axis
 
     # ------------------------------------------------------------------
     # Section/profile creation helpers
     # ------------------------------------------------------------------
-    @staticmethod
-    def make_line_edge(p0, p1):
-        """A straight Part.Edge between two points."""
-        v0 = HVACLibraryAPI.vec(p0)
-        v1 = HVACLibraryAPI.vec(p1)
 
-        if (v1.sub(v0)).Length <= 1e-9:
-            raise ValueError("Cannot create line edge from coincident points")
-
-        return Part.makeLine(v0, v1)
-
-    @staticmethod
-    def make_wire_from_edges(edges):
-        """Join a list of edges into one Part.Wire, skipping any None entries."""
-        edge_list = [e for e in (edges or []) if e is not None]
-
-        if not edge_list:
-            raise ValueError("make_wire_from_edges requires at least one edge")
-
-        wire = Part.Wire(edge_list)
-
-        if wire.isNull():
-            raise ValueError("Failed to create wire from edges")
-
-        return wire
-    
     @staticmethod
     def make_rectangular_wire(center, x_axis, y_axis, width, height):
         """A rectangular section wire, centered on `center` and aligned to x_axis/y_axis."""
@@ -909,7 +559,7 @@ class HVACLibraryAPI:
         r = float(diameter) * 0.5
         circle = Part.Circle(c, n, r)
         return Part.Wire([Part.Edge(circle)])
-        
+
     @staticmethod
     def make_oval_wire(center, x_axis, y_axis, width, height):
         """
@@ -998,7 +648,7 @@ class HVACLibraryAPI:
             return HVACLibraryAPI.make_oval_wire(center, x_axis, y_axis, width, height)
 
         raise ValueError("Unsupported profile '{}'".format(profile))
-        
+
     @staticmethod
     def make_section_wire_from_port(port):
         """make_section_wire, reading profile/center/direction/section_params straight from a port dict."""
@@ -1021,7 +671,7 @@ class HVACLibraryAPI:
             profile_x_axis=profile_x_axis,
         )
         return Part.Face(wire)
-    
+
     @staticmethod
     def make_section_face_from_port(port):
         """make_section_face, reading profile/center/direction/section_params straight from a port dict."""
@@ -1036,86 +686,6 @@ class HVACLibraryAPI:
     # ------------------------------------------------------------------
     # Straight solids
     # ------------------------------------------------------------------
-    @staticmethod
-    def make_straight_shape(start_point, end_point, profile, section_params, profile_x_axis=None):
-        """A straight duct solid: the cross-section at start_point, extruded to end_point."""
-        p1 = HVACLibraryAPI.vec(start_point)
-        p2 = HVACLibraryAPI.vec(end_point)
-        direction = p2 - p1
-        length = direction.Length
-        if length <= HVACLibraryAPI.EPS:
-            raise ValueError("Start and end points cannot be identical")
-
-        face = HVACLibraryAPI.make_section_face(
-            profile=profile,
-            section_params=section_params,
-            center=p1,
-            direction=direction,
-            profile_x_axis=profile_x_axis,
-        )
-        shape = face.extrude(HVACLibraryAPI.unit(direction) * length)
-
-        try:
-            return shape.removeSplitter()
-        except Exception:
-            return shape
-
-    # ------------------------------------------------------------------
-    # Sweep helpers
-    # ------------------------------------------------------------------
-    @staticmethod
-    def make_curved_shape(start_point, end_point, profile, section_params, path, profile_x_axis=None, direction = None):
-        """A duct solid swept along `path`: the cross-section at start_point, swept to end_point."""
-        p1 = HVACLibraryAPI.vec(start_point)
-        p2 = HVACLibraryAPI.vec(end_point)
-        if direction is None:
-            direction = p2 - p1
-        direction.normalize()
-
-        if (p2 - p1).Length <= HVACLibraryAPI.EPS:
-            raise ValueError("Start and end points cannot be identical")
-
-        section_wire = HVACLibraryAPI.make_section_wire(
-            profile=profile,
-            section_params=section_params,
-            center=p1,
-            direction=direction,
-            profile_x_axis=profile_x_axis,
-        )
-        path_wire = Part.Wire([path])
-        shape = HVACLibraryAPI.make_pipe_shell(
-            spine_wire=path_wire,
-            profile_wires=[section_wire],
-            make_solid=True,
-            is_frenet=False,
-        )
-        
-        try:
-            return shape.removeSplitter()
-        except Exception:
-            return shape
-            
-    @staticmethod
-    def make_pipe_shell(spine_wire, profile_wires, make_solid=True, is_frenet=False):
-        """Sweep one or more profile wires along spine_wire (thin wrapper over Part.BRepOffsetAPI.MakePipeShell)."""
-        shell = Part.BRepOffsetAPI.MakePipeShell(spine_wire)
-        for pw in profile_wires:
-            shell.add(pw)
-        shell.setFrenetMode(bool(is_frenet))
-        shell.build()
-        if make_solid:
-            shell.makeSolid()
-        return shell.shape()
-        
-    @staticmethod
-    def make_loft(profile_wires, solid=True, ruled=True):
-        """Loft a solid/shell through a sequence of profile wires (thin wrapper over Part.makeLoft)."""
-        return Part.makeLoft(profile_wires, bool(solid), bool(ruled))
-
-    @staticmethod
-    def line_wire(p1, p2):
-        """A single-edge wire, a straight line from p1 to p2."""
-        return Part.Wire([Part.makeLine(HVACLibraryAPI.vec(p1), HVACLibraryAPI.vec(p2))])
 
     @staticmethod
     def arc_wire(p1, pm, p2):
@@ -1127,24 +697,572 @@ class HVACLibraryAPI:
         ).toShape()
         return Part.Wire([edge])
 
-    @staticmethod
-    def fuse_shapes(shapes):
-        """Fuse a list of shapes into one solid, dropping any None entries and cleaning up the seams afterward."""
-        valid = [s for s in (shapes or []) if s is not None]
-        if not valid:
-            raise ValueError("No shapes to fuse")
-        out = valid[0]
-        for shp in valid[1:]:
-            out = out.fuse(shp)
-        try:
-            return out.removeSplitter()
-        except Exception:
-            return out
+    @classmethod
+    def make_profile(
+        cls,
+        profile_type,
+        params,
+        frame=None,
+        *,
+        center=None,
+        direction=None,
+        profile_x_axis=None,
+    ):
+        """Build a closed section wire in a local placement frame.
+
+        ``profile_type`` accepts rectangular, circular, oval, rounded-
+        rectangle, and polygon aliases. ``frame`` may be a mapping with
+        origin/normal/x-axis entries or a three-item sequence; explicit frame
+        keyword arguments fill any values omitted by a mapping.
+
+        Returns an :class:`HVACProfile`. Invalid or collapsed dimensions raise
+        ``ValueError``.
+        """
+        profile = cls._norm_profile_name(profile_type)
+        params = dict(params or {})
+
+        if frame is not None:
+            if isinstance(frame, Mapping):
+                center = frame.get("origin", frame.get("center", center))
+                direction = frame.get("normal", frame.get("direction", direction))
+                profile_x_axis = frame.get("x_axis", frame.get("profile_x_axis", profile_x_axis))
+            elif isinstance(frame, (tuple, list)) and len(frame) >= 3:
+                center, direction, profile_x_axis = frame[:3]
+
+        center = cls.vec(center or (0.0, 0.0, 0.0))
+        direction = cls.unit(direction or (0.0, 0.0, 1.0))
+        _, x_axis, y_axis, _ = cls.make_profile_frame(direction, profile_x_axis, center)
+
+        if profile in {"Rectangular", "Circular", "Oval"}:
+            wire = cls.make_section_wire(profile, params, center, direction, x_axis)
+            return HVACProfile(profile, params, center, direction, x_axis, wire)
+
+        if profile == "RoundedRectangle":
+            w = float(params.get("Width", params.get("width", 0.0)) or 0.0)
+            h = float(params.get("Height", params.get("height", 0.0)) or 0.0)
+            r = float(params.get("Radius", params.get("radius", 0.0)) or 0.0)
+            if w <= 0 or h <= 0:
+                raise ValueError("Rounded rectangle Width and Height must be positive")
+            if r < 0 or r > min(w, h) / 2.0 + _EPS:
+                raise ValueError("Rounded rectangle Radius must be between 0 and min(Width, Height)/2")
+            if r <= _EPS:
+                normalized = {"Width": w, "Height": h}
+                wire = cls.make_section_wire("Rectangular", normalized, center, direction, x_axis)
+                return HVACProfile("RoundedRectangle", {"Width": w, "Height": h, "Radius": 0.0}, center, direction, x_axis, wire)
+            wire = cls._rounded_rectangle_wire(center, x_axis, y_axis, w, h, r)
+            return HVACProfile("RoundedRectangle", {"Width": w, "Height": h, "Radius": r}, center, direction, x_axis, wire)
+
+        points = params.get("Points", params.get("points"))
+        if not points or len(points) < 3:
+            raise ValueError("Polygon requires at least three local 2D Points")
+        local = tuple((float(p[0]), float(p[1])) for p in points)
+        world = [center + x_axis * x + y_axis * y for x, y in local]
+        wire = Part.makePolygon(world + [world[0]])
+        return HVACProfile("Polygon", {"Points": local}, center, direction, x_axis, wire, local)
+
+    @classmethod
+    def profile_from_port(cls, port, offset=0.0):
+        """Build an ``HVACProfile`` from a library port.
+
+        A positive ``offset`` grows the port section uniformly before the
+        profile is built; a negative value shrinks it.
+        """
+        working = cls.grow_port_section(port, float(offset)) if abs(float(offset)) > _EPS else port
+        return cls.make_profile(
+            cls.port_profile(working),
+            cls.port_section_params(working),
+            center=cls.port_position(working),
+            direction=cls.port_direction(working),
+            profile_x_axis=cls.port_profile_x_axis(working),
+        )
+
+    @classmethod
+    def offset_profile(cls, profile, distance):
+        """Return a new profile offset uniformly in its local section plane.
+
+        Positive distances grow the clear-air boundary and negative distances
+        shrink it. The input must be an ``HVACProfile`` returned by this API.
+        """
+        if not isinstance(profile, HVACProfile):
+            raise TypeError("offset_profile() requires a profile returned by make_profile()")
+        d = float(distance)
+        p = dict(profile.params)
+        kind = profile.profile
+
+        if kind == "Circular":
+            diameter = float(p.get("Diameter", p.get("diameter", 0.0))) + 2.0 * d
+            if diameter <= _EPS:
+                raise ValueError("Profile offset collapses circular section")
+            p = {"Diameter": diameter}
+        elif kind in {"Rectangular", "Oval"}:
+            width = float(p.get("Width", p.get("width", 0.0))) + 2.0 * d
+            height = float(p.get("Height", p.get("height", 0.0))) + 2.0 * d
+            if width <= _EPS or height <= _EPS:
+                raise ValueError("Profile offset collapses section")
+            p = {"Width": width, "Height": height}
+        elif kind == "RoundedRectangle":
+            width = float(p["Width"]) + 2.0 * d
+            height = float(p["Height"]) + 2.0 * d
+            radius = float(p["Radius"]) + d
+            if width <= _EPS or height <= _EPS or radius < -_EPS:
+                raise ValueError("Profile offset collapses rounded rectangle")
+            p = {"Width": width, "Height": height, "Radius": max(0.0, radius)}
+        elif kind == "Polygon":
+            p = {"Points": cls._offset_polygon(profile.local_points, d)}
+        else:
+            raise ValueError(f"Unsupported profile offset: {kind}")
+
+        return cls.make_profile(
+            kind,
+            p,
+            center=profile.center,
+            direction=profile.direction,
+            profile_x_axis=profile.profile_x_axis,
+        )
 
     @staticmethod
-    def inset_port_section(port, thickness):
-        """Copy ``port`` with its section uniformly inset by ``thickness`` mm."""
-        return HVACLibraryAPI.grow_port_section(port, -float(thickness))
+    def _offset_polygon(points, distance):
+        """Offset a simple polygon by intersecting adjacent shifted edges."""
+        pts = [(float(x), float(y)) for x, y in points]
+        n = len(pts)
+        area2 = sum(pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1] for i in range(n))
+        if abs(area2) <= _EPS:
+            raise ValueError("Polygon profile has zero area")
+        # For CCW polygon, interior lies left of edges, so outward is right.
+        sign = 1.0 if area2 > 0.0 else -1.0
+        shifted = []
+        for i in range(n):
+            x0, y0 = pts[i]
+            x1, y1 = pts[(i + 1) % n]
+            dx, dy = x1 - x0, y1 - y0
+            length = math.hypot(dx, dy)
+            if length <= _EPS:
+                raise ValueError("Polygon contains a zero-length edge")
+            nx, ny = sign * dy / length, -sign * dx / length
+            shifted.append(((x0 + nx * distance, y0 + ny * distance), (dx, dy)))
+
+        result = []
+        for i in range(n):
+            p1, d1 = shifted[(i - 1) % n]
+            p2, d2 = shifted[i]
+            den = d1[0] * d2[1] - d1[1] * d2[0]
+            if abs(den) <= _EPS:
+                # Parallel adjacent edges: use the second shifted vertex.
+                result.append(p2)
+                continue
+            qx, qy = p2[0] - p1[0], p2[1] - p1[1]
+            t = (qx * d2[1] - qy * d2[0]) / den
+            result.append((p1[0] + t * d1[0], p1[1] + t * d1[1]))
+        return tuple(result)
+
+    @staticmethod
+    def _rounded_rectangle_wire(center, x_axis, y_axis, width, height, radius):
+        """Build a rounded-rectangle wire, including capsule/circle limits."""
+        hw, hh, r = width / 2.0, height / 2.0, radius
+        s2 = math.sqrt(0.5)
+
+        def v(x, y):
+            """Map local profile coordinates into the world-space frame."""
+            return center + x_axis * x + y_axis * y
+
+        edges = []
+
+        def add_line(start, end):
+            """Append a non-degenerate straight side to the boundary."""
+            # Maximum corner radii legitimately collapse one or both pairs of
+            # straight sides. OCC rejects a zero-length Part edge.
+            if (end - start).Length > _EPS:
+                edges.append(Part.makeLine(start, end))
+
+        add_line(v(-hw + r, hh), v(hw - r, hh))
+        edges.append(Part.Arc(v(hw - r, hh), v(hw - r + r * s2, hh - r + r * s2), v(hw, hh - r)).toShape())
+        add_line(v(hw, hh - r), v(hw, -hh + r))
+        edges.append(Part.Arc(v(hw, -hh + r), v(hw - r + r * s2, -hh + r - r * s2), v(hw - r, -hh)).toShape())
+        add_line(v(hw - r, -hh), v(-hw + r, -hh))
+        edges.append(Part.Arc(v(-hw + r, -hh), v(-hw + r - r * s2, -hh + r - r * s2), v(-hw, -hh + r)).toShape())
+        add_line(v(-hw, -hh + r), v(-hw, hh - r))
+        edges.append(Part.Arc(v(-hw, hh - r), v(-hw + r - r * s2, hh - r + r * s2), v(-hw + r, hh)).toShape())
+        return Part.Wire(edges)
+
+    # ------------------------------------------------------------------
+    # Surface / solid construction
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _wire(profile_or_wire):
+        """Return a profile's wire and normalize a single edge to a wire."""
+        shape = profile_or_wire.wire if isinstance(profile_or_wire, HVACProfile) else profile_or_wire
+        if getattr(shape, "ShapeType", "") == "Edge":
+            return Part.Wire([shape])
+        return shape
+
+    @classmethod
+    def extrude(cls, profile, vector, *, solid=False):
+        """Extrude a profile or wire along a nonzero vector.
+
+        With ``solid=True`` the wire is first converted to a face, producing a
+        solid extrusion. Otherwise the wire itself is extruded into a shell.
+        """
+        wire = cls._wire(profile)
+        vec = cls.vec(vector)
+        if vec.Length <= _EPS:
+            raise ValueError("Extrusion vector must be non-zero")
+        return Part.Face(wire).extrude(vec) if solid else wire.extrude(vec)
+
+    @classmethod
+    def sweep(cls, profiles, path, *, solid=False, frenet=False, transition=0):
+        """Sweep one or more section profiles along a path wire.
+
+        ``frenet`` and ``transition`` are forwarded to OCC's pipe-shell
+        builder. A failed, null, or non-solid result (when ``solid=True``)
+        raises ``RuntimeError`` with a stable library-facing message.
+        """
+        if not isinstance(profiles, (list, tuple)):
+            profiles = [profiles]
+        spine = cls._wire(path)
+        wires = [cls._wire(profile) for profile in profiles]
+        try:
+            shape = spine.makePipeShell(
+                wires,
+                bool(solid),
+                bool(frenet),
+                int(transition),
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Sweep failed: {exc}") from exc
+        if shape.isNull():
+            raise RuntimeError("Sweep returned a null shape")
+        if solid and not shape.Solids:
+            raise RuntimeError("Sweep failed to create a solid")
+        return shape
+
+    @classmethod
+    def loft(cls, profiles, *, solid=False, ruled=True, closed=False):
+        """Loft through at least two profiles and return the resulting shape."""
+        wires = [cls._wire(p) for p in profiles]
+        if len(wires) < 2:
+            raise ValueError("loft() requires at least two profiles")
+        return Part.makeLoft(wires, bool(solid), bool(ruled), bool(closed))
+
+    @classmethod
+    def revolve(cls, profile, axis, angle=360.0, *, solid=False):
+        """Revolve a profile around ``(origin, direction)`` by degrees.
+
+        ``axis`` may also be a mapping with ``origin`` and ``direction`` (or
+        ``axis``) entries. ``solid=True`` revolves the profile's filled face.
+        """
+        if isinstance(axis, Mapping):
+            origin = cls.vec(axis.get("origin", (0, 0, 0)))
+            direction = cls.unit(axis.get("direction", axis.get("axis", (0, 0, 1))))
+        else:
+            origin, direction = axis
+            origin, direction = cls.vec(origin), cls.unit(direction)
+        base = Part.Face(cls._wire(profile)) if solid else cls._wire(profile)
+        return base.revolve(origin, direction, float(angle))
+
+    @staticmethod
+    def transform(shape, transform):
+        """Return a transformed copy using a FreeCAD placement or matrix."""
+        out = shape.copy()
+        if isinstance(transform, FreeCAD.Placement):
+            out.Placement = transform.multiply(out.Placement)
+            return out
+        if isinstance(transform, FreeCAD.Matrix):
+            out.transformShape(transform, True)
+            return out
+        if hasattr(transform, "toMatrix"):
+            out.transformShape(transform.toMatrix(), True)
+            return out
+        raise TypeError("transform must be a FreeCAD.Placement or FreeCAD.Matrix")
+
+    # ------------------------------------------------------------------
+    # Trim / booleans
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def clip_plane(cls, shape, plane, side="positive"):
+        """Keep one half of ``shape`` relative to an infinite plane.
+
+        ``plane`` is ``(origin, normal)`` or a mapping. ``side`` accepts
+        positive/front/normal or negative/back/opposite aliases.
+        """
+        if isinstance(plane, Mapping):
+            origin = cls.vec(plane.get("origin", plane.get("point", (0, 0, 0))))
+            normal = cls.unit(plane.get("normal", (0, 0, 1)))
+        else:
+            origin, normal = plane
+            origin, normal = cls.vec(origin), cls.unit(normal)
+
+        side_key = str(side).strip().lower()
+        positive_aliases = {"positive", "+", "front", "normal"}
+        negative_aliases = {"negative", "-", "back", "opposite"}
+        if side_key not in positive_aliases | negative_aliases:
+            raise ValueError(f"Unsupported clip-plane side: {side}")
+
+        bb = shape.BoundBox
+        extent = max(
+            bb.DiagonalLength if hasattr(bb, "DiagonalLength") else 0.0,
+            bb.XLength,
+            bb.YLength,
+            bb.ZLength,
+            1.0,
+        )
+        shape_center = cls.vec(
+            (
+                (bb.XMin + bb.XMax) / 2.0,
+                (bb.YMin + bb.YMax) / 2.0,
+                (bb.ZMin + bb.ZMax) / 2.0,
+            )
+        )
+        signed_distance = (shape_center - origin).dot(normal)
+        plane_center = shape_center - normal * signed_distance
+        size = extent * 4.0
+        depth = abs(signed_distance) + extent * 2.0
+        _, x_axis, y_axis, _ = cls.make_profile_frame(normal, None, origin)
+        corner = plane_center - x_axis * (size / 2.0) - y_axis * (size / 2.0)
+        plane_face = Part.makePlane(size, size, corner, normal, x_axis)
+        positive = side_key in positive_aliases
+        # FreeCAD's Python Part module does not expose OCC's half-space
+        # builder consistently. Extruding a plane larger than the target's
+        # bounding box creates an equivalent bounded clipping solid.
+        half_space = plane_face.extrude(normal * (depth if positive else -depth))
+        return shape.common(half_space)
+
+    @classmethod
+    def trim(cls, shape, boundary, keep="inside"):
+        """Trim ``shape`` with a plane or another Part shape.
+
+        Shape boundaries support intersection (``inside``) and difference
+        (``outside``). Plane mappings use their own optional ``side`` value
+        and default to the positive half-space.
+        """
+        if isinstance(boundary, Mapping) and ("normal" in boundary or "plane" in boundary):
+            plane = boundary.get("plane", boundary)
+            return cls.clip_plane(shape, plane, boundary.get("side", "positive"))
+        mode = str(keep).lower()
+        if mode in {"inside", "common", "intersection"}:
+            return cls.common(shape, boundary)
+        if mode in {"outside", "cut", "difference"}:
+            return cls.cut(shape, boundary)
+        raise ValueError(f"Unsupported trim keep mode: {keep}")
+
+    @staticmethod
+    def _flatten_shapes(shapes):
+        """Flatten nested lists/tuples and discard null or missing shapes."""
+        result = []
+        for shape in shapes:
+            if shape is None:
+                continue
+            if isinstance(shape, (list, tuple)):
+                result.extend(HVACLibraryAPI._flatten_shapes(shape))
+            elif not shape.isNull():
+                result.append(shape)
+        return result
+
+    @classmethod
+    def fuse(cls, *shapes, refine=False):
+        """Fuse nested shape arguments, optionally removing splitters."""
+        items = cls._flatten_shapes(shapes)
+        if not items:
+            return Part.Shape()
+        result = items[0]
+        for item in items[1:]:
+            result = result.fuse(item)
+        return cls.refine(result) if refine else result
+
+    @classmethod
+    def cut(cls, shape, *tools, refine=False):
+        """Subtract each non-null tool from ``shape`` in argument order."""
+        result = shape
+        for tool in cls._flatten_shapes(tools):
+            result = result.cut(tool)
+        return cls.refine(result) if refine else result
+
+    @classmethod
+    def common(cls, *shapes, refine=False):
+        """Intersect nested shape arguments, optionally removing splitters."""
+        items = cls._flatten_shapes(shapes)
+        if not items:
+            return Part.Shape()
+        result = items[0]
+        for item in items[1:]:
+            result = result.common(item)
+        return cls.refine(result) if refine else result
+
+    # ------------------------------------------------------------------
+    # Topology
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def boundary(cls, shape):
+        """Return groups of edges used by only one face.
+
+        Closed solids normally return an empty list. Open shells return the
+        free edges grouped into connectable edge sequences by Part.
+        """
+        edge_use = {}
+        for face in shape.Faces:
+            for edge in face.Edges:
+                key = edge.hashCode(1000003)
+                edge_use[key] = (edge_use.get(key, [edge, 0])[0], edge_use.get(key, [edge, 0])[1] + 1)
+        free = [edge for edge, count in edge_use.values() if count == 1]
+        if not free:
+            return []
+        try:
+            return Part.sortEdges(free)
+        except Exception:
+            return [Part.Wire(free)]
+
+    @classmethod
+    def sew(cls, shapes, tolerance=1.0e-6, require_closed=False):
+        """Sew faces from one or more shapes using the requested tolerance.
+
+        Returns OCC's sewed result. ``require_closed=True`` raises when that
+        result is not closed; inputs containing no faces are rejected.
+        """
+        faces = []
+        for shape in cls._flatten_shapes(shapes):
+            if getattr(shape, "ShapeType", "") == "Face":
+                faces.append(shape)
+            else:
+                faces.extend(shape.Faces)
+        if not faces:
+            raise ValueError("sew() received no faces")
+
+        tol = float(tolerance)
+        if tol <= 0.0:
+            raise ValueError("sew() tolerance must be positive")
+        result = Part.makeCompound(faces)
+        result.fixTolerance(tol)
+        sewed = result.sewShape()
+        # FreeCAD currently mutates the TopoShape and returns None, while
+        # accepting a returned shape keeps this compatible with other builds.
+        if sewed is not None:
+            result = sewed
+        if result is None or result.isNull():
+            raise RuntimeError("Sewing returned a null shape")
+        if require_closed and not result.isClosed():
+            raise ValueError("Sewn shell is not closed")
+        return result
+
+    @classmethod
+    def bridge_boundaries(cls, boundary_a, boundary_b):
+        """Create a face or ruled shell between two boundary wires.
+
+        Coplanar nested loops produce a planar rim. Other loop pairs fall
+        back to a ruled loft.
+        """
+        wa, wb = cls._wire(boundary_a), cls._wire(boundary_b)
+        # Preferred case: coplanar nested closed wires => planar annular/rim face.
+        try:
+            fa, fb = Part.Face(wa), Part.Face(wb)
+            if fa.Area >= fb.Area:
+                rim = fa.cut(fb)
+            else:
+                rim = fb.cut(fa)
+            if not rim.isNull() and rim.Area > _EPS:
+                return rim
+        except Exception:
+            pass
+        # General fallback for corresponding non-coplanar loops.
+        return Part.makeLoft([wa, wb], False, True, False)
+
+    @staticmethod
+    def reverse(shape):
+        """Return a copy with reversed topology orientation."""
+        out = shape.copy()
+        out.reverse()
+        return out
+
+    @classmethod
+    def solidify(cls, shell):
+        """Convert a closed shell to a validated solid.
+
+        Existing solids pass through unchanged. Null, open, or invalid inputs
+        raise ``ValueError``.
+        """
+        if shell.isNull():
+            raise ValueError("Cannot solidify a null shell")
+        if getattr(shell, "ShapeType", "") == "Solid":
+            result = shell
+        else:
+            if not shell.isClosed():
+                raise ValueError("Cannot solidify an open shell")
+            result = Part.Solid(shell)
+        cls.validate(result, raise_on_error=True, require_solid=True)
+        return result
+
+    # ------------------------------------------------------------------
+    # Finish / diagnostics / tiny common primitives
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def refine(shape):
+        """Remove boolean splitters when OCC can do so safely."""
+        if shape is None or shape.isNull():
+            return shape
+        try:
+            return shape.removeSplitter()
+        except Exception:
+            return shape
+
+    @staticmethod
+    def validate(shape, *, raise_on_error=False, require_solid=False):
+        """Return a stable diagnostic dictionary for a Part shape.
+
+        Set ``require_solid`` to treat shapes without solids as invalid and
+        ``raise_on_error`` to raise ``ValueError`` instead of only reporting
+        accumulated messages.
+        """
+        errors = []
+        null = shape is None or shape.isNull()
+        valid = False if null else bool(shape.isValid())
+        if null:
+            errors.append("null shape")
+        elif not valid:
+            errors.append("Part shape is invalid")
+        solid_count = 0 if null else len(shape.Solids)
+        if require_solid and solid_count < 1:
+            errors.append("shape contains no solid")
+        closed = False if null else (shape.isClosed() if hasattr(shape, "isClosed") else None)
+        result = {
+            "valid": not errors,
+            "shape_type": None if null else shape.ShapeType,
+            "null": null,
+            "closed": closed,
+            "solid_count": solid_count,
+            "volume": 0.0 if null else float(getattr(shape, "Volume", 0.0) or 0.0),
+            "errors": errors,
+        }
+        if raise_on_error and errors:
+            raise ValueError("; ".join(errors))
+        return result
+
+    @classmethod
+    def make_sphere(cls, center, diameter):
+        """Create a sphere from its center and positive diameter."""
+        d = float(diameter)
+        if d <= _EPS:
+            raise ValueError("Sphere diameter must be positive")
+        return Part.makeSphere(d / 2.0, cls.vec(center))
+
+    @classmethod
+    def make_line(cls, start, end):
+        """Create a line edge between two distinct points."""
+        start_point = cls.vec(start)
+        end_point = cls.vec(end)
+        if (end_point - start_point).Length <= _EPS:
+            raise ValueError("Line endpoints must be distinct")
+        return Part.makeLine(start_point, end_point)
+
+    @classmethod
+    def compound(cls, shapes):
+        """Create a compound from nested non-null shape sequences."""
+        return Part.makeCompound(cls._flatten_shapes(shapes))
+
+    # ------------------------------------------------------------------
+    # Convenience functions: common HVAC recipes and external geometry
+    # ------------------------------------------------------------------
 
     @staticmethod
     def make_flange(port, inward_direction, thickness, height):
@@ -1164,64 +1282,12 @@ class HVACLibraryAPI:
         return outer_face.extrude(extrusion).cut(inner_face.extrude(extrusion))
 
     @staticmethod
-    def make_hollow_loft(ports, thickness, solid=True, ruled=True):
-        """Loft matching outer ports and subtract a uniform wall-thickness inset."""
-        ports = list(ports or [])
-        if len(ports) < 2:
-            raise ValueError("make_hollow_loft requires at least 2 ports")
-        outer = HVACLibraryAPI.make_loft(
-            [HVACLibraryAPI.make_section_wire_from_port(p) for p in ports], solid, ruled
-        )
-        inner = HVACLibraryAPI.make_loft(
-            [HVACLibraryAPI.make_section_wire_from_port(
-                HVACLibraryAPI.inset_port_section(p, thickness)
-            ) for p in ports], solid, ruled
-        )
-        return outer.cut(inner)
-
-    @staticmethod
-    def make_hollow_straight(start_point, end_point, profile, section_params,
-                             thickness, profile_x_axis=None):
-        """Build a constant-section straight with a uniform hollow wall."""
-        outer = HVACLibraryAPI.make_straight_shape(
-            start_point, end_point, profile, section_params, profile_x_axis
-        )
-        port = {
-            "position": start_point, "direction": HVACLibraryAPI.vec(end_point) - HVACLibraryAPI.vec(start_point),
-            "profile": profile, "section_params": dict(section_params),
-            "profile_x_axis": profile_x_axis,
-        }
-        inner_port = HVACLibraryAPI.inset_port_section(port, thickness)
-        inner = HVACLibraryAPI.make_straight_shape(
-            start_point, end_point, profile,
-            HVACLibraryAPI.port_section_params(inner_port), profile_x_axis,
-        )
-        return outer.cut(inner)
-
-    @staticmethod
-    def make_hollow_pipe_shell(path, ports, thickness):
-        """Sweep matching outer ports along ``path`` and subtract the inner sweep."""
-        ports = list(ports or [])
-        if len(ports) < 2:
-            raise ValueError("make_hollow_pipe_shell requires at least 2 ports")
-        outer = HVACLibraryAPI.make_pipe_shell(
-            path, [HVACLibraryAPI.make_section_wire_from_port(p) for p in ports]
-        )
-        inner = HVACLibraryAPI.make_pipe_shell(
-            path,
-            [HVACLibraryAPI.make_section_wire_from_port(
-                HVACLibraryAPI.inset_port_section(p, thickness)
-            ) for p in ports],
-        )
-        return outer.cut(inner)
-
-    @staticmethod
     def make_elbow_path(port0, port1, radius):
         """Create the tangent arc and trimmed ports for a two-port elbow.
 
-        Returns a dict containing ``path``, ``ports`` and ``trim_lengths``;
-        callers can feed the first two directly to ``make_pipe_shell`` or
-        ``make_hollow_pipe_shell``.
+        Returns a dict containing ``path``, tangent ``ports``, and
+        ``trim_lengths``. Callers can build matching offset profiles at those
+        ports and pass them to :meth:`sweep`.
         """
         p0 = HVACLibraryAPI.port_position(port0)
         p1 = HVACLibraryAPI.port_position(port1)
@@ -1256,164 +1322,6 @@ class HVACLibraryAPI:
         }
 
     @staticmethod
-    def make_elbow(port0, port1, radius, thickness=None):
-        """Build a solid or hollow elbow and return its shape/path/trim data."""
-        result = HVACLibraryAPI.make_elbow_path(port0, port1, radius)
-        if thickness is not None and float(thickness) > 0.0:
-            shape = HVACLibraryAPI.make_hollow_pipe_shell(
-                result["path"], result["ports"], thickness
-            )
-        else:
-            shape = HVACLibraryAPI.make_pipe_shell(
-                result["path"],
-                [HVACLibraryAPI.make_section_wire_from_port(p) for p in result["ports"]],
-            )
-        result["shape"] = shape
-        return result
-
-    @staticmethod
-    def make_tee(run_ports, branch_ports, thickness):
-        """Fuse a run loft and branch loft, then cut their fused inner voids."""
-        groups = [list(run_ports or []), list(branch_ports or [])]
-        if any(len(group) < 2 for group in groups):
-            raise ValueError("make_tee requires at least 2 ports in each loft")
-        outer_shapes = [
-            HVACLibraryAPI.make_loft(
-                [HVACLibraryAPI.make_section_wire_from_port(p) for p in group]
-            )
-            for group in groups
-        ]
-        inner_shapes = [
-            HVACLibraryAPI.make_loft(
-                [HVACLibraryAPI.make_section_wire_from_port(
-                    HVACLibraryAPI.inset_port_section(p, thickness)
-                ) for p in group]
-            )
-            for group in groups
-        ]
-        return HVACLibraryAPI.fuse_shapes(outer_shapes).cut(
-            HVACLibraryAPI.fuse_shapes(inner_shapes)
-        )
-
-    @staticmethod
-    def make_wye(ports, center, trim_lengths, thickness, center_inset=None):
-        """Build a hollow multi-leg wye/manifold around a common center."""
-        ports = list(ports or [])
-        trim_lengths = list(trim_lengths or [])
-        if len(ports) < 3 or len(trim_lengths) != len(ports):
-            raise ValueError("make_wye requires matching ports/trim lengths and at least 3 ports")
-        legs = [
-            HVACLibraryAPI.make_branch_leg(
-                port, center, trim, thickness, center_inset
-            )
-            for port, trim in zip(ports, trim_lengths)
-        ]
-        outer = HVACLibraryAPI.fuse_shapes([leg["outer_shape"] for leg in legs])
-        void = HVACLibraryAPI.fuse_shapes([leg["void_shape"] for leg in legs])
-        return {
-            "shape": outer.cut(void),
-            "outer_ports": [leg["outer_port"] for leg in legs],
-        }
-
-    @staticmethod
-    def make_branch_leg(port, center, trim_length, thickness=None, center_inset=None):
-        """Build one lofted leg from a duct-facing port towards a branch center.
-
-        Returns ``shape`` and the trimmed ``outer_port``.  With a positive
-        thickness the shape is hollow; otherwise it is a solid loft.
-        """
-        direction = HVACLibraryAPI.port_direction(port)
-        outer_port = HVACLibraryAPI.copy_port(
-            port,
-            position=HVACLibraryAPI.port_position(port) + direction * float(trim_length),
-        )
-        if center_inset is None:
-            params = HVACLibraryAPI.port_section_params(port)
-            size = max([float(v or 0.0) for v in params.values()] or [1.0])
-            center_inset = max(0.05 * size, 1.0)
-        inner_port = HVACLibraryAPI.copy_port(
-            port, position=HVACLibraryAPI.vec(center) - direction * float(center_inset)
-        )
-        leg_ports = [outer_port, inner_port]
-        outer_shape = HVACLibraryAPI.make_loft(
-            [HVACLibraryAPI.make_section_wire_from_port(p) for p in leg_ports]
-        )
-        void_shape = None
-        shape = outer_shape
-        if thickness is not None and float(thickness) > 0.0:
-            void_shape = HVACLibraryAPI.make_loft(
-                [HVACLibraryAPI.make_section_wire_from_port(
-                    HVACLibraryAPI.inset_port_section(p, thickness)
-                ) for p in leg_ports]
-            )
-            shape = outer_shape.cut(void_shape)
-        return {
-            "shape": shape, "outer_shape": outer_shape, "void_shape": void_shape,
-            "outer_port": outer_port, "inner_port": inner_port,
-        }
-
-    # ------------------------------------------------------------------
-    # Construction layer helpers
-    # ------------------------------------------------------------------
-    @staticmethod
-    def build_concentric_layers(anchor_ports, layer_offsets, path=None):
-        """
-        Build N concentric annular solids sharing the same anchor ports --
-        the generalized form of the tube-diff (straight ducts) / grow+sweep+
-        cut (swept fittings) pattern every casing+insulation generator used
-        to hand-roll separately before construction layers existed.
-
-        anchor_ports: the ports a single-profile duct/fitting is built
-            from (e.g. a straight segment's own start/end ports, or an
-            elbow's own two tangent-plane ports) -- at least 2, all sharing
-            the same profile/section_params.
-        layer_offsets: ordered list of (inner_offset, outer_offset) pairs in
-            mm, each measured outward from the anchor ports' own profile
-            (negative = inward -- e.g. a sheet-metal wall built by shrinking
-            in from the nominal duct size is (-thickness, 0); a wrap built
-            by growing outward is (0, +thickness)).
-        path: a Part.Wire to sweep the anchor ports' profiles along (for a
-            curved fitting); omit for a straight duct between exactly 2
-            anchor ports.
-
-        Returns one Part.Shape per entry in layer_offsets, in the same
-        order, each the annular solid between its own inner/outer bound
-        (grown-outer sweep minus grown-inner sweep, same boolean-cut
-        approach every existing casing/insulation generator already used).
-        """
-        anchors = list(anchor_ports or [])
-        if len(anchors) < 2:
-            raise ValueError("build_concentric_layers requires at least 2 anchor ports")
-
-        def solid_at_offset(offset):
-            grown = [HVACLibraryAPI.grow_port_section(p, offset) for p in anchors]
-            if path is None:
-                if len(grown) != 2:
-                    raise ValueError("build_concentric_layers without a path requires exactly 2 anchor ports")
-                return HVACLibraryAPI.make_straight_shape(
-                    start_point=HVACLibraryAPI.port_position(grown[0]),
-                    end_point=HVACLibraryAPI.port_position(grown[1]),
-                    profile=HVACLibraryAPI.port_profile(grown[0]),
-                    section_params=HVACLibraryAPI.port_section_params(grown[0]),
-                    profile_x_axis=HVACLibraryAPI.port_profile_x_axis(grown[0]),
-                )
-            wires = [HVACLibraryAPI.make_section_wire_from_port(p) for p in grown]
-            return HVACLibraryAPI.make_pipe_shell(path, wires)
-
-        layer_shapes = []
-        for inner_offset, outer_offset in layer_offsets:
-            if outer_offset <= inner_offset:
-                raise ValueError("build_concentric_layers requires outer_offset > inner_offset")
-            outer_solid = solid_at_offset(float(outer_offset))
-            inner_solid = solid_at_offset(float(inner_offset))
-            layer_shapes.append(outer_solid.cut(inner_solid))
-
-        return layer_shapes
-
-    # ------------------------------------------------------------------
-    # External geometry sources
-    # ------------------------------------------------------------------
-    @staticmethod
     def shape_from_fcstd(fcstd_path, context, params=None, result_object="Result",
                           port_names=None, tol_mm=0.5, tol_deg=0.5):
         """Build a shape from an FCStd template file (a parametric sketch-driven model) -- see template_shapes.py."""
@@ -1425,5 +1333,9 @@ class HVACLibraryAPI:
     @staticmethod
     def resolve_library_file(context, relative_path):
         """Resolve a path relative to the current type-def's own library folder (e.g. a data file it ships with)."""
+        # Lazy import keeps the public API independent from the registry's
+        # own import path while this module is being initialized.
+        from ..utils import hvaclib
+
         registry = hvaclib.HVACLibraryService.get_hvac_library_registry()
         return registry.resolve_library_file(context["library_id"], relative_path)

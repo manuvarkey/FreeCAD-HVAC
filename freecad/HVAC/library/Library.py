@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 import FreeCAD
 
 from .library_api import HVACLibraryAPI
+from .loss_api import HVACLossAPI
 from . import validation
 from . import geometry_result
 from .construction import ConstructionLayerDef, ConstructionFeatureDef, FeatureContext
@@ -587,6 +588,8 @@ class HVACLibraryRegistry:
         prepared = dict(context or {})
         prepared["hvac_api"] = HVACLibraryAPI
         prepared["hvac_api_version"] = HVACLibraryAPI.API_VERSION
+        prepared["loss_api"] = HVACLossAPI
+        prepared["loss_api_version"] = HVACLossAPI.API_VERSION
 
         params = prepared.get("params")
         if params is None:
@@ -746,6 +749,8 @@ class HVACLibraryRegistry:
             return None
         context["hvac_api"] = HVACLibraryAPI
         context["hvac_api_version"] = HVACLibraryAPI.API_VERSION
+        context["loss_api"] = HVACLossAPI
+        context["loss_api_version"] = HVACLossAPI.API_VERSION
         return func(context)
 
     def set_search_paths(self, paths):

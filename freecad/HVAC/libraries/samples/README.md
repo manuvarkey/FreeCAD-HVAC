@@ -7,8 +7,9 @@ minimal example of each before writing their own. `smacna` and `builtin_basic`
 ship the types actually meant for day-to-day use.
 
 There are three ways to wire geometry to a type-def. All three receive the same
-`context` dict (`hvac_api`, `library_id`, `start_point`/`end_point` for segments
-or `connected_ports` for junctions, `params`/`properties`, ...) and must return
+`context` dict (`hvac_api`, `loss_api`, `library_id`, `start_point`/`end_point`
+for segments or `connected_ports` for junctions, `params`/`properties`, ...)
+and must return
 one of:
 
 - `{"shape": <Part.Shape>}` -- the legacy, single-shape form. Fine for a type
@@ -28,20 +29,20 @@ the connected segments, exactly as before. See
 `LayerGeometry` contract every backend's return value is normalized into,
 `freecad/HVAC/library/Library.py:build_geometry` for the exact dispatch,
 and `freecad/HVAC/library/library_api.py` for the full `HVACLibraryAPI`
-surface available as `context["hvac_api"]` (including
-`build_concentric_layers`, a shared helper for building N concentric
-construction-layer solids around a shared set of anchor ports).
+surface available as `context["hvac_api"]`. Fitting-loss modules receive the
+separate `HVACLossAPI` surface as `context["loss_api"]`; see
+`freecad/HVAC/library/loss_api.py`.
 
 ## 1. PartScript (`"geometry": {"backend": "partscript", "file": "..."}`)
 
 A plain Python file, loaded and executed directly (`freecad/HVAC/library/partscript_shapes.py`),
-with full access to `import Part` / `import FreeCAD` and every `HVACLibraryAPI`
-primitive (`make_straight_shape`, `make_section_face`, `fuse_shapes`, boolean
-ops, ...). It must set `HVAC_PARTSCRIPT_API = 1` and define
+with access to every geometry primitive through `context["hvac_api"]`
+(`make_profile`, `sweep`, `loft`, boolean operations, ...). It must set
+`HVAC_PARTSCRIPT_API = 2` and define
 `generate(context) -> {"shape": ...}` (an optional `validate(context)` runs
 first if present). This is the preferred backend for new parametric types --
-no JSON schema beyond pointing at the file, and the model author has the same
-raw `Part` access a generator function has.
+no JSON schema beyond pointing at the file, and the model author uses the same
+public geometry API as a generator function.
 
 Example here: `types/segments/circular_acoustic_straight.json` ->
 `models/circular_acoustic_straight.py`. It demonstrates a PartScript that

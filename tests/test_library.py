@@ -6,6 +6,8 @@ import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 
 from freecad.HVAC.library.Library import HVACLibrary, HVACTypeDef, HVACLibraryRegistry
 from freecad.HVAC.library.construction import ConstructionLayerDef, ConstructionFeatureDef
+from freecad.HVAC.library.library_api import HVACLibraryAPI
+from freecad.HVAC.library.loss_api import HVACLossAPI
 
 
 def _type_def(id_, category, family, profiles=None):
@@ -123,6 +125,78 @@ def test_build_geometry_dispatches_legacy_generator_and_aliases_params_as_proper
         assert captured["properties"] is captured["params"]
     finally:
         sys.modules.pop("fake_hvac_lib_pkg.junctions", None)
+
+
+def test_build_geometry_injects_geometry_and_loss_apis():
+    fake_module = types.ModuleType("fake_hvac_lib_pkg.context_probe")
+    captured = {}
+
+    def build(context):
+        captured.update(context)
+        return {"shape": "SHAPE"}
+
+    fake_module.build = build
+    sys.modules["fake_hvac_lib_pkg.context_probe"] = fake_module
+    try:
+        lib = HVACLibrary(
+            id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg"
+        )
+        type_def = HVACTypeDef(
+            id="circular_straight",
+            label="Circular Straight",
+            category="segment",
+            topology="generic",
+            family=["straight_segment"],
+            generator_module="context_probe",
+            generator_function="build",
+        )
+        lib.add_type(type_def)
+        reg = HVACLibraryRegistry()
+        reg.register_library(lib)
+
+        reg.build_geometry("lib", type_def, {"params": {}})
+
+        assert captured["hvac_api"] is HVACLibraryAPI
+        assert captured["hvac_api_version"] == HVACLibraryAPI.API_VERSION
+        assert captured["loss_api"] is HVACLossAPI
+        assert captured["loss_api_version"] == HVACLossAPI.API_VERSION
+    finally:
+        sys.modules.pop("fake_hvac_lib_pkg.context_probe", None)
+
+
+def test_call_loss_injects_dedicated_loss_api():
+    fake_module = types.ModuleType("fake_hvac_lib_pkg.loss_probe")
+    captured = {}
+
+    def calculate(context):
+        captured.update(context)
+        return 0.25
+
+    fake_module.calculate = calculate
+    sys.modules["fake_hvac_lib_pkg.loss_probe"] = fake_module
+    try:
+        lib = HVACLibrary(
+            id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg"
+        )
+        type_def = HVACTypeDef(
+            id="through_elbow_generic",
+            label="Elbow",
+            category="junction",
+            topology="through",
+            family=["through.elbow"],
+            loss_module="loss_probe",
+            loss_function="calculate",
+        )
+        lib.add_type(type_def)
+        reg = HVACLibraryRegistry()
+        reg.register_library(lib)
+
+        assert reg.call_loss("lib", type_def, {}) == 0.25
+        assert captured["loss_api"] is HVACLossAPI
+        assert captured["loss_api_version"] == HVACLossAPI.API_VERSION
+        assert captured["hvac_api"] is HVACLibraryAPI
+    finally:
+        sys.modules.pop("fake_hvac_lib_pkg.loss_probe", None)
 
 
 def test_load_type_def_file_parses_generator_module_and_function(tmp_path):

@@ -1,79 +1,54 @@
-from operator import itemgetter
-
-HVAC_PARTSCRIPT_API = 1
-
-
-def _hollow_prism(api, sp, ep, outer_width, outer_height, inner_width, inner_height, profile_x_axis):
-    thickness = 0.5 * (outer_width - inner_width)
-    return api.make_hollow_straight(
-        sp, ep, "Rectangular", {"Width": outer_width, "Height": outer_height},
-        thickness, profile_x_axis,
-    )
-
-
-def _make_flange(api, position, inward_direction, thickness, duct_width, duct_height, flange_height, profile_x_axis):
-    port = {
-        "position": position, "direction": inward_direction, "profile": "Rectangular",
-        "section_params": {"Width": duct_width, "Height": duct_height},
-        "profile_x_axis": profile_x_axis,
-    }
-    return api.make_flange(port, inward_direction, thickness, flange_height)
+HVAC_PARTSCRIPT_API = 2
 
 
 def generate(context):
-    api, sp, ep, params = itemgetter("hvac_api", "start_point", "end_point", "params")(context)
-
-    width = float(itemgetter("Width")(params))
-    height = float(itemgetter("Height")(params))
-    thickness = float(params.get("Thickness", 0.8) or 0.8)
-    flange_height = float(params.get("FlangeHeight", 25.0) or 25.0)
-    flange_thickness = float(params.get("FlangeThickness", 1.0) or 1.0)
-    show_flange1 = bool(params.get("ShowFlange1", True))
-    show_flange2 = bool(params.get("ShowFlange2", True))
-    insulation_thickness = float(params.get("InsulationThickness", 0.0) or 0.0)
-    profile_x_axis = context.get("profile_x_axis")
-
-    start = api.vec(sp)
-    end = api.vec(ep)
+    api = context["hvac_api"]
+    p = dict(context.get("params") or context.get("properties") or {})
+    start = api.vec(context["start_point"])
+    end = api.vec(context["end_point"])
     axis = end - start
-    length = axis.Length
-    if length <= 1e-6:
-        raise ValueError("Rectangular straight (PartScript) requires non-zero length")
-    direction = api.unit(axis)
+    if axis.Length <= 1.0e-7:
+        raise ValueError("Rectangular straight duct length must be positive")
 
-    inner_width = width - 2.0 * thickness
-    inner_height = height - 2.0 * thickness
-    if inner_width <= 0.0 or inner_height <= 0.0:
-        raise ValueError("Rectangular straight Thickness is too large for Width/Height")
+    # Width/Height are the clear-air boundary dimensions.
+    air = api.make_profile(
+        "Rectangular",
+        {"Width": p["Width"], "Height": p["Height"]},
+        center=start,
+        direction=axis,
+        profile_x_axis=context.get("profile_x_axis"),
+    )
+    t = max(float(p.get("Thickness", 0.8) or 0.0), 0.0)
+    ins = max(float(p.get("InsulationThickness", 0.0) or 0.0), 0.0)
 
-    parts = [_hollow_prism(api, sp, ep, width, height, inner_width, inner_height, profile_x_axis)]
+    b0 = api.extrude(air, axis, solid=True)
+    b1 = api.extrude(api.offset_profile(air, t), axis, solid=True)
+    casing = api.refine(api.cut(b1, b0)) if t > 1.0e-7 else None
 
-    # Flanges are extruded inward from each port plane, into the duct's own
-    # length (overlapping the tube's wall), rather than protruding past the
-    # port into the neighboring segment/junction's space.
-    if show_flange1 and flange_height > 0.0 and flange_thickness > 0.0:
-        parts.append(
-            _make_flange(api, start, direction, flange_thickness, width, height, flange_height, profile_x_axis)
-        )
-    if show_flange2 and flange_height > 0.0 and flange_thickness > 0.0:
-        parts.append(
-            _make_flange(
-                api, end, direction * -1.0, flange_thickness, width, height, flange_height, profile_x_axis
-            )
-        )
+    layers = {"casing": {"shape": casing}}
+    if ins > 1.0e-7:
+        b2 = api.extrude(api.offset_profile(air, t + ins), axis, solid=True)
+        layers["insulation"] = {"shape": api.refine(api.cut(b2, b1))}
 
-    casing_shape = api.fuse_shapes(parts)
-    insulation_shape = None
-    if insulation_thickness > 0.0:
-        insulation_shape = api.make_hollow_straight(
-            start, end, "Rectangular",
-            {"Width": width + 2.0 * insulation_thickness, "Height": height + 2.0 * insulation_thickness},
-            insulation_thickness, profile_x_axis,
-        )
-
-    return {
-        "layers": {
-            "casing": {"shape": casing_shape},
-            "insulation": {"shape": insulation_shape},
+    # Preserve model-level rectangular flanges when the type exposes them.
+    ft = float(p.get("FlangeThickness", 0.0) or 0.0)
+    fh = float(p.get("FlangeHeight", 0.0) or 0.0)
+    if casing is not None and ft > 1.0e-7 and fh > 1.0e-7:
+        direction = api.unit(axis)
+        start_port = {
+            "position": start,
+            "direction": direction * -1.0,
+            "profile": "Rectangular",
+            "section_params": {"Width": p["Width"] + 2 * t, "Height": p["Height"] + 2 * t},
+            "profile_x_axis": context.get("profile_x_axis"),
         }
-    }
+        end_port = api.copy_port(start_port, position=end, direction=direction)
+        flanges = []
+        if bool(p.get("ShowFlange1", True)):
+            flanges.append(api.make_flange(start_port, direction, ft, fh))
+        if bool(p.get("ShowFlange2", True)):
+            flanges.append(api.make_flange(end_port, direction * -1.0, ft, fh))
+        if flanges:
+            layers["casing"]["shape"] = api.refine(api.fuse(casing, *flanges))
+
+    return {"layers": layers}

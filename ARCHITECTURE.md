@@ -55,7 +55,8 @@ it's kept accurate and up to date on purpose.
 | `core/Numbering.py` | `renumber_network()`: presentation-only D.../J.../J...-P/J...-NN documentation numbering, walked outward from a deterministic source terminal over the parser's analysis graph. Only ever runs when `HVAC_RenumberNetwork` is invoked — normal sync never renumbers. |
 | `library/Library.py` | `HVACTypeDef`/`HVACLibrary`/`HVACLibraryRegistry`: type-def loading, per-library match indexes, `select_type`/`matches_type`/`resolve_sticky_type`, geometry-backend dispatch (`build_geometry`, normalized to a `GeometryResult` -- see `library/geometry_result.py`). |
 | `library/validation.py` | Declarative property validation (`resolve_params`) and structural constraint checking (`context_violations`) — the same rules back both geometry execution and type matching. |
-| `library/library_api.py` | `HVACLibraryAPI` — the only interface generator/PartScript authors should use: ports, geometry primitives, loss-orchestration helpers. |
+| `library/library_api.py` | `HVACLibraryAPI` — the geometry interface generator/PartScript authors receive as `context["hvac_api"]`: basic context/port helpers, basic geometry, then HVAC convenience functions. |
+| `library/loss_api.py` | `HVACLossAPI` — fitting-loss orchestration exposed to library loss modules as `context["loss_api"]`; it converts library context into inputs for the pure loss tables. |
 | `utils/hvaclib.py` | `HVACLibraryService`: thin FreeCAD-facing facade over the registry (search paths, active library, segment/junction type resolution), plus misc FreeCAD object/geometry helpers used throughout `core/`. |
 
 ## Analysis layer
@@ -263,11 +264,10 @@ library/Library.py          HVACTypeDef.construction: list[ConstructionLayerDef]
                              build_geometry() stamps each returned layer's
                              roles from there after normalize()
         |
-library/library_api.py      HVACLibraryAPI.build_concentric_layers() -- the
-                             one shared primitive for "N concentric shells
-                             around a shared set of ports", generalizing the
-                             tube-diff/grow+sweep+cut pattern every casing+
-                             insulation generator used to hand-roll
+library/library_api.py      HVACLibraryAPI profiles, offsets, sweeps, lofts,
+                             and boolean operations -- the shared primitives
+                             used by backends to construct each declared
+                             layer without importing Part directly
         |
 core/_construction_schema.py   apply_construction_schema() -- adds/removes
                                 each layer's own Layer_<id>_Shape/
@@ -306,8 +306,9 @@ GeometryResult
 ```
 
 Generator/PartScript/static-descriptor authors never import
-`GeometryResult`/`LayerGeometry` directly -- per the "external code uses
-only `HVACLibraryAPI`" rule, they keep returning plain dicts: either the
+`GeometryResult`/`LayerGeometry` directly. Geometry code uses
+`HVACLibraryAPI`, while loss modules use `HVACLossAPI`; both keep returning
+plain values instead of internal library classes. Geometry backends return either the
 legacy `{"shape": ...}` form (a type with just one, roleless implicit
 layer, id `"shape"`), or `{"layers": {"<id>": {"shape": ...}, ...}}` for a
 type with more than one declared layer. `normalize()` accepts both.
@@ -482,4 +483,5 @@ Key rules (all enforced in `freecad/HVAC/library/Library.py`):
   details** → [`freecad/HVAC/libraries/README.md`](freecad/HVAC/libraries/README.md).
 - **How the parser classifies topology/family** → [`freecad/HVAC/core/TOPOLOGY_CLASSIFICATION.md`](freecad/HVAC/core/TOPOLOGY_CLASSIFICATION.md).
 - **Choosing a geometry backend (PartScript / static / generator)** → [`freecad/HVAC/libraries/samples/README.md`](freecad/HVAC/libraries/samples/README.md).
-- **Public API for generator/PartScript authors** → `freecad/HVAC/library/library_api.py` (`HVACLibraryAPI`) — external/library code should only use this, not internal HVAC modules directly.
+- **Public geometry API for generator/PartScript authors** → `freecad/HVAC/library/library_api.py` (`HVACLibraryAPI`, supplied as `context["hvac_api"]`).
+- **Public fitting-loss API for loss modules** → `freecad/HVAC/library/loss_api.py` (`HVACLossAPI`, supplied as `context["loss_api"]`).
