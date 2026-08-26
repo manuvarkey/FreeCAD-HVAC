@@ -174,6 +174,21 @@ def test_construction_physical_queries_return_caller_fallback_when_unavailable()
     assert construction.overall_u_value(default=0.0) == 0.0
 
 
+def test_hydraulic_roughness_reads_only_the_flow_surface_layer():
+    outer = _PhysicalMaterial(HydraulicRoughness=0.8)
+    flow = _PhysicalMaterial(HydraulicRoughness=0.12)
+    construction = construction_mod.Construction([
+        construction_mod.ConstructionLayer(
+            id="jacket", roles=["outer_jacket"], material=outer,
+        ),
+        construction_mod.ConstructionLayer(
+            id="liner", roles=["flow_surface"], material=flow,
+        ),
+    ])
+
+    assert construction.hydraulic_roughness(0.09) == 0.12
+
+
 def test_construction_for_a_not_yet_migrated_type_has_no_roles(monkeypatch):
     # Empty construction list -- construction_for() still builds one layer
     # per obj.ConstructionLayerIds (populated by apply_construction_schema's

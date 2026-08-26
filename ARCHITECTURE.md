@@ -286,8 +286,10 @@ core/_geometry_apply.py     writes each declared layer's own Layer_<id>_Shape
 core/Construction.py        the semantic query API: Construction(obj)
                              .layers_with_role(role) / .flow_surface() /
                              .structural_layers() / .thermal_layers() /
-                             .acoustic_layers() -- reachable off a segment/
-                             component's own getConstruction()
+                             .acoustic_layers() / .hydraulic_roughness() /
+                             .acoustic_impedance() / .overall_u_value() --
+                             reachable off a segment/component's own
+                             getConstruction()
 ```
 
 `HVACLibraryRegistry.build_geometry()` normalizes whatever a geometry
@@ -342,30 +344,48 @@ force a recompute.
 `freecad/HVAC/Resources/Materials/` ships a handful of HVAC-domain `.FCMat`
 cards -- casing metals (galvanized steel, aluminium, stainless steel) and
 insulation (glass wool, rock wool, nitrile rubber, polyurethane foam,
-expanded polystyrene) -- built entirely from FreeCAD's own standard models
-(`Father`, `Density`, `Thermal`, `BasicRendering`) -- no HVAC-specific
-material schema. Every insulation card's `BasicRendering.Transparency` is
-`0.6` so an inner layer stays visible through an outer wrap while
-modeling; metal casing cards are opaque (`0.0`).
+expanded polystyrene). They reuse FreeCAD's standard `Father`, `Density`,
+`Thermal`, and `BasicRendering` models. Metal cards also use the addon's
+small native `Hydraulic` material model, declared under
+`Resources/Models/`, so effective absolute roughness is a native,
+unit-aware material property. Every insulation card's
+`BasicRendering.Transparency` is `0.6` so an inner layer stays visible
+through an outer wrap while modeling; metal casing cards are opaque
+(`0.0`).
 `utils/materials.register_material_resources()` (called once from
 `init_gui.py`) registers that folder with FreeCAD's Material subsystem the
 same way FreeCAD's own Supplemental-Materials addon does (a `ModuleDir` key
-under `.../Mod/Material/Resources/Modules/FreeCAD-HVAC`), so these cards
-show up in the normal material browser/editor next to every other material
-FreeCAD knows about -- there is no separate HVAC material dropdown.
-`utils/materials.get_physical_value()`/`get_view_appearance()` are the only
-two ways core/ code reads a `Materials::PropertyMaterial` value: the first
-for a future quantity calculation (volume x density -> mass, from a
-layer's own `Layer_<id>_Shape` + `Layer_<id>_Material`), the second to
-build the plain `FreeCAD.Material()` struct `ViewObject.ShapeAppearance`
-actually consumes, from the native material's own appearance -- a one-way,
-read-only conversion; nothing is written back onto the material, and
-nothing is cached onto the HVAC object itself. Construction parameters
+and a `ModuleModelDir` key under
+`.../Mod/Material/Resources/Modules/FreeCAD-HVAC`), so these cards and the
+Hydraulic model show up in the normal material browser/editor next to every
+other material FreeCAD knows about -- there is no separate HVAC material
+dropdown.
+The read-only helpers in `utils/materials.py` are the only way core/ code
+reads a `Materials::PropertyMaterial` value: physical-value helpers serve
+roughness and future quantity calculations (volume x density -> mass, from a
+layer's own `Layer_<id>_Shape` + `Layer_<id>_Material`), while the
+appearance helper builds the plain `FreeCAD.Material()` struct
+`ViewObject.ShapeAppearance` actually consumes from the native material's
+own appearance. That conversion is one-way and read-only; nothing is
+written back onto the material or cached onto the HVAC object itself.
+Construction parameters
 like a layer's own thickness stay separate, plain type properties -- never
 part of material identity, so the same Glass Wool material works at any
 thickness (a `ConstructionLayerDef.thickness_property`, if declared, names
 which one -- purely informational metadata, since a layer's generated
 Shape is always the source of truth for its own volume).
+
+Airflow friction follows the same role-based construction contract.
+`core/_analysis_adapter.py` asks each segment's own `Construction` for the
+`flow_surface()` layer and uses its material's effective
+`HydraulicRoughness`; the network's `DefaultRoughness` is used only when
+that construction has no usable value. Primary and inline components are
+resolved independently and receive their own construction and roughness in
+the library loss context. Components have no fictitious straight length,
+so their roughness only affects a loss formula that explicitly uses it.
+Shipped metal cards declare the native property directly; cards without
+that property use the network fallback rather than a name- or UUID-based
+implicit material value.
 
 `core/_component_appearance.py` renders every layer's own material: since
 `Shape` is always the compound built in `ConstructionLayerIds` order,

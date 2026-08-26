@@ -16,12 +16,15 @@ from freecad.HVAC.utils import hvaclib, materials as hvac_materials
 
 
 class FakeParam:
-    """Stand-in for the FreeCAD.ParamGet(...) group object SetString is called on."""
+    """Stand-in for the FreeCAD.ParamGet(...) group used during registration."""
 
     def __init__(self):
         self.values = {}
 
     def SetString(self, key, value):
+        self.values[key] = value
+
+    def SetBool(self, key, value):
         self.values[key] = value
 
 
@@ -76,13 +79,30 @@ def test_register_material_resources_sets_module_dir_to_shipped_folder(monkeypat
         "User parameter:BaseApp/Preferences/Mod/Material/Resources/Modules/FreeCAD-HVAC"
     )
     materials_path = captured["param"].values["ModuleDir"]
+    models_path = captured["param"].values["ModuleModelDir"]
     assert materials_path.endswith(("Resources/Materials", "Resources\\Materials"))
+    assert models_path.endswith(("Resources/Models", "Resources\\Models"))
     import os
     assert os.path.isdir(materials_path)
+    assert os.path.isdir(models_path)
+    assert captured["param"].values["ModuleReadOnly"] is True
 
 
 def test_register_material_resources_is_a_noop_if_resources_dir_missing(monkeypatch):
     monkeypatch.setattr(hvac_materials.hvaclib, "get_materials_base_path", lambda: "/no/such/dir")
+    called = []
+    monkeypatch.setattr(hvac_materials.FreeCAD, "ParamGet", lambda path: called.append(path))
+
+    hvac_materials.register_material_resources()
+
+    assert called == []
+
+
+def test_register_material_resources_is_a_noop_if_models_dir_missing(monkeypatch):
+    monkeypatch.setattr(
+        hvac_materials.hvaclib, "get_material_models_base_path",
+        lambda: "/no/such/dir",
+    )
     called = []
     monkeypatch.setattr(hvac_materials.FreeCAD, "ParamGet", lambda path: called.append(path))
 
@@ -113,6 +133,7 @@ def test_default_material_uuids_match_the_shipped_cards():
     assert hvac_materials.NITRILE_RUBBER_OPEN_CELL_UUID == _card_uuid("Insulation/Nitrile-Rubber-Open-Cell.FCMat")
     assert hvac_materials.PERFORATED_GALVANIZED_STEEL_UUID == _card_uuid("Metal/Perforated-Galvanized-Steel.FCMat")
     assert hvac_materials.ALUMINIUM_UUID == _card_uuid("Metal/Aluminium.FCMat")
+    assert hvac_materials.STAINLESS_STEEL_UUID == _card_uuid("Metal/Stainless-Steel.FCMat")
 
 
 def test_get_material_by_uuid_returns_manager_lookup(monkeypatch):
@@ -172,9 +193,33 @@ def test_get_physical_value_none_for_nan_value():
     assert hvac_materials.get_physical_value(material, "ThermalConductivity") is None
 
 
-def test_stock_material_roughness_is_available_without_a_custom_material_schema():
-    assert hvac_materials.get_hydraulic_roughness_mm(FakeMaterial(name="Galvanised Steel")) == 0.09
-    assert hvac_materials.get_hydraulic_roughness_mm(FakeMaterial(name="Aluminium")) == 0.0015
+def test_shipped_uuid_without_card_property_has_no_implicit_roughness():
+    material = FakeMaterial(name="Renamed material")
+    material.UUID = hvac_materials.GALVANIZED_STEEL_UUID
+    assert hvac_materials.get_hydraulic_roughness_mm(material) is None
+
+
+def test_card_hydraulic_roughness_is_read_from_native_property():
+    material = FakeMaterial(
+        name="Galvanised Steel",
+        physical={"HydraulicRoughness": FakeQuantity(0.2)},
+    )
+    material.UUID = hvac_materials.GALVANIZED_STEEL_UUID
+    assert hvac_materials.get_hydraulic_roughness_mm(material) == 0.2
+
+
+def test_zero_card_hydraulic_roughness_is_a_valid_value():
+    material = FakeMaterial(
+        name="Ideal smooth surface",
+        physical={"HydraulicRoughness": FakeQuantity(0.0)},
+    )
+    assert hvac_materials.get_hydraulic_roughness_mm(material) == 0.0
+
+
+def test_stock_display_name_without_stock_uuid_does_not_match_fallback():
+    material = FakeMaterial(name="Galvanised Steel")
+    material.UUID = "unrelated-user-material"
+    assert hvac_materials.get_hydraulic_roughness_mm(material) is None
 
 
 # ----------------------------------------------------------------------

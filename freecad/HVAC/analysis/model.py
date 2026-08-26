@@ -95,6 +95,8 @@ class ComponentModel:
     One physical fitting -- a node's Primary component, or one Inline
     device in a through/2-port node's chain (see NodeModel). `ports` are
     this component's own LOCAL ports (mirrors DuctComponent.LocalPortsJson).
+    `roughness_mm` is derived from this component's own flow-surface
+    construction and is also exposed to its library loss evaluator.
     Solved per-component results (flow/velocity/K/pressure-drop) are never
     written back onto this object -- pressure.py returns a fresh
     ComponentResult per solve instead, so the same ComponentModel can be
@@ -105,6 +107,7 @@ class ComponentModel:
     role: str  # "primary" | "inline"
     ports: List[PortModel] = field(default_factory=list)
     loss_evaluator: Optional[LossEvaluator] = None
+    roughness_mm: float = 0.0
 
 
 @dataclass

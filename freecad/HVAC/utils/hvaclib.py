@@ -759,6 +759,11 @@ def get_materials_base_path():
     return os.path.realpath(get_file_path(os.path.join("Resources", "Materials")))
 
 
+def get_material_models_base_path():
+    """Path to the native FreeCAD material models shipped by this addon."""
+    return os.path.realpath(get_file_path(os.path.join("Resources", "Models")))
+
+
 #------------------------------------------------------------------------------
 # Miscellaneous
 #------------------------------------------------------------------------------

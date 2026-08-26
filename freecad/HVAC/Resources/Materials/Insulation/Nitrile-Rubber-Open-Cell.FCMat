@@ -14,11 +14,11 @@ Models:
     Father: "Insulation"
   Density:
     UUID: '454661e5-265b-4320-8e6f-fcf6223ac3af'
-    Density: "45 kg/m^3"
+    Density: "100 kg/m^3"
   Thermal:
     UUID: '9959d007-a970-4ea7-bae4-3eb1b8b883c7'
     SpecificHeat: "1400 J/kg/K"
-    ThermalConductivity: "0.040 W/m/K"
+    ThermalConductivity: "0.050 W/m/K"
 AppearanceModels:
   BasicRendering:
     UUID: 'f006c7e4-35b7-43d5-bbf9-c5d572309e6e'

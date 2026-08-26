@@ -31,7 +31,9 @@ the connected segments, exactly as before. See
 and `freecad/HVAC/library/library_api.py` for the full `HVACLibraryAPI`
 surface available as `context["hvac_api"]`. Fitting-loss modules receive the
 separate `HVACLossAPI` surface as `context["loss_api"]`; see
-`freecad/HVAC/library/loss_api.py`.
+`freecad/HVAC/library/loss_api.py`. Their loss context also carries the
+component's own `construction` and resolved `hydraulic_roughness_mm`, with
+the network roughness used only as a fallback.
 
 ## 1. PartScript (`"geometry": {"backend": "partscript", "file": "..."}`)
 

@@ -201,7 +201,7 @@ class DuctSegment:
         self._addProperty(obj, "App::PropertyLength", "Diameter", "Dimensions", "Circular duct diameter")
         self._addProperty(obj, "App::PropertyLength", "Width", "Dimensions", "Rectangular duct width")
         self._addProperty(obj, "App::PropertyLength", "Height", "Dimensions", "Rectangular duct height")
-        self._addProperty(obj, "App::PropertyLength", "Roughness", "Parameters", "Wall roughness; 0 uses the network's DefaultRoughness")
+        self._addProperty(obj, "App::PropertyLength", "Roughness", "Parameters", "Legacy document value; airflow roughness now comes from the flow-surface construction material")
         self._addProperty(obj, "App::PropertyFloat", "Velocity", "Parameters", "Target velocity (m/s) override for duct sizing on this segment only; 0 uses the network's SizingMethod/TargetVelocity")
 
         # Per-construction-layer Layer_<id>_Shape/Layer_<id>_Material

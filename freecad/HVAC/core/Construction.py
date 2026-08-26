@@ -120,11 +120,12 @@ class Construction:
         ]
 
     def hydraulic_roughness(self, default=None):
-        """Absolute roughness of the airstream-facing material, in mm.
+        """Effective absolute roughness of the flow-surface layer, in mm.
 
-        Material cards may call the property ``HydraulicRoughness`` or the
-        shorter ``Roughness``.  Returning the caller's fallback keeps older
-        cards and unassigned layers compatible with the network default.
+        A native material-card ``HydraulicRoughness`` (or legacy
+        ``Roughness``) value is preferred. Returning the caller's fallback
+        keeps unassigned materials and cards without that property
+        compatible with the network default.
         """
         layer = self.flow_surface()
         if layer is None:

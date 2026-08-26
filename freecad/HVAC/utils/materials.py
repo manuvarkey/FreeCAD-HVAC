@@ -27,10 +27,9 @@ the thin glue to FreeCAD's own native Material subsystem (the `Materials`
 module, `Materials::PropertyMaterial`, `.FCMat` cards):
 
   - register_material_resources(): tells FreeCAD's Material subsystem where
-    this addon's own `.FCMat` cards live, so they show up in the normal
-    material browser/editor next to built-in, user, and other addons'
-    materials -- see freecad/HVAC/Resources/Materials/README.md for the
-    cards themselves.
+    this addon's `.FCMat` cards and Hydraulic model live, so they show up
+    in the normal material browser/editor next to built-in, user, and
+    other addons' materials -- see ARCHITECTURE.md for the full data flow.
   - get_physical_value()/get_view_appearance(): the only two ways core/
     code should ever read a `Materials::PropertyMaterial` value -- the
     native material stays authoritative for both physical properties
@@ -58,20 +57,8 @@ NITRILE_RUBBER_UUID = "4f16dfeb-1bc6-41a8-8a40-30942e30cd2a"
 NITRILE_RUBBER_OPEN_CELL_UUID = "1b7baf06-8e33-4b63-a1f1-a9a39bd3ab2e"
 PERFORATED_GALVANIZED_STEEL_UUID = "31e7402b-d640-4f04-b60d-b86904ba73cf"
 ALUMINIUM_UUID = "ff83dff9-a970-455c-9641-ead756d61b8a"
-
-# Typical absolute roughness for the stock sheet materials, in mm.  Native
-# FreeCAD's standard material models do not currently define a roughness
-# field, so these values bridge the shipped cards into airflow calculations;
-# a material that declares HydraulicRoughness/Roughness itself still wins.
-_STOCK_HYDRAULIC_ROUGHNESS_MM = {
-    "galvanised steel": 0.09,
-    "galvanized steel": 0.09,
-    "perforated galvanised steel": 0.15,
-    "perforated galvanized steel": 0.15,
-    "aluminium": 0.0015,
-    "aluminum": 0.0015,
-    "stainless steel": 0.0015,
-}
+STAINLESS_STEEL_UUID = "108ff6fa-441d-44e2-a16b-543dbfd3a2e2"
+HYDRAULIC_MODEL_UUID = "bbfee379-96b0-4995-80e2-e1725b3adfde"
 
 
 def get_material_by_uuid(uuid):
@@ -98,18 +85,19 @@ def register_material_resources():
     scan on top of the built-in/user/custom material directories. Idempotent
     -- safe to call on every addon load.
 
-    No "ModuleModelDir" is registered: this addon's cards are ordinary
-    material cards built entirely from FreeCAD's own standard models
-    (Father/Density/Thermal/BasicRendering), not a custom model schema.
+    ``ModuleModelDir`` also registers the addon's native Hydraulic model so
+    roughness appears as an editable quantity in FreeCAD's Material Editor.
     """
     materials_path = hvaclib.get_materials_base_path()
-    if not os.path.isdir(materials_path):
+    models_path = hvaclib.get_material_models_base_path()
+    if not os.path.isdir(materials_path) or not os.path.isdir(models_path):
         return
 
     config = FreeCAD.ParamGet(
         "User parameter:BaseApp/Preferences/Mod/Material/Resources/Modules/FreeCAD-HVAC"
     )
     config.SetString("ModuleDir", materials_path)
+    config.SetString("ModuleModelDir", models_path)
     config.SetString("ModuleIcon", hvaclib.get_icon_path("Logo.svg"))
     config.SetBool("ModuleReadOnly", True)
 
@@ -197,13 +185,11 @@ def get_physical_value_as(material, name, unit=None):
 
 
 def get_hydraulic_roughness_mm(material):
-    """Absolute roughness in mm from a material card, or a shipped-card default."""
+    """Absolute roughness in mm from a material card, or None if undeclared."""
     for property_name in ("HydraulicRoughness", "Roughness"):
         value = get_physical_value_as(material, property_name, "mm")
         if value is not None and value >= 0.0:
             return value
-    name = str(getattr(material, "Name", "") or "").strip().lower()
-    return _STOCK_HYDRAULIC_ROUGHNESS_MM.get(name)
 
 
 def get_view_appearance(material):

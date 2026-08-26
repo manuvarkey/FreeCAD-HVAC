@@ -98,7 +98,7 @@ def build_network_model(net_obj):
         density_kg_m3=float(getattr(net_obj, "AirDensity", 1.204) or 1.204),
         kinematic_viscosity_m2_s=float(getattr(net_obj, "AirKinematicViscosity", 1.51e-5) or 1.51e-5),
     )
-    default_roughness_mm = float(getattr(net_obj, "DefaultRoughness", 0.0) or 0.0)
+    default_roughness_mm = float(getattr(net_obj, "DefaultRoughness", 0.09) or 0.0)
 
     edges = {}
     for u, v, edge_ref in parser.analysis_graph.edges(data="key"):
@@ -120,7 +120,16 @@ def build_network_model(net_obj):
         ja = parser.build_junction_analysis(node_id, segment_map)
         if ja is None:
             continue
-        nodes[node_key] = _build_node_model(node_key, junction_obj, ja, segment_map, reg, air, component_map)
+        nodes[node_key] = _build_node_model(
+            node_key,
+            junction_obj,
+            ja,
+            segment_map,
+            reg,
+            air,
+            component_map,
+            default_roughness_mm,
+        )
 
     network = NetworkModel(nodes=nodes, segments=segments, edges=edges, air=air)
     return network, segment_map, junction_map, component_map
@@ -143,9 +152,12 @@ def _section_from_params(profile, section_params):
 def _build_segment_model(seg_obj, default_roughness_mm):
     section = _section_from_params(getattr(seg_obj, "Profile", ""), hvaclib.get_segment_section_params(seg_obj))
 
-    roughness_mm = float(getattr(seg_obj, "Roughness", 0.0) or 0.0)
-    if roughness_mm <= 0.0:
-        roughness_mm = construction_for(seg_obj).hydraulic_roughness(default_roughness_mm)
+    # The material on the flow-surface layer is authoritative. The network
+    # default exists only for an unassigned material or an older card that
+    # does not expose HydraulicRoughness.
+    roughness_mm = float(
+        construction_for(seg_obj).hydraulic_roughness(default_roughness_mm)
+    )
 
     rect_mode_raw = str(getattr(seg_obj, "RectangularSizingMode", "UseNetworkDefault") or "UseNetworkDefault")
     rect_mode_override = RECT_MODE_MAP.get(rect_mode_raw, "") if rect_mode_raw != "UseNetworkDefault" else ""
@@ -194,7 +206,16 @@ def _stable_component_id(comp_obj):
     return name if name else "id:{}".format(id(comp_obj))
 
 
-def _build_node_model(node_key, junction_obj, ja, segment_map, reg, air, component_map):
+def _build_node_model(
+    node_key,
+    junction_obj,
+    ja,
+    segment_map,
+    reg,
+    air,
+    component_map,
+    default_roughness_mm,
+):
     ports = _junction_ports_to_models(ja.connected_ports, node_key)
     design_flow_lps = float(getattr(junction_obj, "DesignFlowRate", 0.0) or 0.0)
 
@@ -202,11 +223,21 @@ def _build_node_model(node_key, junction_obj, ja, segment_map, reg, air, compone
     primary_component = None
     if primary_obj is not None:
         component_id = _stable_component_id(primary_obj)
+        construction = construction_for(primary_obj)
+        roughness_mm = float(construction.hydraulic_roughness(default_roughness_mm))
         primary_component = ComponentModel(
             component_id=component_id,
             role="primary",
             ports=_local_ports_to_models(getattr(primary_obj, "LocalPortsJson", "[]"), node_key, segment_map),
-            loss_evaluator=build_loss_evaluator(reg, primary_obj, air, family=getattr(junction_obj, "Family", "")),
+            loss_evaluator=build_loss_evaluator(
+                reg,
+                primary_obj,
+                air,
+                family=getattr(junction_obj, "Family", ""),
+                construction=construction,
+                hydraulic_roughness_mm=roughness_mm,
+            ),
+            roughness_mm=roughness_mm,
         )
         component_map[component_id] = primary_obj
 
@@ -215,12 +246,22 @@ def _build_node_model(node_key, junction_obj, ja, segment_map, reg, air, compone
         models = []
         for comp_obj in chain:
             component_id = _stable_component_id(comp_obj)
+            construction = construction_for(comp_obj)
+            roughness_mm = float(construction.hydraulic_roughness(default_roughness_mm))
             models.append(ComponentModel(
                 component_id=component_id,
                 role="inline",
                 ports=_local_ports_to_models(getattr(comp_obj, "LocalPortsJson", "[]"), node_key, segment_map),
                 # An Inline component has no Family of its own.
-                loss_evaluator=build_loss_evaluator(reg, comp_obj, air, family=""),
+                loss_evaluator=build_loss_evaluator(
+                    reg,
+                    comp_obj,
+                    air,
+                    family="",
+                    construction=construction,
+                    hydraulic_roughness_mm=roughness_mm,
+                ),
+                roughness_mm=roughness_mm,
             ))
             component_map[component_id] = comp_obj
         inline_chains[edge_key] = models
@@ -231,7 +272,14 @@ def _build_node_model(node_key, junction_obj, ja, segment_map, reg, air, compone
     )
 
 
-def build_loss_evaluator(reg, comp_obj, air, family=""):
+def build_loss_evaluator(
+    reg,
+    comp_obj,
+    air,
+    family="",
+    construction=None,
+    hydraulic_roughness_mm=0.0,
+):
     """
     A pure callable closing over everything FreeCAD/library-specific this
     component needs to evaluate its own loss -- see analysis/model.py's
@@ -270,6 +318,8 @@ def build_loss_evaluator(reg, comp_obj, air, family=""):
 
         context = {
             "obj": comp_obj,
+            "construction": construction,
+            "hydraulic_roughness_mm": float(hydraulic_roughness_mm),
             "center_point": center_point,
             "properties": properties,
             "connected_ports": connected_ports_ctx,

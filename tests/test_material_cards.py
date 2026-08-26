@@ -27,6 +27,7 @@ _FATHER_MODEL_UUID = "9cdda8b6-b606-4778-8f13-3934d8668e67"
 _DENSITY_MODEL_UUID = "454661e5-265b-4320-8e6f-fcf6223ac3af"
 _THERMAL_MODEL_UUID = "9959d007-a970-4ea7-bae4-3eb1b8b883c7"
 _BASIC_RENDERING_MODEL_UUID = "f006c7e4-35b7-43d5-bbf9-c5d572309e6e"
+_HYDRAULIC_MODEL_UUID = "bbfee379-96b0-4995-80e2-e1725b3adfde"
 
 _METAL_CARDS = [
     "Metal/Galvanized-Steel.FCMat",
@@ -75,12 +76,35 @@ def test_every_card_has_a_unique_valid_uuid():
     assert len(uuids) == len(set(uuids)), "duplicate UUIDs across shipped cards"
 
 
-def test_every_card_reuses_standard_models_not_a_custom_schema():
+def test_every_card_reuses_the_standard_physical_models():
     for relative_path in _EXPECTED_CARDS:
         text = _read(relative_path)
         assert _FATHER_MODEL_UUID in text, relative_path
         assert _DENSITY_MODEL_UUID in text, relative_path
         assert _THERMAL_MODEL_UUID in text, relative_path
+
+
+def test_hydraulic_model_and_metal_card_values_are_declared_with_units():
+    model_path = os.path.join(
+        hvaclib.get_material_models_base_path(), "HVAC", "Hydraulic.yml"
+    )
+    assert os.path.isfile(model_path)
+    with open(model_path, "r", encoding="utf-8") as handle:
+        model_text = handle.read()
+    assert _HYDRAULIC_MODEL_UUID in model_text
+    assert "HydraulicRoughness:" in model_text
+    assert "Units: 'mm'" in model_text
+
+    expected = {
+        "Metal/Galvanized-Steel.FCMat": 0.09,
+        "Metal/Perforated-Galvanized-Steel.FCMat": 0.9,
+        "Metal/Aluminium.FCMat": 0.046,
+        "Metal/Stainless-Steel.FCMat": 0.046,
+    }
+    for relative_path, roughness_mm in expected.items():
+        text = _read(relative_path)
+        assert _HYDRAULIC_MODEL_UUID in text, relative_path
+        assert 'HydraulicRoughness: "{} mm"'.format(roughness_mm) in text
 
 
 def test_every_card_declares_density_and_thermal_properties_with_units():
@@ -114,9 +138,8 @@ def test_insulation_cards_are_60_percent_transparent_so_ducts_show_through():
         assert re.search(r'Transparency:\s*"0\.0"', _read(relative_path)), relative_path
 
 
-def test_no_hvac_specific_material_schema_file_shipped_alongside_cards():
-    # This addon must not invent its own material JSON/schema -- every
-    # card is a plain, self-contained .FCMat FreeCAD already understands.
+def test_material_card_folder_contains_only_native_fc_mat_cards():
+    # Model schemas live in Resources/Models, not mixed into the card tree.
     for dirpath, _dirs, filenames in os.walk(_materials_root()):
         for filename in filenames:
             assert filename.endswith(".FCMat"), os.path.join(dirpath, filename)

@@ -87,6 +87,13 @@ Common fields, both segments and junctions:
 | `loss_module` / `loss_function` | optional: fitting-loss coefficient function for the airflow solver; its context provides `HVACLossAPI` as `context["loss_api"]` |
 
 Junctions additionally carry a `topology` field (see below).
+The loss context also contains the component's own role-based
+`context["construction"]` and its resolved effective
+`context["hydraulic_roughness_mm"]`. The latter uses the network default
+only if the construction's flow-surface material has no roughness value.
+Library loss code may call the construction's other physical queries (for
+example `acoustic_impedance()` or `overall_u_value()`) without importing
+core modules.
 
 Property def (`HVACPropertyDef`):
 

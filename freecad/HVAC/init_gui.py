@@ -35,10 +35,8 @@ from .utils import materials as hvac_materials
 Gui.addLanguagePath(hvaclib.get_language_base_path())
 Gui.updateLocale()
 
-# Register this addon's own native FreeCAD material cards (see
-# freecad/HVAC/Resources/Materials/) with FreeCAD's Material subsystem, so
-# they appear in the normal material browser/editor alongside built-in,
-# user, and other addons' materials.
+# Register this addon's native material cards and Hydraulic model with
+# FreeCAD's Material subsystem so both appear in the normal editor.
 hvac_materials.register_material_resources()
 
 

@@ -396,7 +396,7 @@ class DuctNetwork:
                 "App::PropertyLength",
                 "DefaultRoughness",
                 "HVAC Air Properties",
-                "Default duct wall absolute roughness used when a segment's own Roughness is 0"
+                "Fallback absolute roughness when a construction's flow-surface material has no roughness"
             )
 
         if not getattr(obj, "AirDensity", 0):
