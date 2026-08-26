@@ -1,13 +1,12 @@
 ---
 General:
-  UUID: "31e7402b-d640-4f04-b60d-b86904ba73cf"
+  UUID: "c56ec5d1-a181-43d8-9436-054cda8baf29"
   Author: "FreeCAD-HVAC"
   License: "CC0-1.0"
-  Name: "Perforated Galvanised Steel"
+  Name: "Galvanized Steel - Spiral Corrugated"
   Description: >-
-    Perforated galvanized sheet used as the flow-facing liner of an
-    acoustically lined HVAC duct. Density is the parent sheet density;
-    calculate installed mass using the actual perforation open area.
+    Corrugated spiral galvanized-steel duct casing. Density and thermal
+    properties are those of the parent galvanized steel sheet.
 Models:
   Father:
     UUID: '9cdda8b6-b606-4778-8f13-3934d8668e67'
@@ -25,9 +24,9 @@ Models:
 AppearanceModels:
   BasicRendering:
     UUID: 'f006c7e4-35b7-43d5-bbf9-c5d572309e6e'
-    AmbientColor: "(0.5500, 0.5500, 0.5700, 1.0)"
-    DiffuseColor: "(0.7000, 0.7100, 0.7300, 1.0)"
+    AmbientColor: "(0.5700, 0.5700, 0.5900, 1.0)"
+    DiffuseColor: "(0.7200, 0.7300, 0.7500, 1.0)"
     EmissiveColor: "(0.0000, 0.0000, 0.0000, 1.0)"
-    Shininess: "0.3500"
-    SpecularColor: "(0.8500, 0.8500, 0.8800, 1.0)"
+    Shininess: "0.3800"
+    SpecularColor: "(0.8600, 0.8600, 0.8800, 1.0)"
     Transparency: "0.0"

@@ -77,7 +77,7 @@ def test_setproperties_adds_one_default_material_property_per_role(monkeypatch):
     steel = FakeMaterial("Galvanized-Steel")
     wool = FakeMaterial("Nitrile-Rubber")
     open_cell = FakeMaterial("Nitrile-Rubber-Open-Cell")
-    perforated = FakeMaterial("Perforated-Galvanized-Steel")
+    perforated = FakeMaterial("Galvanized-Steel-Perforated")
     aluminium = FakeMaterial("Aluminium")
 
     def fake_get_material_by_uuid(uuid):
@@ -85,7 +85,7 @@ def test_setproperties_adds_one_default_material_property_per_role(monkeypatch):
             network_mod.hvac_materials.GALVANIZED_STEEL_UUID: steel,
             network_mod.hvac_materials.NITRILE_RUBBER_UUID: wool,
             network_mod.hvac_materials.NITRILE_RUBBER_OPEN_CELL_UUID: open_cell,
-            network_mod.hvac_materials.PERFORATED_GALVANIZED_STEEL_UUID: perforated,
+            network_mod.hvac_materials.GALVANIZED_STEEL_PERFORATED_UUID: perforated,
             network_mod.hvac_materials.ALUMINIUM_UUID: aluminium,
         }.get(uuid)
 

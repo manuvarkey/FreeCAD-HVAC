@@ -341,12 +341,11 @@ appearance always comes from the assigned material's own
 geometry, only its ViewProvider's rendered appearance, so it shouldn't
 force a recompute.
 
-`freecad/HVAC/Resources/Materials/` ships a handful of HVAC-domain `.FCMat`
-cards -- casing metals (galvanized steel, aluminium, stainless steel) and
-insulation (glass wool, rock wool, nitrile rubber, polyurethane foam,
-expanded polystyrene). They reuse FreeCAD's standard `Father`, `Density`,
-`Thermal`, and `BasicRendering` models. Metal cards also use the addon's
-small native `Hydraulic` material model, declared under
+`freecad/HVAC/Resources/Materials/` ships HVAC-domain `.FCMat` cards for
+metal casing, rigid nonmetallic casing, flexible duct, and insulation.
+They reuse FreeCAD's standard `Father`, `Density`, `Thermal`, and
+`BasicRendering` models. Every card also uses the addon's small native
+`Hydraulic` material model, declared under
 `Resources/Models/`, so effective absolute roughness is a native,
 unit-aware material property. Every insulation card's
 `BasicRendering.Transparency` is `0.6` so an inner layer stays visible
@@ -428,7 +427,7 @@ library-defined layer id -- roles are the fixed, small vocabulary core
 owns). Fresh networks seed flow surfaces and structural shells with
 Galvanised Steel, thermal insulation with closed-cell Nitrile Rubber,
 acoustic absorbers with open-cell Nitrile Rubber, acoustic liners with
-Perforated Galvanised Steel, and vapor barriers/outer jackets with
+Galvanized Steel - Perforated, and vapor barriers/outer jackets with
 Aluminium. Fire protection remains project-specific and unset.
 `core/_construction_schema.apply_default_layer_materials()` (called from
 `DuctSegment.applyTypeSchema()`/`DuctComponent.applyTypeSchema()` every

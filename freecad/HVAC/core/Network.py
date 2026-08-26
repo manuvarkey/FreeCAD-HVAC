@@ -367,7 +367,7 @@ class DuctNetwork:
         _seed_role_default(ROLE_THERMAL_INSULATION, hvac_materials.NITRILE_RUBBER_UUID)
         _seed_role_default(ROLE_FLOW_SURFACE, hvac_materials.GALVANIZED_STEEL_UUID)
         _seed_role_default(ROLE_ACOUSTIC_ABSORBER, hvac_materials.NITRILE_RUBBER_OPEN_CELL_UUID)
-        _seed_role_default(ROLE_ACOUSTIC_LINER, hvac_materials.PERFORATED_GALVANIZED_STEEL_UUID)
+        _seed_role_default(ROLE_ACOUSTIC_LINER, hvac_materials.GALVANIZED_STEEL_PERFORATED_UUID)
         _seed_role_default(ROLE_VAPOR_BARRIER, hvac_materials.ALUMINIUM_UUID)
         _seed_role_default(ROLE_OUTER_JACKET, hvac_materials.ALUMINIUM_UUID)
 

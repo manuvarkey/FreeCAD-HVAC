@@ -33,7 +33,15 @@ _METAL_CARDS = [
     "Metal/Galvanized-Steel.FCMat",
     "Metal/Aluminium.FCMat",
     "Metal/Stainless-Steel.FCMat",
-    "Metal/Perforated-Galvanized-Steel.FCMat",
+    "Metal/Galvanized-Steel-Perforated.FCMat",
+]
+_CASING_CARDS = [
+    "Casing/PVC.FCMat",
+    "Casing/Concrete.FCMat",
+    "Casing/Fiberglass-Reinforced-Plastic.FCMat",
+    "Casing/Galvanized-Steel-Spiral-Corrugated.FCMat",
+    "Casing/Flexible-Duct-Fabric-and-Wire.FCMat",
+    "Casing/Flexible-Duct-Metallic.FCMat",
 ]
 _INSULATION_CARDS = [
     "Insulation/Glass-Wool.FCMat",
@@ -43,7 +51,7 @@ _INSULATION_CARDS = [
     "Insulation/Expanded-Polystyrene.FCMat",
     "Insulation/Nitrile-Rubber-Open-Cell.FCMat",
 ]
-_EXPECTED_CARDS = _METAL_CARDS + _INSULATION_CARDS
+_EXPECTED_CARDS = _METAL_CARDS + _CASING_CARDS + _INSULATION_CARDS
 
 
 def _materials_root():
@@ -84,7 +92,7 @@ def test_every_card_reuses_the_standard_physical_models():
         assert _THERMAL_MODEL_UUID in text, relative_path
 
 
-def test_hydraulic_model_and_metal_card_values_are_declared_with_units():
+def test_hydraulic_model_and_all_card_values_are_declared_with_units():
     model_path = os.path.join(
         hvaclib.get_material_models_base_path(), "HVAC", "Hydraulic.yml"
     )
@@ -97,9 +105,21 @@ def test_hydraulic_model_and_metal_card_values_are_declared_with_units():
 
     expected = {
         "Metal/Galvanized-Steel.FCMat": 0.09,
-        "Metal/Perforated-Galvanized-Steel.FCMat": 0.9,
+        "Metal/Galvanized-Steel-Perforated.FCMat": 0.9,
         "Metal/Aluminium.FCMat": 0.046,
         "Metal/Stainless-Steel.FCMat": 0.046,
+        "Casing/PVC.FCMat": 0.046,
+        "Casing/Concrete.FCMat": 3.0,
+        "Casing/Fiberglass-Reinforced-Plastic.FCMat": 0.9,
+        "Casing/Galvanized-Steel-Spiral-Corrugated.FCMat": 0.9,
+        "Casing/Flexible-Duct-Fabric-and-Wire.FCMat": 0.9,
+        "Casing/Flexible-Duct-Metallic.FCMat": 3.0,
+        "Insulation/Glass-Wool.FCMat": 3.0,
+        "Insulation/Rock-Wool.FCMat": 3.0,
+        "Insulation/Nitrile-Rubber.FCMat": 0.9,
+        "Insulation/Polyurethane-Foam.FCMat": 0.9,
+        "Insulation/Expanded-Polystyrene.FCMat": 0.9,
+        "Insulation/Nitrile-Rubber-Open-Cell.FCMat": 0.9,
     }
     for relative_path, roughness_mm in expected.items():
         text = _read(relative_path)
@@ -134,8 +154,18 @@ def test_insulation_cards_are_60_percent_transparent_so_ducts_show_through():
     for relative_path in _INSULATION_CARDS:
         assert re.search(r'Transparency:\s*"0\.6"', _read(relative_path)), relative_path
 
-    for relative_path in _METAL_CARDS:
+    for relative_path in _METAL_CARDS + _CASING_CARDS:
         assert re.search(r'Transparency:\s*"0\.0"', _read(relative_path)), relative_path
+
+
+def test_perforated_galvanized_card_uses_new_name_only():
+    new_path = os.path.join(_materials_root(), "Metal/Galvanized-Steel-Perforated.FCMat")
+    old_path = os.path.join(_materials_root(), "Metal/Perforated-Galvanized-Steel.FCMat")
+    assert os.path.isfile(new_path)
+    assert not os.path.exists(old_path)
+    assert _field(_read("Metal/Galvanized-Steel-Perforated.FCMat"), "Name") == (
+        "Galvanized Steel - Perforated"
+    )
 
 
 def test_material_card_folder_contains_only_native_fc_mat_cards():

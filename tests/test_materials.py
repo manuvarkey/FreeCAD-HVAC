@@ -131,7 +131,7 @@ def test_default_material_uuids_match_the_shipped_cards():
     assert hvac_materials.GALVANIZED_STEEL_UUID == _card_uuid("Metal/Galvanized-Steel.FCMat")
     assert hvac_materials.NITRILE_RUBBER_UUID == _card_uuid("Insulation/Nitrile-Rubber.FCMat")
     assert hvac_materials.NITRILE_RUBBER_OPEN_CELL_UUID == _card_uuid("Insulation/Nitrile-Rubber-Open-Cell.FCMat")
-    assert hvac_materials.PERFORATED_GALVANIZED_STEEL_UUID == _card_uuid("Metal/Perforated-Galvanized-Steel.FCMat")
+    assert hvac_materials.GALVANIZED_STEEL_PERFORATED_UUID == _card_uuid("Metal/Galvanized-Steel-Perforated.FCMat")
     assert hvac_materials.ALUMINIUM_UUID == _card_uuid("Metal/Aluminium.FCMat")
     assert hvac_materials.STAINLESS_STEEL_UUID == _card_uuid("Metal/Stainless-Steel.FCMat")
 

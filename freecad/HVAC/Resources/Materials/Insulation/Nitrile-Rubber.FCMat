@@ -20,6 +20,9 @@ Models:
     UUID: '9959d007-a970-4ea7-bae4-3eb1b8b883c7'
     SpecificHeat: "1400 J/kg/K"
     ThermalConductivity: "0.036 W/m/K"
+  Hydraulic:
+    UUID: 'bbfee379-96b0-4995-80e2-e1725b3adfde'
+    HydraulicRoughness: "0.9 mm"
 AppearanceModels:
   BasicRendering:
     UUID: 'f006c7e4-35b7-43d5-bbf9-c5d572309e6e'
