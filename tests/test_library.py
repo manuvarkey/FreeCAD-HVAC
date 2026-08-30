@@ -283,10 +283,38 @@ def test_load_type_def_file_parses_features_block(tmp_path):
     assert fdef.id == "transverse_flange"
     assert fdef.role == "transverse_joint"
     assert fdef.host_layer == "casing"
+    assert fdef.module == ""
     assert fdef.generator == "generate_transverse_flange"
     assert fdef.enabled_parameter == "FlangeEnabled"
     assert fdef.visible_parameter == "FlangeVisible"
     assert fdef.parameters == ["FlangeDepth", "FlangeThickness"]
+
+
+def test_load_type_def_file_parses_features_module_override(tmp_path):
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps({
+        "id": "circular_straight",
+        "label": "Circular Straight",
+        "category": "segment",
+        "family": ["straight_segment"],
+        "generator": {"module": "segments", "function": "build_circular_straight"},
+        "construction": {
+            "layers": [{"id": "casing", "roles": ["flow_surface"]}],
+            "features": [
+                {
+                    "id": "transverse_flange",
+                    "host_layer": "casing",
+                    "module": "custom_features",
+                    "generator": "generate_transverse_flange",
+                },
+            ],
+        },
+    }))
+
+    reg = HVACLibraryRegistry()
+    type_def = reg._load_type_def_file(str(type_file))
+
+    assert type_def.features[0].module == "custom_features"
 
 
 def test_load_type_def_file_features_default_to_optional_fields_unset(tmp_path):
@@ -310,6 +338,7 @@ def test_load_type_def_file_features_default_to_optional_fields_unset(tmp_path):
 
     fdef = type_def.features[0]
     assert fdef.role == ""
+    assert fdef.module == ""
     assert fdef.enabled_parameter is None
     assert fdef.visible_parameter is None
     assert fdef.parameters == []
@@ -521,6 +550,77 @@ def test_build_geometry_raises_for_a_feature_referencing_an_unbuilt_host_layer()
             raise AssertionError("Expected ValueError for a feature with no matching host layer")
     finally:
         sys.modules.pop("fake_hvac_lib_pkg.features", None)
+        sys.modules.pop("fake_hvac_lib_pkg.segments", None)
+
+
+def test_build_geometry_resolves_a_feature_from_its_own_declared_module():
+    calls = []
+
+    def generate_stiffener(api, ctx):
+        calls.append(ctx)
+        return "STIFFENER_SHAPE"
+
+    custom_module = types.ModuleType("fake_hvac_lib_pkg.custom_features")
+    custom_module.generate_stiffener = generate_stiffener
+    sys.modules["fake_hvac_lib_pkg.custom_features"] = custom_module
+    try:
+        reg, type_def = _register_fake_type(features=[
+            ConstructionFeatureDef(
+                id="stiffener",
+                host_layer="casing",
+                module="custom_features",
+                generator="generate_stiffener",
+            ),
+        ])
+
+        result = reg.build_geometry("lib", type_def, {"params": {}})
+
+        assert len(calls) == 1
+        assert result.features["stiffener"].shape == "STIFFENER_SHAPE"
+    finally:
+        sys.modules.pop("fake_hvac_lib_pkg.custom_features", None)
+        sys.modules.pop("fake_hvac_lib_pkg.segments", None)
+
+
+def test_build_geometry_resolves_each_feature_from_its_own_module_independently():
+    # Two features on the same type, one left on the conventional
+    # "features" module and one pointed at its own module -- each must
+    # resolve to its own generator, proving module resolution isn't
+    # accidentally shared/cached across differently-named modules.
+    default_calls = []
+    custom_calls = []
+
+    features_module = types.ModuleType("fake_hvac_lib_pkg.features")
+    features_module.generate_transverse_flange = lambda api, ctx: default_calls.append(ctx) or "FLANGE_SHAPE"
+    sys.modules["fake_hvac_lib_pkg.features"] = features_module
+
+    custom_module = types.ModuleType("fake_hvac_lib_pkg.custom_features")
+    custom_module.generate_stiffener = lambda api, ctx: custom_calls.append(ctx) or "STIFFENER_SHAPE"
+    sys.modules["fake_hvac_lib_pkg.custom_features"] = custom_module
+    try:
+        reg, type_def = _register_fake_type(features=[
+            ConstructionFeatureDef(
+                id="transverse_flange",
+                host_layer="casing",
+                generator="generate_transverse_flange",
+            ),
+            ConstructionFeatureDef(
+                id="stiffener",
+                host_layer="casing",
+                module="custom_features",
+                generator="generate_stiffener",
+            ),
+        ])
+
+        result = reg.build_geometry("lib", type_def, {"params": {}})
+
+        assert len(default_calls) == 1
+        assert len(custom_calls) == 1
+        assert result.features["transverse_flange"].shape == "FLANGE_SHAPE"
+        assert result.features["stiffener"].shape == "STIFFENER_SHAPE"
+    finally:
+        sys.modules.pop("fake_hvac_lib_pkg.features", None)
+        sys.modules.pop("fake_hvac_lib_pkg.custom_features", None)
         sys.modules.pop("fake_hvac_lib_pkg.segments", None)
 
 

@@ -202,6 +202,7 @@ type-def's `"construction"` block, as a sibling `"features"` array:
       "id": "transverse_flange",
       "role": "transverse_joint",
       "host_layer": "casing",
+      "module": "features",
       "generator": "generate_transverse_flange",
       "enabled_parameter": "FlangeEnabled",
       "visible_parameter": "FlangeVisible",
@@ -225,10 +226,16 @@ type-def's `"construction"` block, as a sibling `"features"` array:
   to that layer's own already-built `LayerGeometry` (shape + roles) before
   invoking the feature's generator, and it's also what a non-visible
   feature's rendered appearance falls back to (see below).
-- `generator`: the name of a function this library's own
-  `<generators_package>.features` module (a fixed, conventional submodule
-  -- e.g. `smacna/generators/features.py` -- resolved the same way
-  `generator`/`loss` modules already are) must define, with the signature
+- `module` (optional): the name of the `<generators_package>` submodule
+  this feature's own generator function lives in, resolved the same way
+  `generator`/`loss` modules already are (`import_generator()`). Defaults
+  to the conventional `"features"` submodule (e.g.
+  `smacna/generators/features.py`) when omitted, so most type-defs never
+  need to set this -- only useful when a library wants a feature's
+  generator to live somewhere else (e.g. alongside a related fitting's own
+  generator module).
+- `generator`: the name of a function inside that module (see `module`
+  above), with the signature
   `generate_<name>(api, ctx) -> Part.Shape | None`. `api` is
   `HVACLibraryAPI`; `ctx` (a `FeatureContext`) provides `ctx.parameters`
   (this feature's own declared `parameters`, already-resolved values --

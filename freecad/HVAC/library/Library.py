@@ -590,6 +590,11 @@ class HVACLibraryRegistry:
         prepared["hvac_api_version"] = HVACLibraryAPI.API_VERSION
         prepared["loss_api"] = HVACLossAPI
         prepared["loss_api_version"] = HVACLossAPI.API_VERSION
+        # The type-def's own declared construction layers, in order -- so a
+        # generator/PartScript can hand them straight to
+        # HVACLibraryAPI.build_envelopes()/build_layered_geometry() without
+        # reaching past the API into Library.py's own HVACTypeDef.
+        prepared["construction_layers"] = list(getattr(type_def, "construction", []) or [])
 
         params = prepared.get("params")
         if params is None:
@@ -671,18 +676,23 @@ class HVACLibraryRegistry:
 
         Unlike geometry backends (partscript/static/legacy generator, one
         per type, declared via type_def.geometry/generator_module), feature
-        generators always live in one fixed, conventional module --
+        generators default to one fixed, conventional module --
         <library's generators_package>.features -- resolved the same way
         generator_module/loss_module already are (import_generator()), so a
         PartScript-backed type (which has no generator_module of its own)
-        still has a well-defined place for its own feature generators.
+        still has a well-defined place for its own feature generators. A
+        feature can override this default via its own "module" JSON key
+        (ConstructionFeatureDef.module), exactly like "loss" already lets a
+        type-def point at any module for its own loss function -- imported
+        modules are cached per name here so several features sharing (or
+        not sharing) a module each only get imported once per call.
         """
         feature_defs = getattr(type_def, "features", None) or []
         if not feature_defs:
             return
 
         params = dict(context.get("params", {}) or {})
-        features_module = None
+        modules_by_name = {}
 
         for feature_def in feature_defs:
             enabled = True
@@ -712,8 +722,11 @@ class HVACLibraryRegistry:
                 context=context,
             )
 
+            module_name = feature_def.module or "features"
+            features_module = modules_by_name.get(module_name)
             if features_module is None:
-                features_module = self.import_generator(library_id, "features")
+                features_module = self.import_generator(library_id, module_name)
+                modules_by_name[module_name] = features_module
             generator_func = getattr(features_module, feature_def.generator)
 
             shape = generator_func(HVACLibraryAPI, ctx)
@@ -936,6 +949,7 @@ class HVACLibraryRegistry:
                     id=feature_raw["id"],
                     role=feature_raw.get("role", ""),
                     host_layer=feature_raw.get("host_layer", ""),
+                    module=feature_raw.get("module", ""),
                     generator=feature_raw.get("generator", ""),
                     enabled_parameter=feature_raw.get("enabled_parameter"),
                     visible_parameter=feature_raw.get("visible_parameter"),

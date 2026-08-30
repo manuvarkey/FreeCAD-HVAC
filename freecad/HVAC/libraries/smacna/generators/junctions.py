@@ -27,27 +27,6 @@ def _loft(api, ports, offset=0.0, ruled=True):
     return api.loft([api.profile_from_port(port, offset) for port in ports], solid=True, ruled=ruled)
 
 
-def _layer_shapes(api, boundary_builder, thickness, insulation):
-    t = max(float(thickness or 0.0), 0.0)
-    ins = max(float(insulation or 0.0), 0.0)
-    air = api.refine(boundary_builder(0.0))
-    casing_outer = api.refine(boundary_builder(t))
-    casing = api.refine(api.cut(casing_outer, air)) if t > _EPS else None
-    insulation_shape = None
-    insulation_outer = casing_outer
-    if ins > _EPS:
-        insulation_outer = api.refine(boundary_builder(t + ins))
-        insulation_shape = api.refine(api.cut(insulation_outer, casing_outer))
-    return air, casing_outer, insulation_outer, casing, insulation_shape
-
-
-def _result_layers(casing, insulation):
-    layers = {"casing": {"shape": casing}}
-    if insulation is not None:
-        layers["insulation"] = {"shape": insulation}
-    return layers
-
-
 def _flange(api, port, casing_thickness, flange_thickness, flange_height, inward):
     if flange_thickness <= _EPS or flange_height <= _EPS:
         return None
@@ -158,26 +137,24 @@ def build_elbow(context):
         raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
     p = _props(context)
     thickness = float(p.get("Thickness", 0.8) or 0.0)
-    insulation = float(p.get("InsulationThickness", 0.0) or 0.0)
     size = max(_size(api, ports[0]), _size(api, ports[1]))
     radius = max(_positive(p.get("CenterlineRadius"), 0.6 * size), 0.5 * size)
     route = api.make_elbow_path(ports[0], ports[1], radius)
 
-    def boundary(offset):
+    def build_envelope(offset):
         return api.sweep(
             [api.profile_from_port(route["ports"][0], offset), api.profile_from_port(route["ports"][1], offset)],
             route["path"],
             solid=True,
         )
 
-    _, _, _, casing, ins_shape = _layer_shapes(api, boundary, thickness, insulation)
-    casing = _add_flanges(api, casing, route["ports"], thickness, p)
-    return {
-        "layers": _result_layers(casing, ins_shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(
-            [(ports[0], route["trim_lengths"][0]), (ports[1], route["trim_lengths"][1])]
-        ),
-    }
+    result = api.build_layered_geometry(build_envelope, context["construction_layers"], p)
+    casing = _add_flanges(api, result["layers"].get("casing", {}).get("shape"), route["ports"], thickness, p)
+    result["layers"]["casing"] = {"shape": casing}
+    result["connection_lengths"] = api.build_trim_rec_from_port_lengths(
+        [(ports[0], route["trim_lengths"][0]), (ports[1], route["trim_lengths"][1])]
+    )
+    return result
 
 
 def build_transition(context):
@@ -187,21 +164,19 @@ def build_transition(context):
         raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
     p = _props(context)
     thickness = float(p.get("Thickness", 0.8) or 0.0)
-    insulation = float(p.get("InsulationThickness", 0.0) or 0.0)
     size = max(_size(api, ports[0]), _size(api, ports[1]))
     total = _positive(p.get("Length", p.get("TransitionLength")), max(size, 100.0))
     trim = total / 2.0
     ends = [_trimmed(api, ports[0], trim), _trimmed(api, ports[1], trim)]
 
-    def boundary(offset):
+    def build_envelope(offset):
         return _loft(api, ends, offset, ruled=True)
 
-    _, _, _, casing, ins_shape = _layer_shapes(api, boundary, thickness, insulation)
-    casing = _add_flanges(api, casing, ends, thickness, p)
-    return {
-        "layers": _result_layers(casing, ins_shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths([(ports[0], trim), (ports[1], trim)]),
-    }
+    result = api.build_layered_geometry(build_envelope, context["construction_layers"], p)
+    casing = _add_flanges(api, result["layers"].get("casing", {}).get("shape"), ends, thickness, p)
+    result["layers"]["casing"] = {"shape": casing}
+    result["connection_lengths"] = api.build_trim_rec_from_port_lengths([(ports[0], trim), (ports[1], trim)])
+    return result
 
 
 def _inline(context, factor, minimum):
@@ -237,24 +212,22 @@ def _star_layered(context, factor):
         raise ValueError("Branch fitting requires at least three connected ports")
     p = _props(context)
     thickness = float(p.get("Thickness", 0.8) or 0.0)
-    insulation = float(p.get("InsulationThickness", 0.0) or 0.0)
     center = sum((api.port_position(port) for port in ports), api.vec((0, 0, 0))) / len(ports)
     trim = _positive(p.get("JunctionLength", p.get("TrimLength")), factor * max(_size(api, port) for port in ports))
     ends = [_trimmed(api, port, trim) for port in ports]
 
-    def boundary(offset):
+    def build_envelope(offset):
         legs = []
         for end in ends:
             center_port = api.copy_port(end, position=center, direction=api.port_direction(end) * -1.0)
             legs.append(_loft(api, [end, center_port], offset, ruled=True))
         return api.fuse(*legs)
 
-    _, _, _, casing, ins_shape = _layer_shapes(api, boundary, thickness, insulation)
-    casing = _add_flanges(api, casing, ends, thickness, p)
-    return {
-        "layers": _result_layers(casing, ins_shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths([(port, trim) for port in ports]),
-    }
+    result = api.build_layered_geometry(build_envelope, context["construction_layers"], p)
+    casing = _add_flanges(api, result["layers"].get("casing", {}).get("shape"), ends, thickness, p)
+    result["layers"]["casing"] = {"shape": casing}
+    result["connection_lengths"] = api.build_trim_rec_from_port_lengths([(port, trim) for port in ports])
+    return result
 
 
 def build_tee(context):

@@ -89,6 +89,21 @@
         "default_material_role": "thermal_insulation",
         "thickness_property": "InsulationThickness"
       }
+    ],
+    "features": [
+      {
+        "id": "transverse_flange",
+        "role": "transverse_joint",
+        "host_layer": "casing",
+        "module": "features",
+        "generator": "generate_transverse_flange",
+        "parameters": [
+          "FlangeHeight",
+          "FlangeThickness",
+          "ShowFlange1",
+          "ShowFlange2"
+        ]
+      }
     ]
   },
   "geometry": {

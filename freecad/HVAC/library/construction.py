@@ -143,9 +143,14 @@ class ConstructionFeatureDef:
         to/built from (see Library.py.build_geometry(), which resolves this
         to that layer's own already-built LayerGeometry before invoking the
         feature's generator).
-    generator: name of the function this feature's own library-supplied
-        "features" generator module (generators_package + ".features")
-        must define -- resolved and invoked by build_geometry(), never
+    module: name of the generators submodule (generators_package + "." +
+        module) this feature's own generator function lives in, resolved
+        the same way generator_module/loss_module already are
+        (HVACLibraryRegistry.import_generator()). Empty/falsy defaults to
+        the conventional "features" submodule (generators_package +
+        ".features"), so most type-defs never need to set this.
+    generator: name of the function inside that module (see "module"
+        above) -- resolved and invoked by build_geometry(), never
         imported by core ahead of time.
     enabled_parameter: name of an *existing* declared type-def property
         (see HVACPropertyDef) whose current value gates whether this
@@ -167,6 +172,7 @@ class ConstructionFeatureDef:
     id: str
     role: str = ""
     host_layer: str = ""
+    module: str = ""
     generator: str = ""
     enabled_parameter: "str | None" = None
     visible_parameter: "str | None" = None

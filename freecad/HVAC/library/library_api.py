@@ -1321,6 +1321,83 @@ class HVACLibraryAPI:
             ],
         }
 
+    @classmethod
+    def build_envelopes(cls, envelope_builder, construction_layers, params):
+        """
+        Build the nested outer envelopes of a multilayer wall, from the
+        clear-air boundary outward.
+
+        `envelope_builder(offset)` builds the fitting's *whole* outer
+        boundary shape uniformly offset outward by `offset` from the
+        clear-air boundary (an offset of 0 is the air envelope itself) --
+        a generator builds this closure once, from its own profiles/path/
+        mitre-plane logic (typically via `profile_from_port(..., offset)`),
+        and this method is the only thing that ever calls it, so every
+        layer reuses exactly the same axes/stations/trim planes.
+
+        `construction_layers` is the type-def's own declared construction
+        layers, in order (`context["construction_layers"]`, a list of
+        library/construction.py's ConstructionLayerDef). Each layer's
+        thickness is read from `params[layer.thickness_property]`; a layer
+        with no `thickness_property` contributes zero thickness (e.g. a
+        purely descriptive layer with no wall thickness of its own).
+
+        Returns `[air, envelope_1, envelope_2, ..., envelope_N]` -- one
+        more shape than there are layers. A zero-thickness layer's
+        envelope is the same object as the envelope before it (no
+        redundant rebuild), which is how `envelopes_to_layers` recognizes
+        it below.
+        """
+        envelopes = [cls.refine(envelope_builder(0.0))]
+        cumulative = 0.0
+        for layer_def in construction_layers:
+            thickness_property = getattr(layer_def, "thickness_property", None)
+            thickness = float(params.get(thickness_property, 0.0) or 0.0) if thickness_property else 0.0
+            if thickness > _EPS:
+                cumulative += thickness
+                envelopes.append(cls.refine(envelope_builder(cumulative)))
+            else:
+                envelopes.append(envelopes[-1])
+        return envelopes
+
+    @classmethod
+    def envelopes_to_layers(cls, envelopes):
+        """
+        Cut `HVACLibraryAPI.build_envelopes()`'s nested envelopes into each
+        layer's own physical solid: Layer 1 = Envelope 1 - Air,
+        Layer 2 = Envelope 2 - Envelope 1, ..., innermost layer first.
+
+        A layer whose envelope is the same object as the one before it (a
+        zero-thickness layer, see `build_envelopes`) is reported as `None`
+        without running a boolean at all.
+        """
+        layers = []
+        for inner, outer in zip(envelopes, envelopes[1:]):
+            layers.append(None if outer is inner else cls.refine(cls.cut(outer, inner)))
+        return layers
+
+    @classmethod
+    def build_layered_geometry(cls, envelope_builder, construction_layers, params):
+        """
+        Convenience wrapper: `build_envelopes()` + `envelopes_to_layers()`,
+        packaged as the `{"layers": {id: {"shape": ...}}}` dict a geometry
+        backend returns (see library/geometry_result.py's `normalize()`).
+
+        This is the one call most multilayer fitting generators need: build
+        `envelope_builder(offset)` once from the fitting's own geometry
+        context, then hand it here together with `context["construction_layers"]`
+        and the resolved `params` -- no per-fitting casing/insulation-specific
+        layer helpers required.
+        """
+        envelopes = cls.build_envelopes(envelope_builder, construction_layers, params)
+        layer_shapes = cls.envelopes_to_layers(envelopes)
+        return {
+            "layers": {
+                layer_def.id: {"shape": shape}
+                for layer_def, shape in zip(construction_layers, layer_shapes)
+            }
+        }
+
     @staticmethod
     def shape_from_fcstd(fcstd_path, context, params=None, result_object="Result",
                           port_names=None, tol_mm=0.5, tol_deg=0.5):
