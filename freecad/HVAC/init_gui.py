@@ -26,7 +26,7 @@ __author__ = "Francisco Rosa, Manu Varkey"
 
 import FreeCAD
 import FreeCADGui as Gui
-from PySide.QtCore import QT_TRANSLATE_NOOP
+from PySide.QtCore import QT_TRANSLATE_NOOP, QTimer
 translate = FreeCAD.Qt.translate
 
 from .utils import hvaclib
@@ -57,7 +57,8 @@ class HVAC(Gui.Workbench):
         
         self.watchers = []
         self.observers = []
-        
+        self.gui_observers = []
+
         self.toolbar_commands = ['HVAC_CreateDuctNetwork',
                                 'HVAC_ActivateDuctNetwork',
                                 'HVAC_ModifyDuctNetwork',
@@ -142,24 +143,34 @@ class HVAC(Gui.Workbench):
         self.appendMenu(QT_TRANSLATE_NOOP("Workbench", "HVAC"), self.submenu_commands)
         self.appendToolbar(QT_TRANSLATE_NOOP("Workbench", "HVAC"), self.toolbar_commands)
 
+        # Document observers are registered once here (Initialize() only
+        # ever runs once per session), not in Activated()/Deactivated().
+        # Entering Sketch or Draft Wire edit mode switches the active
+        # workbench away from HVAC as a side effect (FreeCAD auto-switches
+        # to the Sketcher workbench for Sketch edits; CommandEditBaseObject
+        # explicitly does so for Draft Wire edits) -- that would fire
+        # Deactivated() and tear the observers down right before FreeCAD's
+        # own slotInEdit signal fires, so document-observer lifetime can't
+        # be tied to workbench activation.
+        self.setObservers()
+
     def Activated(self):
         """This function is executed whenever the workbench is activated"""
         FreeCAD.Console.PrintMessage(translate("InitGui","HVAC - Workbench loaded") + "\n")
         self.refreshWatchers()
-        self.setObservers()
         FreeCAD.Console.PrintMessage(translate("InitGui","HVAC - Workbench - Watchers set") + "\n")
         return
 
     def Deactivated(self):
         """This function is executed whenever the workbench is deactivated"""
+        # Only task watchers are workbench-activation-scoped -- document
+        # observers (self.observers/self.gui_observers) are session-scoped,
+        # see the comment in Initialize().
         try:
             Gui.Control.clearTaskWatcher()
-            for obs in self.observers:
-                FreeCAD.removeDocumentObserver(obs)
         except Exception:
             pass
         self.watchers = []
-        self.observers = []
         return
 
     def ContextMenu(self, recipient):
@@ -274,13 +285,28 @@ class HVAC(Gui.Workbench):
         Gui.Control.addTaskWatcher(self.watchers)
         
     def setObservers(self):
-        # Observer for watching duct network changes
-        from .ui.Observer import DuctNetworkChangeObserver
+        # App document observer: property/document/undo-redo handling.
+        from .ui.Observer import DuctNetworkChangeObserver, DuctNetworkGuiEditObserver
         hvac_change_observer = DuctNetworkChangeObserver()
-        
+
         self.observers = [hvac_change_observer]
         for obs in self.observers:
             FreeCAD.addDocumentObserver(obs)
+
+        # Gui document observer: edit-mode enter/exit events (slotInEdit/
+        # slotResetEdit), registered separately since these are Gui-level
+        # callbacks, not App-level ones -- see DuctNetworkGuiEditObserver.
+        hvac_gui_edit_observer = DuctNetworkGuiEditObserver(hvac_change_observer)
+        self.gui_observers = [hvac_gui_edit_observer]
+        for obs in self.gui_observers:
+            Gui.addDocumentObserver(obs)
+
+        # One-time bootstrap: pick up an edit session already in progress
+        # right as these observers are first registered (no slotInEdit
+        # fires for an edit that started before this observer existed) --
+        # not a recurring poll, see
+        # DuctNetworkChangeObserver._checkEditedBaseObject().
+        QTimer.singleShot(0, hvac_change_observer._checkEditedBaseObject)
 
     def GetClassName(self):
         # This function is mandatory if this is a full Python workbench

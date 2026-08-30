@@ -466,12 +466,7 @@ class DuctNetworkChangeObserver:
         self._undo_redo_in_progress: bool = False
         self._sync_in_progress: bool = False
         self.edit_observer = None
-        
-        self._edit_timer = QtCore.QTimer()
-        self._edit_timer.setInterval(hvaclib.OBSERVER_TIMER_POLL_INTERVAL)
-        self._edit_timer.timeout.connect(self._checkEditedBaseObject)
-        self._edit_timer.start()
-        
+
         self._edited_net = None
         self._edited_base_obj = None
 
@@ -613,40 +608,31 @@ class DuctNetworkChangeObserver:
         # Reset sketch/ line observer
         self.edit_observer = None
 
-    def _checkEditedBaseObject(self):
+    def _startEditedBaseObject(self, obj):
         """
-        Monitor the active document to detect when base objects enter or exit edit mode.
+        Begin tracking `obj` -- the actual App document object, not a
+        ViewProvider -- as the base object now in edit mode.
 
-        This method is called periodically via a timer to identify if a Sketch 
-        or Draft Wire managed by an HVAC network is currently being edited. 
-        It toggles the visibility of derived 3D geometry through the network 
-        proxy to facilitate editing.
-        """        
-        if not FreeCAD.GuiUp or Gui.ActiveDocument is None:
+        Extracted from the old polling _checkEditedBaseObject() so both
+        slotInEdit() (the normal, event-driven path) and
+        _checkEditedBaseObject() (a one-time bootstrap for an edit session
+        already in progress when the workbench activates -- see its own
+        docstring) share the exact same logic.
+        """
+        # Only HVAC-supported base object types are relevant.
+        if not (hvaclib.isSketch(obj) or hvaclib.isWire(obj)):
             return
 
-        # Query the current edited object
-        in_edit = Gui.ActiveDocument.getInEdit()
-        obj = getattr(in_edit, "Object", None) if in_edit else None
-
-        # Check if the object type is relevant
-        if not ( hvaclib.isSketch(obj) or hvaclib.isWire(obj) ):
-            if self._edited_base_obj is not None:
-                self._finishEditedBaseObject()
-            return
-
-        # Find the owning network
+        # Find the owning network.
         net = hvaclib.getOwnerNetwork(obj)
         if net is None:
-            if self._edited_base_obj is not None:
-                self._finishEditedBaseObject()
             return
 
-        # If the same object is still being edited
+        # Already tracking this exact network/object -- nothing to do.
         if self._edited_net is net and self._edited_base_obj is obj:
             return
 
-        # If editing switched to a different object
+        # Editing switched to a different object -- close out the old one first.
         if self._edited_base_obj is not None:
             self._finishEditedBaseObject()
 
@@ -658,26 +644,86 @@ class DuctNetworkChangeObserver:
         proxy = getattr(net, "Proxy", None)
         if proxy:
             proxy.setBaseObjectEditing(obj, True)
-            
+
         # Suspend sync to prevent transient sync requests while editing
         if net and hasattr(net, "Proxy") and net.Proxy:
             net.Proxy.suspendSync()
-            
+
         # Setup and manage observers
         if not self.edit_observer:
             def callback(obj, sketch):
                 pass
-                
+
             if hvaclib.isSketch(obj):
                 self.edit_observer = SketchObserver(self._edited_net, callback, edit_mode=True)
                 self.edit_observer.set_modified_sketch(obj)
             elif hvaclib.isWire(obj):
                 self.edit_observer = DraftLineObserver(self._edited_net, callback, edit_mode=True)
                 self.edit_observer.set_modified_line(obj)
-                
+
             FreeCAD.addDocumentObserver(self.edit_observer)
             self.edit_observer._sync_arrows()
             FreeCAD.ActiveDocument.recompute()
+
+    def slotInEdit(self, vobj):
+        """
+        Gui document observer callback -- fired the instant a ViewProvider
+        actually enters edit mode. Replaces the old getInEdit() poll, which
+        could observe a still-None edit state during FreeCAD's transition
+        into edit mode and miss the edited object entirely; this fires only
+        once the transition is complete, so there's no window to race.
+        """
+        obj = getattr(vobj, "Object", None)
+        if obj is not None:
+            self._startEditedBaseObject(obj)
+
+    def slotResetEdit(self, vobj):
+        """Gui document observer callback -- fired when edit mode ends."""
+        obj = getattr(vobj, "Object", None)
+        if obj is self._edited_base_obj:
+            self._finishEditedBaseObject()
+
+    def _checkEditedBaseObject(self):
+        """
+        One-time bootstrap only -- NOT a periodic poll. slotInEdit()/
+        slotResetEdit() above are the normal, event-driven mechanism; this
+        method exists solely for the case where the HVAC workbench is
+        activated while some object is already mid-edit, since no
+        slotInEdit() fires for an edit session that started before this
+        observer was registered. Scheduled to run exactly once, via
+        QtCore.QTimer.singleShot(0, ...), right after the observer is
+        created (see init_gui.py's setObservers()).
+        """
+        if not FreeCAD.GuiUp or Gui.ActiveDocument is None:
+            return
+
+        in_edit = Gui.ActiveDocument.getInEdit()
+        obj = getattr(in_edit, "Object", None) if in_edit else None
+        if obj is not None:
+            self._startEditedBaseObject(obj)
+
+
+class DuctNetworkGuiEditObserver:
+    """
+    Minimal Gui document observer adapter, forwarding slotInEdit()/
+    slotResetEdit() to a DuctNetworkChangeObserver instance.
+
+    Kept separate (registered via Gui.addDocumentObserver()) rather than
+    making DuctNetworkChangeObserver itself both an App and a Gui document
+    observer -- App and Gui document observers are two distinct FreeCAD
+    registrations with two distinct callback surfaces (property/undo-redo
+    vs. edit-mode/view events), and mixing both sets of slots onto one
+    object blurs which registration is responsible for which behaviour.
+    """
+
+    def __init__(self, owner):
+        self.owner = owner
+
+    def slotInEdit(self, vobj):
+        self.owner.slotInEdit(vobj)
+
+    def slotResetEdit(self, vobj):
+        self.owner.slotResetEdit(vobj)
 
 
 class TerminalFlowRateObserver:
