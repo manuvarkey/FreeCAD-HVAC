@@ -167,7 +167,6 @@ class DuctComponent:
             result = reg.build_geometry(library_id, type_def, context)
             _geometry_apply.apply_geometry_result(obj, result)
             lengths = result.connection_lengths
-            computed = result.computed_properties
 
             lengths_json = json.dumps(lengths)
             if getattr(obj, "ConnectionLengthsJson", "") != lengths_json:
@@ -175,15 +174,8 @@ class DuctComponent:
 
             # Reactive, read-only "as-built" properties a geometry backend
             # may report alongside its shape -- same convention as
-            # DuctJunction.execute() / DuctSegment.execute().
-            for name, value in computed.items():
-                if name not in obj.PropertiesList:
-                    continue
-                try:
-                    if getattr(obj, name, None) != value:
-                        setattr(obj, name, value)
-                except Exception:
-                    pass
+            # DuctSegment.execute().
+            _geometry_apply.apply_computed_properties(obj, type_def, result)
 
         except Exception as e:
             FreeCAD.Console.PrintWarning(

@@ -146,6 +146,7 @@ class DuctSegment:
     
             result = reg.build_geometry(library_id, type_def, context)
             _geometry_apply.apply_geometry_result(obj, result)
+            _geometry_apply.apply_computed_properties(obj, type_def, result)
 
             # Optional trim plane overrides from generator
             if result.start_trim_plane_json is not None:

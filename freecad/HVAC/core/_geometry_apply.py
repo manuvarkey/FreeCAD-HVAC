@@ -68,6 +68,40 @@ def apply_geometry_result(obj, result):
     obj.Shape = Part.makeCompound(ordered_shapes)
 
 
+def apply_computed_properties(obj, type_def, result):
+    """
+    Copy result.computed_properties onto matching declared type-schema
+    properties (see library/Library.py's HVACPropertyDef) that also exist on
+    obj -- a computed-property key that isn't declared by the active type,
+    or doesn't exist on obj, is silently ignored (property creation stays
+    exclusively _type_schema.py's job). A declared read-only (editor_mode 1)
+    property that this call's computed_properties no longer reports is reset
+    to its schema default instead of retaining a stale value; editable
+    (editor_mode 0) properties are only ever touched when computed_properties
+    explicitly names them.
+    """
+    computed = result.computed_properties or {}
+    changed = False
+    for pdef in getattr(type_def, "properties", []) or []:
+        if pdef.name not in obj.PropertiesList:
+            continue
+        if pdef.name in computed:
+            value = computed[pdef.name]
+        elif int(getattr(pdef, "editor_mode", 0) or 0) == 1:
+            value = getattr(pdef, "default", None)
+            if value is None:
+                continue
+        else:
+            continue
+        try:
+            if getattr(obj, pdef.name, None) != value:
+                setattr(obj, pdef.name, value)
+                changed = True
+        except Exception:
+            pass
+    return changed
+
+
 def _entry_shape(geometry):
     """A LayerGeometry's/FeatureGeometry's own shape, or None if absent/null."""
     if geometry is None:
