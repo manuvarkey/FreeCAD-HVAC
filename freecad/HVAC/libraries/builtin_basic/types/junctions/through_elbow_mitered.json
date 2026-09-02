@@ -1,13 +1,13 @@
 {
-  "id": "through_elbow_radius",
-  "label": "Elbow - Radius",
+  "id": "through_elbow_mitered",
+  "label": "Elbow - Mitered",
   "category": "junction",
   "topology": "through",
   "family": ["through.bend", "through.bend.3d", "through.bend_90", "through.bend_90.3d"],
   "profiles": ["Circular", "Rectangular", "Oval"],
   "selection": {
     "kind": "model",
-    "priority": 50
+    "priority": 40
   },
   "constraints": {
     "degree": 2
@@ -17,13 +17,20 @@
       "name": "CenterlineRadius",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Elbow centerline radius",
+      "description": "Radius of the smooth bend the mitre cuts approximate",
       "default": 300.0
+    },
+    {
+      "name": "NumberOfCuts",
+      "prop_type": "App::PropertyInteger",
+      "group": "Dimensions",
+      "description": "Number of mitre cuts (1 = a single two-piece joint)",
+      "default": 1
     }
   ],
   "generator": {
     "module": "junctions",
-    "function": "build_elbow"
+    "function": "build_elbow_mitered"
   },
   "loss": {
     "module": "junction_losses",

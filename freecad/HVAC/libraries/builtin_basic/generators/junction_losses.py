@@ -49,9 +49,9 @@ than one outlet, which has no single trunk to decompose against).
 
 def loss_through_generic(context):
     # This generic "through" type covers straight/offset/bend families in one
-    # type (unlike the more specific through_elbow_generic/through_transition_
-    # generic), so it may be a bend, an area change, or both -- try the elbow
-    # (CenterlineRadius-driven) reading first, then fall back to the
+    # type (unlike the more specific through_elbow_radius/through_transition_
+    # angled/etc.), so it may be a bend, an area change, or both -- try the
+    # elbow (CenterlineRadius-driven) reading first, then fall back to the
     # transition (area-change) reading.
     api = context["loss_api"]
     result = api.elbow_loss(context)

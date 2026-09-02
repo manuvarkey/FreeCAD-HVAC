@@ -1,5 +1,7 @@
 """Common fitting recipes built only from HVACLibraryAPI geometry primitives."""
 
+import math
+
 _EPS = 1.0e-7
 
 
@@ -135,6 +137,143 @@ def build_elbow(context):
     }
 
 
+def build_elbow_mitered(context):
+    api = context["hvac_api"]
+    ports = list(api.connected_ports(context))
+    if len(ports) != 2:
+        raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
+    port0, port1 = ports
+    u0 = api.port_direction(port0)
+    u1 = api.port_direction(port1)
+    original_profile0 = api.profile_from_port(port0)
+    original_profile1 = api.profile_from_port(port1)
+
+    def profile_extent(profile):
+        shape = profile.wire if hasattr(profile, "wire") else profile
+        bb = shape.BoundBox
+        return max(bb.DiagonalLength, bb.XLength, bb.YLength, bb.ZLength, 1.0)
+
+    size = max(profile_extent(original_profile0), profile_extent(original_profile1))
+    props = _props(context)
+    radius = _positive(props.get("CenterlineRadius"), 0.6 * size)
+    radius = max(radius, 0.5 * size)
+    cuts = max(int(props.get("NumberOfCuts", 1) or 1), 1)
+
+    # Establish the tangent ends of the fitting.
+    route = api.make_elbow_path(port0, port1, radius)
+    route_port0, route_port1 = route["ports"]
+    s0 = api.port_position(route_port0)
+    s1 = api.port_position(route_port1)
+    d0 = api.unit(u0 * -1.0)
+    d1 = api.unit(u1)
+    deflection = api.angle_between(d0, d1)
+    if deflection <= api.EPS:
+        raise ValueError("Mitered elbow requires a non-zero bend angle")
+    bend_cross = d0.cross(d1)
+    if bend_cross.Length <= api.EPS:
+        raise ValueError("Mitered elbow bend plane is undefined")
+    bend_normal = api.unit(bend_cross)
+    center = api.arc_center_from_points_tangents_radius(s0, s1, u0, u1, radius)
+
+    # Straight gore directions.
+    # NumberOfCuts is the number of internal mitre joints.
+    # Therefore there are cuts + 1 gores.
+    segment_angle = deflection / float(cuts)
+    cos_half = math.cos(segment_angle / 2.0)
+    if abs(cos_half) <= api.EPS:
+        raise ValueError("Mitered elbow segment angle is degenerate")
+    leg_dirs = [api.unit(api.rotate_vector(d0, bend_normal, i * segment_angle)) for i in range(cuts + 1)]
+
+    # Internal mitre planes.
+    radius_vec0 = api.unit(s0 - center)
+    joint_radius = radius / cos_half
+    joint_positions = []
+    joint_planes = []
+    for i in range(cuts):
+        angle = (i + 0.5) * segment_angle
+        position = center + api.rotate_vector(radius_vec0, bend_normal, angle) * joint_radius
+        normal = api.unit(leg_dirs[i] + leg_dirs[i + 1])
+        joint_positions.append(position)
+        joint_planes.append((position, normal))
+
+    # Determine which clipping half-space contains a known point.
+    def clip_keep_point(shape, plane, point):
+        plane_origin, plane_normal = plane
+        value = (api.vec(point) - api.vec(plane_origin)).dot(api.unit(plane_normal))
+        side = "positive" if value >= 0.0 else "negative"
+        return api.clip_plane(shape, plane, side=side)
+
+    # Calculate the extrusion distance required to pass fully through
+    # an inclined mitre plane.
+    def reach_to_plane(origin, direction, plane, section):
+        plane_origin, plane_normal = plane
+        direction = api.unit(direction)
+        plane_normal = api.unit(plane_normal)
+        denom = direction.dot(plane_normal)
+        if abs(denom) <= api.EPS:
+            raise ValueError("Mitered elbow geometry is degenerate: gore direction is parallel to mitre plane")
+        reach = (plane_origin - origin).dot(plane_normal) / denom
+        if reach <= api.EPS:
+            raise ValueError("Mitered elbow has zero or negative gore length")
+        extent = profile_extent(section)
+        margin = 2.0 * extent / max(abs(denom), 0.1)
+        return reach + margin
+
+    # Build one constant-profile gore from an existing exact section
+    # toward a target mitre plane.
+    def extrude_to_plane(section, axis_origin, direction, target_plane):
+        reach = reach_to_plane(axis_origin, direction, target_plane, section)
+        solid = api.extrude(section, direction * reach, solid=True)
+        solid = clip_keep_point(solid, target_plane, axis_origin)
+        if solid is None or solid.isNull():
+            raise RuntimeError("Mitered elbow gore became null after clipping")
+        cut_face = api.section_face(solid, target_plane)
+        return solid, cut_face.OuterWire
+
+    # Actual fitting-end profiles. These may be geometrically different.
+    profile0 = api.profile_from_port(route_port0)
+    profile1 = api.profile_from_port(route_port1)
+
+    # Use one central gore as the finite transition between the exact
+    # profiles propagated from each end.
+    transition_gore = cuts // 2
+    pieces = []
+
+    # PORT 0 -> FORWARD
+    left_section = profile0
+    left_axis_point = s0
+    for i in range(transition_gore):
+        solid, next_section = extrude_to_plane(left_section, left_axis_point, leg_dirs[i], joint_planes[i])
+        pieces.append(solid)
+        left_section = next_section
+        left_axis_point = joint_positions[i]
+
+    # PORT 1 -> BACKWARD
+    right_section = profile1
+    right_axis_point = s1
+    right_pieces = []
+    for i in range(cuts, transition_gore, -1):
+        target_plane = joint_planes[i - 1]
+        backward_direction = leg_dirs[i] * -1.0
+        solid, next_section = extrude_to_plane(right_section, right_axis_point, backward_direction, target_plane)
+        right_pieces.append(solid)
+        right_section = next_section
+        right_axis_point = joint_positions[i - 1]
+
+    # The transition gore is a finite loft between exact section wires
+    # propagated from port0 and port1.
+    transition = api.loft([left_section, right_section], solid=True, ruled=True)
+    if transition is None or transition.isNull():
+        raise RuntimeError("Mitered elbow transition gore loft failed")
+    pieces.append(transition)
+    pieces.extend(right_pieces)
+    shape = api.fuse(*pieces)
+    return {
+        "shape": api.refine(shape),
+        "connection_lengths": api.build_trim_rec_from_port_lengths([(port0, route["trim_lengths"][0]), (port1, route["trim_lengths"][1])]),
+    }
+
+
 def build_transition(context):
     api = context["hvac_api"]
     ports = list(api.connected_ports(context))
@@ -160,6 +299,10 @@ def build_transition_radiussed(context):
     size = max(_size(api, ports[0]), _size(api, ports[1]))
     total = _positive(p.get("Length", p.get("TransitionLength")), max(size, 100.0))
     radius = _positive(p.get("Length", p.get("TransitionRadius")), max(size, 10.0))
+    # A bend radius smaller than the duct's own half-width folds the swept
+    # surface back on itself on the inside of the bend (same minimum
+    # build_elbow enforces on CenterlineRadius).
+    radius = max(radius, 0.5 * size)
     route = api.make_radiussed_path(ports[0], ports[1], total, radius)
     shape = api.sweep(
         [api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])],

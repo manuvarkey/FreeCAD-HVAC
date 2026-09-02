@@ -107,6 +107,14 @@ class HVACLibraryAPI:
         return math.acos(dot)
 
     @staticmethod
+    def rotate_vector(v, axis, angle):
+        """Rotate vector *v* by *angle* radians around a unit *axis* (Rodrigues' formula)."""
+        v = HVACLibraryAPI.vec(v)
+        axis = HVACLibraryAPI.unit(axis)
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        return v * cos_a + axis.cross(v) * sin_a + axis * (axis.dot(v) * (1.0 - cos_a))
+
+    @staticmethod
     def average_point(points):
         """Return the arithmetic mean of points, or the origin for an empty input."""
         pts = list(points or [])
@@ -1045,7 +1053,18 @@ class HVACLibraryAPI:
         # builder consistently. Extruding a plane larger than the target's
         # bounding box creates an equivalent bounded clipping solid.
         half_space = plane_face.extrude(normal * (depth if positive else -depth))
-        return shape.common(half_space)
+        result = shape.common(half_space)
+        if result.isNull() or not result.Solids:
+            # A shape that never actually reaches the requested side of the
+            # plane produces an empty (but "valid") result -- fail here,
+            # with the plane/side that caused it, instead of leaving an
+            # empty shape to crash confusingly deep inside whatever uses
+            # it next (e.g. an invalid-bounding-box error far from here).
+            raise ValueError(
+                f"clip_plane produced an empty shape: nothing of the input "
+                f"shape lies on the {side!r} side of the given plane"
+            )
+        return result
 
     @classmethod
     def section_face(cls, shape, plane):
@@ -1057,15 +1076,34 @@ class HVACLibraryAPI:
         a cut line (e.g. a mitre plane) -- reading the real cut face back
         off the trimmed shape avoids any mismatch against an independently
         built, idealised profile that might not land exactly on the plane.
+
+        Reads the face directly off ``shape.Faces`` rather than
+        intersecting with a fresh plane face: a plane coincident with (part
+        of) the shape's own boundary -- exactly the case right after
+        ``clip_plane`` cut it there -- is a tangential/degenerate boolean
+        for OCC, which is unreliable (it can silently return empty). The
+        cut face is already a real face of ``shape``; this just finds it.
         """
         origin, normal = cls._resolve_plane(plane)
-        plane_face, _, _ = cls._bounded_plane_face(shape, origin, normal)
-        section = shape.common(plane_face)
-        if section.isNull() or not section.Faces:
-            raise RuntimeError("Section plane does not intersect the shape in a face")
-        faces = section.Faces
-        result = faces[0]
-        for extra in faces[1:]:
+        bb = shape.BoundBox
+        tol = max(bb.DiagonalLength if hasattr(bb, "DiagonalLength") else 0.0, 1.0) * 1e-6
+
+        matches = []
+        for face in shape.Faces:
+            surface = face.Surface
+            if not isinstance(surface, Part.Plane):
+                continue
+            face_normal = cls.unit(surface.Axis)
+            if abs(abs(face_normal.dot(normal)) - 1.0) > 1e-6:
+                continue
+            if abs((face.CenterOfMass - origin).dot(normal)) > tol:
+                continue
+            matches.append(face)
+
+        if not matches:
+            raise RuntimeError("No face of the shape lies on the requested plane")
+        result = matches[0]
+        for extra in matches[1:]:
             result = result.fuse(extra)
         return result
 
@@ -1360,6 +1398,7 @@ class HVACLibraryAPI:
                 max(0.0, (s0 - p0).dot(u0)),
                 max(0.0, (s1 - p1).dot(u1)),
             ],
+            "center": center,
         }
 
     @staticmethod
