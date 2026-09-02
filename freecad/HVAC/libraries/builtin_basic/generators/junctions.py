@@ -174,6 +174,67 @@ def build_transition_radiussed(context):
     }
 
 
+def build_transition_mitered(context):
+    api = context["hvac_api"]
+    ports = list(api.connected_ports(context))
+    if len(ports) != 2:
+        raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
+    p = _props(context)
+    size = max(_size(api, ports[0]), _size(api, ports[1]))
+    total = _positive(p.get("Length", p.get("TransitionLength")), max(size, 100.0))
+
+    # Step 1: work out the generated end points and the theoretical sharp
+    # turn points shared with the radiussed transition -- same axis, only
+    # the corner treatment differs (a flat mitre cut here, an arc there).
+    axis = api.offset_transition_axis(ports[0], ports[1], total)
+    d = axis["d"]
+    s0, s1 = axis["s0"], axis["s1"]
+    corner0, corner1 = axis["corner0"], axis["corner1"]
+    diagonal, turn_angle = axis["diagonal"], axis["turn_angle"]
+
+    end_a = api.copy_port(ports[0], position=s0)
+    end_b = api.copy_port(ports[1], position=s1)
+
+    if turn_angle <= 1e-6:
+        # No actual lateral offset: an ordinary straight loft, there is no
+        # corner to mitre.
+        shape = _loft(api, [end_a, end_b], 0.0, ruled=True)
+    else:
+        # The mitre plane bisects the straight-run direction and the
+        # diagonal, so a straight stub and the diagonal middle piece meet
+        # flush -- both turn points share this same bisector as their
+        # plane normal, only the plane's own origin differs.
+        normal = api.unit(d + diagonal)
+
+        # Step 2: extend each port's own profile from its end point toward
+        # the transition's centre, then clip it back at its own turn point
+        # with the mitre plane.
+        reach = total / 2.0 + size
+        stub_a = api.extrude(api.profile_from_port(end_a), d * reach, solid=True)
+        stub_a = api.clip_plane(stub_a, (corner0, normal), side="negative")
+        stub_b = api.extrude(api.profile_from_port(end_b), d * -reach, solid=True)
+        stub_b = api.clip_plane(stub_b, (corner1, normal), side="positive")
+
+        # Step 3: sweep between the stubs' own cut faces at the turn
+        # points -- not a fresh, idealised profile wire, which sits on a
+        # different plane than the mitre cut and would not line up with
+        # it once clipped. Reading the real cut face back off each
+        # already-trimmed stub guarantees the middle piece meets them
+        # exactly, and needs no further clipping of its own.
+        face_a = api.section_face(stub_a, (corner0, normal))
+        face_b = api.section_face(stub_b, (corner1, normal))
+        middle = api.loft([face_a.OuterWire, face_b.OuterWire], solid=True, ruled=True)
+
+        shape = api.fuse(stub_a, stub_b, middle)
+
+    trim0 = max(0.0, (s0 - api.port_position(ports[0])).dot(api.port_direction(ports[0])))
+    trim1 = max(0.0, (s1 - api.port_position(ports[1])).dot(api.port_direction(ports[1])))
+    return {
+        "shape": api.refine(shape),
+        "connection_lengths": api.build_trim_rec_from_port_lengths([(ports[0], trim0), (ports[1], trim1)]),
+    }
+
+
 def _inline(context, factor, minimum):
     api = context["hvac_api"]
     ports = list(api.connected_ports(context))

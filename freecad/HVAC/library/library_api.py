@@ -979,26 +979,27 @@ class HVACLibraryAPI:
     # Trim / booleans
     # ------------------------------------------------------------------
 
-    @classmethod
-    def clip_plane(cls, shape, plane, side="positive"):
-        """Keep one half of ``shape`` relative to an infinite plane.
-
-        ``plane`` is ``(origin, normal)`` or a mapping. ``side`` accepts
-        positive/front/normal or negative/back/opposite aliases.
-        """
+    @staticmethod
+    def _resolve_plane(plane):
+        """Normalize a plane argument -- an ``(origin, normal)`` pair or a mapping -- to vectors."""
         if isinstance(plane, Mapping):
-            origin = cls.vec(plane.get("origin", plane.get("point", (0, 0, 0))))
-            normal = cls.unit(plane.get("normal", (0, 0, 1)))
+            origin = HVACLibraryAPI.vec(plane.get("origin", plane.get("point", (0, 0, 0))))
+            normal = HVACLibraryAPI.unit(plane.get("normal", (0, 0, 1)))
         else:
             origin, normal = plane
-            origin, normal = cls.vec(origin), cls.unit(normal)
+            origin, normal = HVACLibraryAPI.vec(origin), HVACLibraryAPI.unit(normal)
+        return origin, normal
 
-        side_key = str(side).strip().lower()
-        positive_aliases = {"positive", "+", "front", "normal"}
-        negative_aliases = {"negative", "-", "back", "opposite"}
-        if side_key not in positive_aliases | negative_aliases:
-            raise ValueError(f"Unsupported clip-plane side: {side}")
+    @classmethod
+    def _bounded_plane_face(cls, shape, origin, normal):
+        """A finite planar face, generously sized to cover ``shape``'s bounding box.
 
+        Shared by ``clip_plane`` (which extrudes this into a half-space
+        solid to trim ``shape``) and ``section_face`` (which intersects it
+        directly to read off an exact cross-section). Also returns
+        ``extent``/``signed_distance`` so ``clip_plane`` can size its
+        extrusion depth without redoing the bounding-box math.
+        """
         bb = shape.BoundBox
         extent = max(
             bb.DiagonalLength if hasattr(bb, "DiagonalLength") else 0.0,
@@ -1017,16 +1018,56 @@ class HVACLibraryAPI:
         signed_distance = (shape_center - origin).dot(normal)
         plane_center = shape_center - normal * signed_distance
         size = extent * 4.0
-        depth = abs(signed_distance) + extent * 2.0
         _, x_axis, y_axis, _ = cls.make_profile_frame(normal, None, origin)
         corner = plane_center - x_axis * (size / 2.0) - y_axis * (size / 2.0)
-        plane_face = Part.makePlane(size, size, corner, normal, x_axis)
+        face = Part.makePlane(size, size, corner, normal, x_axis)
+        return face, extent, signed_distance
+
+    @classmethod
+    def clip_plane(cls, shape, plane, side="positive"):
+        """Keep one half of ``shape`` relative to an infinite plane.
+
+        ``plane`` is ``(origin, normal)`` or a mapping. ``side`` accepts
+        positive/front/normal or negative/back/opposite aliases.
+        """
+        origin, normal = cls._resolve_plane(plane)
+
+        side_key = str(side).strip().lower()
+        positive_aliases = {"positive", "+", "front", "normal"}
+        negative_aliases = {"negative", "-", "back", "opposite"}
+        if side_key not in positive_aliases | negative_aliases:
+            raise ValueError(f"Unsupported clip-plane side: {side}")
+
+        plane_face, extent, signed_distance = cls._bounded_plane_face(shape, origin, normal)
+        depth = abs(signed_distance) + extent * 2.0
         positive = side_key in positive_aliases
         # FreeCAD's Python Part module does not expose OCC's half-space
         # builder consistently. Extruding a plane larger than the target's
         # bounding box creates an equivalent bounded clipping solid.
         half_space = plane_face.extrude(normal * (depth if positive else -depth))
         return shape.common(half_space)
+
+    @classmethod
+    def section_face(cls, shape, plane):
+        """Return the exact planar cross-section where ``shape`` meets a plane.
+
+        ``plane`` is ``(origin, normal)`` or a mapping, same as
+        ``clip_plane``. This is the ready-made face a neighbouring piece
+        should be built against after ``clip_plane`` trims a shape back to
+        a cut line (e.g. a mitre plane) -- reading the real cut face back
+        off the trimmed shape avoids any mismatch against an independently
+        built, idealised profile that might not land exactly on the plane.
+        """
+        origin, normal = cls._resolve_plane(plane)
+        plane_face, _, _ = cls._bounded_plane_face(shape, origin, normal)
+        section = shape.common(plane_face)
+        if section.isNull() or not section.Faces:
+            raise RuntimeError("Section plane does not intersect the shape in a face")
+        faces = section.Faces
+        result = faces[0]
+        for extra in faces[1:]:
+            result = result.fuse(extra)
+        return result
 
     @classmethod
     def trim(cls, shape, boundary, keep="inside"):
@@ -1322,21 +1363,30 @@ class HVACLibraryAPI:
         }
 
     @staticmethod
-    def make_radiussed_path(port0, port1, length, radius):
-        """Create a radiussed offset path between two parallel ports.
-    
-        The path consists of:
-    
-            straight -> circular arc -> diagonal -> circular arc -> straight
-    
-        The fitting has an axial length of ``length``.  The theoretical sharp
-        turn points are located at 1/4 of the fitting length from each generated
-        port.  ``radius`` specifies the radius of both circular bends.
-    
-        The input port directions are outward and must therefore be opposite.
-    
-        Returns a dict containing ``path``, trimmed ``ports``,
-        ``trim_lengths``, and ``turn_points``.
+    def offset_transition_axis(port0, port1, length):
+        """Shared axis geometry for a two-port lateral-offset transition.
+
+        Both ports face outward in opposite, parallel directions but sit on
+        offset (non-coincident) axes -- the generic "through.offset" case.
+        This works out the end points and theoretical sharp turn points
+        that every offset-transition builder needs, so the radiussed
+        (arc-filleted) and mitered (flat-cut) builders agree on exactly the
+        same axis and only differ in how the corner itself is finished.
+
+        Step 1: find the travel direction and the two generated end points,
+        ``length`` apart, that preserve the ports' lateral (transverse)
+        offset.
+        Step 2: find the theoretical sharp turn points -- a quarter of the
+        body length in from each end point -- and the direction/angle of
+        the diagonal segment connecting them.
+
+        Returns a dict with keys ``p0``/``p1``/``u0``/``u1`` (the original
+        port positions/outward directions), ``d`` (unit travel direction,
+        port0 -> port1), ``s0``/``s1`` (generated end points), ``corner0``/
+        ``corner1`` (turn points), ``diagonal`` (unit corner0 -> corner1
+        direction), and ``turn_angle`` (radians, the deflection between the
+        end run and the diagonal -- zero for a plain straight run with no
+        lateral offset).
         """
         p0 = HVACLibraryAPI.port_position(port0)
         p1 = HVACLibraryAPI.port_position(port1)
@@ -1345,27 +1395,23 @@ class HVACLibraryAPI:
         theta = HVACLibraryAPI.angle_between(u0, u1)
         if abs(theta - math.pi) > 1e-6:
             raise ValueError(
-                "Radiussed offset requires opposite parallel port directions"
+                "Offset transition requires opposite parallel port directions"
             )
         length = float(length)
-        radius = float(radius)
         if length <= 0.0:
-            raise ValueError("Radiussed offset length must be > 0")
-        if radius <= 0.0:
-            raise ValueError("Radiussed offset radius must be > 0")
+            raise ValueError("Offset transition length must be > 0")
         eps = HVACLibraryAPI.EPS
-        # Travel direction through the fitting from port0 toward port1.
-        # Port directions themselves are outward.
+        # Step 1: travel direction through the fitting from port0 toward
+        # port1, and the two generated end points.  Port directions
+        # themselves are outward.
         d = -u0
         d.normalize()
-        # ------------------------------------------------------------------
         # Establish corresponding points c0/c1 on the two parallel axes.
         #
         # For parallel lines there is no unique closest-point pair.  Choose
         # points lying at the same axial station, centred between p0 and p1.
         #
         # c1 - c0 is therefore purely transverse to d.
-        # ------------------------------------------------------------------
         delta = p1 - p0
         axial_separation = delta.dot(d)
         c0 = p0 + d * (axial_separation / 2.0)
@@ -1378,18 +1424,51 @@ class HVACLibraryAPI:
         # axial direction while preserving the transverse offset.
         s0 = c0 - d * (length / 2.0)
         s1 = c1 + d * (length / 2.0)
-        # ------------------------------------------------------------------
-        # Theoretical sharp corners.
-        # ------------------------------------------------------------------
+        # Step 2: theoretical sharp corners.
         corner0 = s0 + d * (length / 4.0)
         corner1 = s1 - d * (length / 4.0)
         diagonal_vec = corner1 - corner0
         diagonal_length = diagonal_vec.Length
         if diagonal_length <= eps:
-            raise ValueError("Radiussed offset diagonal is undefined")
+            raise ValueError("Offset transition diagonal is undefined")
         diagonal = HVACLibraryAPI.unit(diagonal_vec)
         # Deflection angle between end straight and diagonal.
         turn_angle = HVACLibraryAPI.angle_between(d, diagonal)
+        return {
+            "p0": p0, "p1": p1, "u0": u0, "u1": u1,
+            "d": d, "s0": s0, "s1": s1,
+            "corner0": corner0, "corner1": corner1,
+            "diagonal": diagonal, "turn_angle": turn_angle,
+        }
+
+    @staticmethod
+    def make_radiussed_path(port0, port1, length, radius):
+        """Create a radiussed offset path between two parallel ports.
+
+        The path consists of:
+
+            straight -> circular arc -> diagonal -> circular arc -> straight
+
+        The fitting has an axial length of ``length``.  The theoretical sharp
+        turn points are located at 1/4 of the fitting length from each generated
+        port.  ``radius`` specifies the radius of both circular bends.
+
+        The input port directions are outward and must therefore be opposite.
+
+        Returns a dict containing ``path``, trimmed ``ports``,
+        ``trim_lengths``, and ``turn_points``.
+        """
+        length = float(length)
+        radius = float(radius)
+        if radius <= 0.0:
+            raise ValueError("Radiussed offset radius must be > 0")
+        axis = HVACLibraryAPI.offset_transition_axis(port0, port1, length)
+        p0, p1, u0, u1 = axis["p0"], axis["p1"], axis["u0"], axis["u1"]
+        d, s0, s1 = axis["d"], axis["s0"], axis["s1"]
+        corner0, corner1 = axis["corner0"], axis["corner1"]
+        diagonal, turn_angle = axis["diagonal"], axis["turn_angle"]
+        eps = HVACLibraryAPI.EPS
+        diagonal_length = (corner1 - corner0).Length
         # ------------------------------------------------------------------
         # No actual offset: return a straight path.
         # ------------------------------------------------------------------
@@ -1401,8 +1480,8 @@ class HVACLibraryAPI:
                     HVACLibraryAPI.copy_port(port1, position=s1),
                 ],
                 "trim_lengths": [
-                    max(0.0, (s0 - p0).dot(-u0)),
-                    max(0.0, (s1 - p1).dot(-u1)),
+                    max(0.0, (s0 - p0).dot(u0)),
+                    max(0.0, (s1 - p1).dot(u1)),
                 ],
                 "turn_points": [corner0, corner1],
             }

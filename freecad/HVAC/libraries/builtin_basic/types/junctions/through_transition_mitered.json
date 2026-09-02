@@ -1,13 +1,13 @@
 {
-  "id": "through_transition_angled",
-  "label": "Transition - Angled",
+  "id": "through_transition_mitered",
+  "label": "Transition - Mitered",
   "category": "junction",
   "topology": "through",
   "family": ["through.straight", "through.offset"],
   "profiles": ["Circular", "Rectangular", "Oval"],
   "selection": {
     "kind": "model",
-    "priority": 50
+    "priority": 45
   },
   "constraints": {
     "degree": 2
@@ -23,7 +23,7 @@
   ],
   "generator": {
     "module": "junctions",
-    "function": "build_transition"
+    "function": "build_transition_mitered"
   },
   "loss": {
     "module": "junction_losses",
