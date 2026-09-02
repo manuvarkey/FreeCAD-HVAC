@@ -1321,6 +1321,187 @@ class HVACLibraryAPI:
             ],
         }
 
+    @staticmethod
+    def make_radiussed_path(port0, port1, length, radius):
+        """Create a radiussed offset path between two parallel ports.
+    
+        The path consists of:
+    
+            straight -> circular arc -> diagonal -> circular arc -> straight
+    
+        The fitting has an axial length of ``length``.  The theoretical sharp
+        turn points are located at 1/4 of the fitting length from each generated
+        port.  ``radius`` specifies the radius of both circular bends.
+    
+        The input port directions are outward and must therefore be opposite.
+    
+        Returns a dict containing ``path``, trimmed ``ports``,
+        ``trim_lengths``, and ``turn_points``.
+        """
+        p0 = HVACLibraryAPI.port_position(port0)
+        p1 = HVACLibraryAPI.port_position(port1)
+        u0 = HVACLibraryAPI.port_direction(port0)
+        u1 = HVACLibraryAPI.port_direction(port1)
+        theta = HVACLibraryAPI.angle_between(u0, u1)
+        if abs(theta - math.pi) > 1e-6:
+            raise ValueError(
+                "Radiussed offset requires opposite parallel port directions"
+            )
+        length = float(length)
+        radius = float(radius)
+        if length <= 0.0:
+            raise ValueError("Radiussed offset length must be > 0")
+        if radius <= 0.0:
+            raise ValueError("Radiussed offset radius must be > 0")
+        eps = HVACLibraryAPI.EPS
+        # Travel direction through the fitting from port0 toward port1.
+        # Port directions themselves are outward.
+        d = -u0
+        d.normalize()
+        # ------------------------------------------------------------------
+        # Establish corresponding points c0/c1 on the two parallel axes.
+        #
+        # For parallel lines there is no unique closest-point pair.  Choose
+        # points lying at the same axial station, centred between p0 and p1.
+        #
+        # c1 - c0 is therefore purely transverse to d.
+        # ------------------------------------------------------------------
+        delta = p1 - p0
+        axial_separation = delta.dot(d)
+        c0 = p0 + d * (axial_separation / 2.0)
+        c1 = p1 - d * (axial_separation / 2.0)
+        transverse = c1 - c0
+        # Numerical sanity check.
+        if abs(transverse.dot(d)) > 1e-6:
+            raise ValueError("Failed to establish parallel offset axes")
+        # Generated fitting ports.  They are separated by ``length`` in the
+        # axial direction while preserving the transverse offset.
+        s0 = c0 - d * (length / 2.0)
+        s1 = c1 + d * (length / 2.0)
+        # ------------------------------------------------------------------
+        # Theoretical sharp corners.
+        # ------------------------------------------------------------------
+        corner0 = s0 + d * (length / 4.0)
+        corner1 = s1 - d * (length / 4.0)
+        diagonal_vec = corner1 - corner0
+        diagonal_length = diagonal_vec.Length
+        if diagonal_length <= eps:
+            raise ValueError("Radiussed offset diagonal is undefined")
+        diagonal = HVACLibraryAPI.unit(diagonal_vec)
+        # Deflection angle between end straight and diagonal.
+        turn_angle = HVACLibraryAPI.angle_between(d, diagonal)
+        # ------------------------------------------------------------------
+        # No actual offset: return a straight path.
+        # ------------------------------------------------------------------
+        if turn_angle <= 1e-6:
+            return {
+                "path": Part.Wire([Part.makeLine(s0, s1)]),
+                "ports": [
+                    HVACLibraryAPI.copy_port(port0, position=s0),
+                    HVACLibraryAPI.copy_port(port1, position=s1),
+                ],
+                "trim_lengths": [
+                    max(0.0, (s0 - p0).dot(-u0)),
+                    max(0.0, (s1 - p1).dot(-u1)),
+                ],
+                "turn_points": [corner0, corner1],
+            }
+        if turn_angle >= math.pi - 1e-6:
+            raise ValueError("Invalid radiussed offset geometry")
+        # ------------------------------------------------------------------
+        # Circular fillets.
+        #
+        # Distance from theoretical corner to tangent point:
+        #
+        #     T = R tan(theta / 2)
+        # ------------------------------------------------------------------
+        tangent_length = radius * math.tan(turn_angle / 2.0)
+        end_straight_available = length / 4.0
+        if tangent_length >= end_straight_available - eps:
+            raise ValueError(
+                "Radius is too large for the available end straight length"
+            )
+        if 2.0 * tangent_length >= diagonal_length - eps:
+            raise ValueError(
+                "Radius is too large for the available diagonal length"
+            )
+        # First bend:
+        #
+        # s0 ---- a0 )---- a1 ------ diagonal
+        #
+        a0 = corner0 - d * tangent_length
+        a1 = corner0 + diagonal * tangent_length
+        # Second bend:
+        #
+        # diagonal ------ b0 ----( b1 ---- s1
+        #
+        b0 = corner1 - diagonal * tangent_length
+        b1 = corner1 + d * tangent_length
+        # ------------------------------------------------------------------
+        # Circular arc helper.
+        # ------------------------------------------------------------------
+        def make_arc(start, end, tangent_start, tangent_end):
+            center = HVACLibraryAPI.arc_center_from_points_tangents_radius(
+                start,
+                end,
+                tangent_start,
+                tangent_end,
+                radius,
+            )
+            r0 = start - center
+            r1 = end - center
+            # For bends below 180 degrees, r0 + r1 points toward the
+            # midpoint of the minor circular arc.
+            rm = r0 + r1
+            if rm.Length <= eps:
+                raise ValueError("Unable to determine arc midpoint")
+            rm.normalize()
+            midpoint = center + rm * radius
+            return HVACLibraryAPI.arc_wire(
+                start,
+                midpoint,
+                end,
+            )
+    
+        arc0 = make_arc(a0, a1, d, diagonal)
+        arc1 = make_arc(b0, b1, diagonal, d)
+        # ------------------------------------------------------------------
+        # Assemble continuous path.
+        # ------------------------------------------------------------------
+        edges = []
+        if (a0 - s0).Length > eps:
+            edges.append(Part.makeLine(s0, a0))
+        edges.extend(arc0.Edges)
+    
+        if (b0 - a1).Length > eps:
+            edges.append(Part.makeLine(a1, b0))
+        edges.extend(arc1.Edges)
+    
+        if (s1 - b1).Length > eps:
+            edges.append(Part.makeLine(b1, s1))
+    
+        return {
+            "path": Part.Wire(edges),
+            "ports": [
+                HVACLibraryAPI.copy_port(
+                    port0,
+                    position=s0,
+                ),
+                HVACLibraryAPI.copy_port(
+                    port1,
+                    position=s1,
+                ),
+            ],
+            "trim_lengths": [
+                max(0.0, (s0 - p0).dot(u0)),
+                max(0.0, (s1 - p1).dot(u1)),
+            ],
+            "turn_points": [
+                corner0,
+                corner1,
+            ],
+        }
+        
     @classmethod
     def build_envelopes(cls, envelope_builder, construction_layers, params):
         """

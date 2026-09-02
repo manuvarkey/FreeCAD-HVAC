@@ -1,13 +1,13 @@
 {
-  "id": "through_transition_generic",
-  "label": "Transition - Generic",
+  "id": "through_transition_radiussed",
+  "label": "Transition - Radiussed",
   "category": "junction",
   "topology": "through",
   "family": ["through.straight", "through.offset"],
   "profiles": ["Circular", "Rectangular", "Oval"],
   "selection": {
     "kind": "model",
-    "priority": 50
+    "priority": 40
   },
   "constraints": {
     "degree": 2
@@ -19,11 +19,18 @@
       "group": "Dimensions",
       "description": "Transition body length",
       "default": 300.0
+    },
+    {
+      "name": "TransitionRadius",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Transition radius",
+      "default": 50.0
     }
   ],
   "generator": {
     "module": "junctions",
-    "function": "build_transition"
+    "function": "build_transition_radiussed"
   },
   "loss": {
     "module": "junction_losses",

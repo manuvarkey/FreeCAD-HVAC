@@ -151,6 +151,29 @@ def build_transition(context):
     }
 
 
+def build_transition_radiussed(context):
+    api = context["hvac_api"]
+    ports = list(api.connected_ports(context))
+    if len(ports) != 2:
+        raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
+    p = _props(context)
+    size = max(_size(api, ports[0]), _size(api, ports[1]))
+    total = _positive(p.get("Length", p.get("TransitionLength")), max(size, 100.0))
+    radius = _positive(p.get("Length", p.get("TransitionRadius")), max(size, 10.0))
+    route = api.make_radiussed_path(ports[0], ports[1], total, radius)
+    shape = api.sweep(
+        [api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])],
+        route["path"],
+        solid=True,
+    )
+    return {
+        "shape": api.refine(shape),
+        "connection_lengths": api.build_trim_rec_from_port_lengths(
+            [(ports[0], route["trim_lengths"][0]), (ports[1], route["trim_lengths"][1])]
+        ),
+    }
+
+
 def _inline(context, factor, minimum):
     api = context["hvac_api"]
     ports = list(api.connected_ports(context))
