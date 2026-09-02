@@ -60,6 +60,7 @@ class DuctSegment:
         self.Object = obj
         self._allow_delete = False
         self.setProperties(obj)
+        _construction_schema.normalize_material_properties(obj)
 
     def dumps(self):
         return None

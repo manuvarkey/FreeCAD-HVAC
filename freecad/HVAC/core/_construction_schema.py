@@ -109,6 +109,8 @@ def apply_construction_schema(obj, library_id, type_id):
             # appearance (see core/_component_appearance.py).
             obj.addProperty("Materials::PropertyMaterial", material_name, "Materials", "Native FreeCAD material for construction layer '{}'".format(layer_id), 16)
             changed = True
+        if hvac_materials.ensure_persistable_material(obj, material_name):
+            changed = True
 
     if list(getattr(obj, "ConstructionLayerIds", []) or []) != new_ids:
         try:
@@ -196,6 +198,16 @@ def apply_construction_features_schema(obj, library_id, type_id):
     return changed
 
 
+def normalize_material_properties(obj):
+    changed = False
+    for layer_id in getattr(obj, "ConstructionLayerIds", []) or []:
+        prop_name = material_property_name(layer_id)
+        if prop_name in obj.PropertiesList:
+            if hvac_materials.ensure_persistable_material(obj, prop_name):
+                changed = True
+    return changed
+
+
 def _owner_resolver(obj):
     """
     A zero-arg callable that resolves and memoizes obj's owning network on
@@ -239,15 +251,21 @@ def apply_default_layer_materials(obj, library_id, type_id):
         material_prop = material_property_name(layer_id)
         if material_prop not in obj.PropertiesList:
             continue
-        if getattr(getattr(obj, material_prop, None), "Name", ""):
-            continue  # already has a material -- never overwritten here
 
-        default_material = _resolve_default_material(layer_defs_by_id.get(layer_id), get_owner)
-        if default_material is not None and getattr(default_material, "Name", ""):
+        current = getattr(obj, material_prop, None)
+        if hvac_materials.is_material_assigned(current):
+            continue
+        default_material = _resolve_default_material(
+            layer_defs_by_id.get(layer_id),
+            get_owner,
+        )
+        if hvac_materials.is_material_assigned(default_material):
             try:
                 setattr(obj, material_prop, default_material)
             except Exception:
                 pass
+        else:
+            hvac_materials.ensure_persistable_material(obj, material_prop)
 
 
 def reset_layer_materials_to_network_defaults(obj):
@@ -273,7 +291,9 @@ def reset_layer_materials_to_network_defaults(obj):
         if material_prop not in obj.PropertiesList:
             continue
         default_material = _resolve_default_material(layer_defs_by_id.get(layer_id), get_owner)
-        if default_material is not None and getattr(default_material, "Name", ""):
+        if not hvac_materials.is_material_assigned(default_material):
+            default_material = hvac_materials.get_unassigned_material()
+        if default_material is not None:
             try:
                 setattr(obj, material_prop, default_material)
                 changed = True

@@ -59,6 +59,27 @@ GALVANIZED_STEEL_PERFORATED_UUID = "31e7402b-d640-4f04-b60d-b86904ba73cf"
 ALUMINIUM_UUID = "ff83dff9-a970-455c-9641-ead756d61b8a"
 STAINLESS_STEEL_UUID = "108ff6fa-441d-44e2-a16b-543dbfd3a2e2"
 HYDRAULIC_MODEL_UUID = "bbfee379-96b0-4995-80e2-e1725b3adfde"
+FREECAD_DEFAULT_MATERIAL_UUID = "7f9fd73b-50c9-41d8-b7b2-575a030c1eeb"
+
+
+def get_unassigned_material():
+    """Return a real, persistable FreeCAD material used internally for None."""
+    return get_material_by_uuid(FREECAD_DEFAULT_MATERIAL_UUID)
+
+
+def is_unassigned_material(material):
+    if material is None:
+        return True
+    if not getattr(material, "Name", ""):
+        return True
+    try:
+        return str(material.UUID) == FREECAD_DEFAULT_MATERIAL_UUID
+    except Exception:
+        return False
+
+
+def is_material_assigned(material):
+    return not is_unassigned_material(material)
 
 
 def get_material_by_uuid(uuid):
@@ -73,6 +94,35 @@ def get_material_by_uuid(uuid):
         return Materials.MaterialManager().getMaterial(str(uuid))
     except Exception:
         return None
+
+
+def ensure_persistable_material(obj, prop_name):
+    """
+    Replace an invalid/empty Materials::PropertyMaterial value with the
+    registered FreeCAD Default material.
+
+    Returns True when changed.
+    """
+    if obj is None or prop_name not in getattr(obj, "PropertiesList", []):
+        return False
+    material = getattr(obj, prop_name, None)
+    # Already sentinel or a real material.
+    if material is not None:
+        try:
+            if str(material.UUID) == FREECAD_DEFAULT_MATERIAL_UUID:
+                return False
+        except Exception:
+            pass
+        if getattr(material, "Name", ""):
+            return False
+    fallback = get_unassigned_material()
+    if fallback is None:
+        return False
+    try:
+        setattr(obj, prop_name, fallback)
+        return True
+    except Exception:
+        return False
 
 
 def register_material_resources():
@@ -124,13 +174,6 @@ def _parse_float(raw):
         return None
 
 
-def _is_assigned(material):
-    """True if `material` is a real, named Materials::Material value -- an
-    unassigned Materials::PropertyMaterial still holds a Material instance,
-    just with an empty Name (never None)."""
-    return material is not None and bool(getattr(material, "Name", ""))
-
-
 def get_physical_value(material, name):
     """
     A material's own physical property (e.g. "Density", "ThermalConductivity",
@@ -140,7 +183,7 @@ def get_physical_value(material, name):
     property at all, or the card never gave it a real value (FreeCAD
     reports an unset-but-modeled property as NaN, not missing).
     """
-    if not _is_assigned(material):
+    if not is_material_assigned(material):
         return None
     if not material.hasPhysicalProperty(name):
         return None
@@ -168,7 +211,7 @@ def get_physical_value_as(material, name, unit=None):
     requested unit.  ``None`` has the same meaning as in
     :func:`get_physical_value`.
     """
-    if not _is_assigned(material):
+    if not is_material_assigned(material):
         return None
     try:
         if not material.hasPhysicalProperty(name):
@@ -204,7 +247,7 @@ def get_view_appearance(material):
     Returns None if the material is unassigned or declares no usable
     DiffuseColor at all (nothing meaningful to render with).
     """
-    if not _is_assigned(material):
+    if not is_material_assigned(material):
         return None
     if not material.hasAppearanceProperty("DiffuseColor"):
         return None

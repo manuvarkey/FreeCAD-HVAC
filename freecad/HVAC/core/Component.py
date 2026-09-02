@@ -82,6 +82,7 @@ class DuctComponent:
         self._allow_delete = False
         self._mirroring_design_flow_rate = False
         self.setProperties(obj)
+        _construction_schema.normalize_material_properties(obj)
 
     def dumps(self):
         return None

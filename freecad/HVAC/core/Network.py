@@ -326,6 +326,7 @@ class DuctNetwork:
                     "Default material for construction layers playing the '{}' role".format(role),
                     16,  # Prop_NoRecompute
                 )
+            hvac_materials.ensure_persistable_material(obj, prop_name)
 
         if not getattr(obj, "DefaultLibraryId", ""):
             lib = hvaclib.HVACLibraryService.get_active_hvac_library()
@@ -352,13 +353,14 @@ class DuctNetwork:
         if not getattr(obj, "DefaultHeight", 0):
             obj.DefaultHeight = 100.0
 
-        # Seed the standard construction-role materials. Fire protection is
-        # intentionally left unset because its required system is project-
-        # and code-specific rather than one universal stock material.
+        # Seed the standard construction-role materials. 
+        # # FireProtection intentionally has no HVAC material default.
+        # Its property remains the persistable unassigned sentinel.
         def _seed_role_default(role, uuid):
             prop_name = "DefaultMaterial_" + role_property_suffix(role)
-            if getattr(getattr(obj, prop_name, None), "Name", ""):
-                return  # already set (e.g. restored from an existing document)
+            current = getattr(obj, prop_name, None)
+            if hvac_materials.is_material_assigned(current):
+                return
             material = hvac_materials.get_material_by_uuid(uuid)
             if material is not None:
                 setattr(obj, prop_name, material)
@@ -625,7 +627,11 @@ class DuctNetwork:
 
         for role, material in dict(default_materials_by_role or {}).items():
             prop_name = "DefaultMaterial_" + role_property_suffix(role)
-            if material is not None and hasattr(network_obj, prop_name):
+            if not hasattr(network_obj, prop_name):
+                continue
+            if material is None:
+                material = hvac_materials.get_unassigned_material()
+            if material is not None:
                 setattr(network_obj, prop_name, material)
                 changed = True
 
