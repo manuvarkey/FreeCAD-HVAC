@@ -736,14 +736,24 @@ class DuctNetworkSelectionObserver:
         proxy = getattr(obj, "Proxy", None)
         return getattr(proxy, "TYPE", "") in ("DuctComponent", "DuctSegment")
 
-    def addSelection(self, doc_name, obj_name, sub_name, pos):
+    def _resolveComponent(self, doc_name, obj_name, sub_name):
+        """Look up obj_name and return it if it's a redirectable component
+        with a sub-element picked, else None -- shared by addSelection and
+        setPreselection, which redirect clicks resp. hover highlighting the
+        same way."""
         if self._redirecting or not sub_name:
-            return
+            return None
         doc = FreeCAD.getDocument(doc_name)
         if doc is None:
-            return
+            return None
         obj = doc.getObject(obj_name)
         if obj is None or not self._is_component(obj):
+            return None
+        return obj
+
+    def addSelection(self, doc_name, obj_name, sub_name, pos):
+        obj = self._resolveComponent(doc_name, obj_name, sub_name)
+        if obj is None:
             return
         self._redirecting = True
         try:
@@ -751,7 +761,18 @@ class DuctNetworkSelectionObserver:
             Gui.Selection.addSelection(obj)
         finally:
             self._redirecting = False
-            
+
+    def setPreselection(self, doc_name, obj_name, sub_name):
+        obj = self._resolveComponent(doc_name, obj_name, sub_name)
+        if obj is None:
+            return
+        self._redirecting = True
+        try:
+            QtCore.QTimer.singleShot(0, Gui.Selection.clearPreselection)
+            QtCore.QTimer.singleShot(0, lambda: Gui.Selection.setPreselection(obj, ""))
+        finally:
+            self._redirecting = False
+
 
 class TerminalFlowRateObserver:
     """

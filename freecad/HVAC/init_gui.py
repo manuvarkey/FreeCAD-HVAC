@@ -296,8 +296,9 @@ class HVAC(Gui.Workbench):
         Gui.addDocumentObserver(self.hvac_gui_edit_observer)
 
         # Gui selection observer: redirects sub-element (edge/face/vertex)
-        # selection up to the parent DuctComponent/DuctSegment object, so
-        # selection-driven UI never sees a bare sub-name.
+        # selection AND pre-selection (hover) up to the parent
+        # DuctComponent/DuctSegment object, so selection-driven UI never
+        # sees a bare sub-name.
         self.hvac_selection_observer = DuctNetworkSelectionObserver()
         Gui.Selection.addObserver(self.hvac_selection_observer)
 
