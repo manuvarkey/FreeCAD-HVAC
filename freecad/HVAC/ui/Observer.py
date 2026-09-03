@@ -27,6 +27,7 @@ import json
 import math
 import FreeCAD
 import FreeCADGui as Gui
+from freecad.HVAC.core.Segment import DuctSegment
 from pivy import coin
 from PySide import QtWidgets, QtCore, QtGui
 from PySide.QtCore import QT_TRANSLATE_NOOP
@@ -725,6 +726,32 @@ class DuctNetworkGuiEditObserver:
     def slotResetEdit(self, vobj):
         self.owner.slotResetEdit(vobj)
 
+
+class DuctNetworkSelectionObserver:
+    def __init__(self):
+        self._redirecting = False
+
+    @staticmethod
+    def _is_component(obj):
+        proxy = getattr(obj, "Proxy", None)
+        return getattr(proxy, "TYPE", "") in ("DuctComponent", "DuctSegment")
+
+    def addSelection(self, doc_name, obj_name, sub_name, pos):
+        if self._redirecting or not sub_name:
+            return
+        doc = FreeCAD.getDocument(doc_name)
+        if doc is None:
+            return
+        obj = doc.getObject(obj_name)
+        if obj is None or not self._is_component(obj):
+            return
+        self._redirecting = True
+        try:
+            Gui.Selection.removeSelection(doc_name, obj_name, sub_name)
+            Gui.Selection.addSelection(obj)
+        finally:
+            self._redirecting = False
+            
 
 class TerminalFlowRateObserver:
     """

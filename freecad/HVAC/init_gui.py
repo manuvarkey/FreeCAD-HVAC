@@ -56,8 +56,6 @@ class HVAC(Gui.Workbench):
         from .ui import Command
         
         self.watchers = []
-        self.observers = []
-        self.gui_observers = []
 
         self.toolbar_commands = ['HVAC_CreateDuctNetwork',
                                 'HVAC_ActivateDuctNetwork',
@@ -163,9 +161,9 @@ class HVAC(Gui.Workbench):
 
     def Deactivated(self):
         """This function is executed whenever the workbench is deactivated"""
-        # Only task watchers are workbench-activation-scoped -- document
-        # observers (self.observers/self.gui_observers) are session-scoped,
-        # see the comment in Initialize().
+        # Only task watchers are workbench-activation-scoped -- the document,
+        # gui-edit and selection observers registered in setObservers() are
+        # session-scoped, see the comment in Initialize().
         try:
             Gui.Control.clearTaskWatcher()
         except Exception:
@@ -285,28 +283,30 @@ class HVAC(Gui.Workbench):
         Gui.Control.addTaskWatcher(self.watchers)
         
     def setObservers(self):
-        # App document observer: property/document/undo-redo handling.
-        from .ui.Observer import DuctNetworkChangeObserver, DuctNetworkGuiEditObserver
-        hvac_change_observer = DuctNetworkChangeObserver()
+        from .ui.Observer import DuctNetworkChangeObserver, DuctNetworkGuiEditObserver, DuctNetworkSelectionObserver
 
-        self.observers = [hvac_change_observer]
-        for obs in self.observers:
-            FreeCAD.addDocumentObserver(obs)
+        # App document observer: property/document/undo-redo handling.
+        self.hvac_change_observer = DuctNetworkChangeObserver()
+        FreeCAD.addDocumentObserver(self.hvac_change_observer)
 
         # Gui document observer: edit-mode enter/exit events (slotInEdit/
         # slotResetEdit), registered separately since these are Gui-level
         # callbacks, not App-level ones -- see DuctNetworkGuiEditObserver.
-        hvac_gui_edit_observer = DuctNetworkGuiEditObserver(hvac_change_observer)
-        self.gui_observers = [hvac_gui_edit_observer]
-        for obs in self.gui_observers:
-            Gui.addDocumentObserver(obs)
+        self.hvac_gui_edit_observer = DuctNetworkGuiEditObserver(self.hvac_change_observer)
+        Gui.addDocumentObserver(self.hvac_gui_edit_observer)
+
+        # Gui selection observer: redirects sub-element (edge/face/vertex)
+        # selection up to the parent DuctComponent/DuctSegment object, so
+        # selection-driven UI never sees a bare sub-name.
+        self.hvac_selection_observer = DuctNetworkSelectionObserver()
+        Gui.Selection.addObserver(self.hvac_selection_observer)
 
         # One-time bootstrap: pick up an edit session already in progress
         # right as these observers are first registered (no slotInEdit
         # fires for an edit that started before this observer existed) --
         # not a recurring poll, see
         # DuctNetworkChangeObserver._checkEditedBaseObject().
-        QTimer.singleShot(0, hvac_change_observer._checkEditedBaseObject)
+        QTimer.singleShot(0, self.hvac_change_observer._checkEditedBaseObject)
 
     def GetClassName(self):
         # This function is mandatory if this is a full Python workbench
