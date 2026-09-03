@@ -1,0 +1,53 @@
+{
+  "id": "branch_tap_shoe",
+  "label": "Tap - Shoe",
+  "category": "junction",
+  "topology": "branch",
+  "family": ["branch.tee"],
+  "profiles": ["Circular", "Rectangular", "Oval"],
+  "selection": {
+    "kind": "model",
+    "priority": 15
+  },
+  "constraints": {
+    "degree": 3
+  },
+  "properties": [
+    {
+      "name": "TrimRunA",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for run port A",
+      "default": 60.0
+    },
+    {
+      "name": "TrimRunB",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for run port B",
+      "default": 60.0
+    },
+    {
+      "name": "TrimBranch",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for the tap's own branch duct",
+      "default": 100.0
+    },
+    {
+      "name": "BranchRadius",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Bend radius of the tap's shoe as it curves into the run",
+      "default": 100.0
+    }
+  ],
+  "generator": {
+    "module": "junctions",
+    "function": "build_tap_shoe"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_tee_generic"
+  }
+}

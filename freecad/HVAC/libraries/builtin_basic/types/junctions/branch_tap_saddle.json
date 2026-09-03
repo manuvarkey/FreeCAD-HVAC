@@ -1,0 +1,53 @@
+{
+  "id": "branch_tap_saddle",
+  "label": "Tap - Saddle",
+  "category": "junction",
+  "topology": "branch",
+  "family": ["branch.tee"],
+  "profiles": ["Circular", "Rectangular", "Oval"],
+  "selection": {
+    "kind": "model",
+    "priority": 20
+  },
+  "constraints": {
+    "degree": 3
+  },
+  "properties": [
+    {
+      "name": "TrimRunA",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for run port A",
+      "default": 60.0
+    },
+    {
+      "name": "TrimRunB",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for run port B",
+      "default": 60.0
+    },
+    {
+      "name": "TrimBranch",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for the tap's own branch duct",
+      "default": 80.0
+    },
+    {
+      "name": "SaddleGrowth",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Growth applied to the stub's base as it flares to conform to the run",
+      "default": 40.0
+    }
+  ],
+  "generator": {
+    "module": "junctions",
+    "function": "build_tap_saddle"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_tee_generic"
+  }
+}

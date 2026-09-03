@@ -1,34 +1,34 @@
 {
-  "id": "branch_tee_generic",
-  "label": "Tee - Generic",
+  "id": "branch_tee_mitered",
+  "label": "Tee - Mitered",
   "category": "junction",
   "topology": "branch",
-  "family": ["branch.tee", "branch.lateral_tee", "branch.tee.3d", "branch.lateral_tee.3d"],
+  "family": ["branch.tee", "branch.tee.3d"],
   "profiles": ["Circular", "Rectangular", "Oval"],
   "selection": {
     "kind": "model",
-    "priority": 50
+    "priority": 40
   },
   "constraints": {
     "degree": 3
   },
   "properties": [
     {
-      "name": "RunTrimLengthA",
+      "name": "TrimRunA",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Trim length for the main run ports",
+      "description": "Trim length for run port A",
       "default": 100.0
     },
     {
-      "name": "RunTrimLengthB",
+      "name": "TrimRunB",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Trim length for the main run ports",
+      "description": "Trim length for run port B",
       "default": 100.0
     },
     {
-      "name": "BranchTrimLength",
+      "name": "TrimBranch",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
       "description": "Trim length for the branch port",
@@ -37,7 +37,7 @@
   ],
   "generator": {
     "module": "junctions",
-    "function": "build_tee"
+    "function": "build_tee_mitered"
   },
   "loss": {
     "module": "junction_losses",

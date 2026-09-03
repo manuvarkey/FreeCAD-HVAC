@@ -330,6 +330,35 @@ class HVACLibraryAPI:
         return list(context.get("connected_ports", []) or [])
 
     @staticmethod
+    def collinear_port_index_pairs(context):
+        """Index pairs (into ``connected_ports(context)``) the network
+        classifier already found collinear (~180 deg apart -- see
+        ``NetworkParser._collinear_pairs``), read straight off the
+        junction's own ``context["analysis"]["collinear_pairs"]`` payload
+        (``NetworkParser.JunctionAnalysis``, propagated via
+        ``Component._parentAnalysis``/``AnalysisJson``).
+
+        A "which two of this node's ports form the straight run" generator
+        (a radiused/mitered tee's trunk, a tap's main run, ...) should use
+        this rather than re-deriving collinearity itself, so it agrees
+        exactly with the classifier's own family_key decision (same
+        tolerance, same data) instead of risking a second, possibly
+        divergent judgment call. Empty if no analysis payload is present
+        (e.g. a synthetic/unit-test context) -- callers need their own
+        geometric fallback for that case.
+        """
+        analysis = context.get("analysis") or {}
+        pairs = analysis.get("collinear_pairs") or []
+        result = []
+        for pair in pairs:
+            try:
+                a, b = int(pair["a"]), int(pair["b"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            result.append((a, b))
+        return result
+
+    @staticmethod
     def port_position(port):
         """Return a port's position as a FreeCAD vector."""
         return HVACLibraryAPI.vec(port["position"])

@@ -1,43 +1,43 @@
 {
-  "id": "branch_generic",
-  "label": "Wye - Generic",
+  "id": "branch_wye_mitered",
+  "label": "Wye - Mitered",
   "category": "junction",
   "topology": "branch",
-  "family": ["branch.wye", "branch.tee", "branch.lateral_tee", "branch.wye.3d", "branch.tee.3d", "branch.lateral_tee.3d", "branch.generic"],
-  "profiles": ["Circular", "Rectangular", "Oval", "Generic"],
+  "family": ["branch.wye", "branch.wye.3d"],
+  "profiles": ["Circular", "Rectangular", "Oval"],
   "selection": {
     "kind": "model",
-    "priority": 10
+    "priority": 40
   },
   "constraints": {
     "degree": 3
   },
   "properties": [
     {
-      "name": "TrimLengthA",
+      "name": "TrimBranchA",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Trim length for port A",
+      "description": "Trim length for branch port A",
       "default": 100.0
     },
     {
-      "name": "TrimLengthB",
+      "name": "TrimBranchB",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Trim length for port B",
+      "description": "Trim length for branch port B",
       "default": 100.0
     },
     {
-      "name": "TrimLengthC",
+      "name": "TrimBranchC",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Trim length for port C",
+      "description": "Trim length for branch port C",
       "default": 100.0
     }
   ],
   "generator": {
     "module": "junctions",
-    "function": "build_wye"
+    "function": "build_wye_mitered"
   },
   "loss": {
     "module": "junction_losses",

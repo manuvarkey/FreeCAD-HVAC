@@ -1,0 +1,53 @@
+{
+  "id": "branch_wye_radius",
+  "label": "Wye - Radius",
+  "category": "junction",
+  "topology": "branch",
+  "family": ["branch.wye", "branch.wye.3d"],
+  "profiles": ["Circular", "Rectangular", "Oval"],
+  "selection": {
+    "kind": "model",
+    "priority": 50
+  },
+  "constraints": {
+    "degree": 3
+  },
+  "properties": [
+    {
+      "name": "TrimBranchA",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for branch port A",
+      "default": 100.0
+    },
+    {
+      "name": "TrimBranchB",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for branch port B",
+      "default": 100.0
+    },
+    {
+      "name": "TrimBranchC",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for branch port C",
+      "default": 100.0
+    },
+    {
+      "name": "FilletRadius",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Growth applied to each leg's hub-facing end to blend the crotch",
+      "default": 80.0
+    }
+  ],
+  "generator": {
+    "module": "junctions",
+    "function": "build_wye_radius"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_wye_generic"
+  }
+}
