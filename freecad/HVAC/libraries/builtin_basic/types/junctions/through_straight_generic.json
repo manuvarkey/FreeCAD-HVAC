@@ -1,0 +1,32 @@
+{
+  "id": "through_straight_generic",
+  "label": "Straight - Generic",
+  "category": "junction",
+  "topology": "through",
+  "family": ["through.straight"],
+  "profiles": ["Circular", "Rectangular", "Oval"],
+  "selection": {
+    "kind": "model",
+    "priority": 60
+  },
+  "constraints": {
+    "degree": 2
+  },
+  "properties": [
+    {
+      "name": "Length",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Straight coupling length (no special fitting accessory)",
+      "default": 5.0
+    }
+  ],
+  "generator": {
+    "module": "junctions",
+    "function": "build_straight"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_transition_generic"
+  }
+}

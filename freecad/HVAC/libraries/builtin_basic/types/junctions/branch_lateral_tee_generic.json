@@ -1,0 +1,46 @@
+{
+  "id": "branch_lateral_tee_generic",
+  "label": "Lateral Tee - Generic",
+  "category": "junction",
+  "topology": "branch",
+  "family": ["branch.lateral_tee", "branch.lateral_tee.3d"],
+  "profiles": ["Circular", "Rectangular", "Oval"],
+  "selection": {
+    "kind": "model",
+    "priority": 50
+  },
+  "constraints": {
+    "degree": 3
+  },
+  "properties": [
+    {
+      "name": "TrimRunA",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for run port A",
+      "default": 100.0
+    },
+    {
+      "name": "TrimRunB",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for run port B",
+      "default": 100.0
+    },
+    {
+      "name": "TrimBranch",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for the branch port",
+      "default": 100.0
+    }
+  ],
+  "generator": {
+    "module": "junctions",
+    "function": "build_lateral_tee"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_tee_generic"
+  }
+}

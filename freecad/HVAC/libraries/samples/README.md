@@ -35,6 +35,23 @@ separate `HVACLossAPI` surface as `context["loss_api"]`; see
 component's own `construction` and resolved `hydraulic_roughness_mm`, with
 the network roughness used only as a fallback.
 
+## Generator context
+
+The full set of keys a backend can rely on being present in `context`:
+
+- `hvac_api` -- the `HVACLibraryAPI` class itself (`freecad/HVAC/library/library_api.py`), the only sanctioned entry point into geometry/port helpers.
+- `loss_api` -- the `HVACLossAPI` class (`freecad/HVAC/library/loss_api.py`); loss modules only.
+- `library_id` -- this library's own `id`, matching its `library.json`.
+- `params` / `properties` -- this type-def instance's resolved property values (`HVACLibrary.resolve_params`); either key holds the same dict, so read via `context.get("params") or context.get("properties")`.
+- Segments only: `start_point` / `end_point`.
+- Junctions only: `connected_ports` -- one dict per connected port (`position`, `direction` (outward, away from the node), `profile`, `section_params`, `profile_x_axis`, `edge_key`, ...) -- see `HVACLibraryAPI.connected_ports` / the `port_*` accessors.
+- Junctions only: `center_point` -- the node's representative point (falls back to the average of `connected_ports`' positions, via `HVACLibraryAPI.center_from_context`, when absent).
+- Junctions only: `analysis` -- the parent junction's full node-topology analysis dict (`NetworkParser.JunctionAnalysis`, propagated through `Component._parentAnalysis`/the junction's own `AnalysisJson`; field meanings are documented in full in `freecad/HVAC/core/TOPOLOGY_CLASSIFICATION.md`). Notably: `collinear_pairs` / `orthogonal_pairs` (each entry `{"a": i, "b": j, "angle": ..., "eccentricity": ...}`, `i`/`j` indexing into this same `connected_ports` list), `edge_angles`, `edge_eccentricities`, `is_coplanar`, and the same `degree`/`topology`/`family`/`family_key` the classifier used to pick this generator in the first place.
+
+  A generator that needs to know *which* two of a branch/cross node's ports form a straight run (e.g. a tee/tap's trunk, as distinct from its branch leg) should read this via `HVACLibraryAPI.collinear_port_index_pairs(context)` rather than re-deriving collinearity itself with its own tolerance/judgment call -- that would risk silently disagreeing with the classifier's own family_key decision (the one that got this generator selected in the first place). See `builtin_basic/generators/junctions.py:_find_run_pair` for the reference pattern, used by every tee/lateral-tee/tap builder there. `analysis` is empty (`{}`) for a synthetic context (e.g. most unit tests) -- `_find_run_pair` raises a clear `ValueError` in that case rather than falling back to a second, independent way of guessing the run pair; don't add such a fallback elsewhere either, since two disagreeing code paths for the same fact are worse than one that fails loudly.
+- `hvac_api_version` -- the `HVACLibraryAPI.API_VERSION` this context was built against.
+- Fitting-loss context only (`context["loss_api"]` callers): `construction` (this component's own resolved `Construction`) and `hydraulic_roughness_mm` (network default used only as a fallback).
+
 ## 1. PartScript (`"geometry": {"backend": "partscript", "file": "..."}`)
 
 A plain Python file, loaded and executed directly (`freecad/HVAC/library/partscript_shapes.py`),

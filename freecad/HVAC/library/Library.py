@@ -232,6 +232,18 @@ class HVACLibrary:
         return child == parent or child.startswith(parent + ".")
 
     def list_types(self, category=None, topology=None, family=None, profile=None, include_placeholders=True):
+        """Types matching the given filters, best-suited first.
+
+        Ordered by the same ranking `select_type` uses (see
+        freecad/HVAC/libraries/README.md's "Ranking" section): a
+        `kind: "model"` type before a `kind: "placeholder"` one; among
+        those, one whose own `profiles` names the requested `profile`
+        exactly before one that only matches it via the "Generic"
+        wildcard (or wasn't filtered by profile at all); then
+        `selection.priority` descending. `id` breaks any remaining tie,
+        only to keep the order deterministic -- it carries no ranking
+        meaning of its own.
+        """
         out = []
         for t in self.types_by_id.values():
             if category and t.category != category:
@@ -245,6 +257,16 @@ class HVACLibrary:
             if not include_placeholders and getattr(t.selection, "kind", SELECTION_KIND_MODEL) == SELECTION_KIND_PLACEHOLDER:
                 continue
             out.append(t)
+
+        def rank_key(t):
+            kind = getattr(t.selection, "kind", SELECTION_KIND_MODEL)
+            kind_rank = 0 if kind == SELECTION_KIND_MODEL else (1 if kind == SELECTION_KIND_PLACEHOLDER else 2)
+            exact_profile = bool(profile) and bool(t.profiles) and profile in t.profiles
+            profile_rank = 0 if (exact_profile or not profile) else 1
+            priority = getattr(t.selection, "priority", 0)
+            return (kind_rank, profile_rank, -priority, t.id)
+
+        out.sort(key=rank_key)
         return out
 
     def list_profiles(self, category=None, family=None):

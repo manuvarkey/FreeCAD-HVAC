@@ -1,0 +1,53 @@
+{
+  "id": "branch_tee_radius",
+  "label": "Tee - Radius",
+  "category": "junction",
+  "topology": "branch",
+  "family": ["branch.tee", "branch.tee.3d"],
+  "profiles": ["Circular", "Rectangular", "Oval"],
+  "selection": {
+    "kind": "model",
+    "priority": 50
+  },
+  "constraints": {
+    "degree": 3
+  },
+  "properties": [
+    {
+      "name": "TrimRunA",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for run port A",
+      "default": 100.0
+    },
+    {
+      "name": "TrimRunB",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for run port B",
+      "default": 100.0
+    },
+    {
+      "name": "TrimBranch",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for the branch port",
+      "default": 150.0
+    },
+    {
+      "name": "BranchRadius",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Bend radius of the branch takeoff as it curves into the run",
+      "default": 150.0
+    }
+  ],
+  "generator": {
+    "module": "junctions",
+    "function": "build_tee_radius"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_tee_generic"
+  }
+}

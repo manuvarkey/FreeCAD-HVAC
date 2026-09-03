@@ -1,0 +1,46 @@
+{
+  "id": "branch_tee_mitered",
+  "label": "Tee - Mitered",
+  "category": "junction",
+  "topology": "branch",
+  "family": ["branch.tee", "branch.tee.3d"],
+  "profiles": ["Circular", "Rectangular", "Oval"],
+  "selection": {
+    "kind": "model",
+    "priority": 40
+  },
+  "constraints": {
+    "degree": 3
+  },
+  "properties": [
+    {
+      "name": "TrimRunA",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for run port A",
+      "default": 100.0
+    },
+    {
+      "name": "TrimRunB",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for run port B",
+      "default": 100.0
+    },
+    {
+      "name": "TrimBranch",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Trim length for the branch port",
+      "default": 100.0
+    }
+  ],
+  "generator": {
+    "module": "junctions",
+    "function": "build_tee_mitered"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_tee_generic"
+  }
+}

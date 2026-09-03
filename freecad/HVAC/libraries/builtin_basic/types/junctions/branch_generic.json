@@ -1,6 +1,6 @@
 {
   "id": "branch_generic",
-  "label": "Wye - Generic",
+  "label": "Branch - Generic",
   "category": "junction",
   "topology": "branch",
   "family": ["branch.wye", "branch.tee", "branch.lateral_tee", "branch.wye.3d", "branch.tee.3d", "branch.lateral_tee.3d", "branch.generic"],
@@ -14,24 +14,10 @@
   },
   "properties": [
     {
-      "name": "TrimLengthA",
+      "name": "JunctionLength",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Trim length for port A",
-      "default": 100.0
-    },
-    {
-      "name": "TrimLengthB",
-      "prop_type": "App::PropertyLength",
-      "group": "Dimensions",
-      "description": "Trim length for port B",
-      "default": 100.0
-    },
-    {
-      "name": "TrimLengthC",
-      "prop_type": "App::PropertyLength",
-      "group": "Dimensions",
-      "description": "Trim length for port C",
+      "description": "Trim length applied to every port",
       "default": 100.0
     }
   ],

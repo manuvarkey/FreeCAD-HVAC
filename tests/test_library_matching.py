@@ -561,17 +561,24 @@ def test_bundled_libraries_have_no_unresolved_priority_ties():
 
 
 def test_bundled_builtin_basic_branch_tee_prefers_specific_tee_model():
+    # branch_tee_radius (smooth swept-arc branch, priority 50) is the
+    # default winner over branch_tee_mitered (priority 40, same split as
+    # through_elbow_radius/through_elbow_mitered) and the broad
+    # branch_generic catch-all (priority 10).
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular"))
     selection = reg.select_type("builtin_basic", request, strict=True)
-    assert selection.type_def.id == "branch_tee_generic"
+    assert selection.type_def.id == "branch_tee_radius"
 
 
-def test_bundled_builtin_basic_branch_wye_falls_back_to_broad_model():
+def test_bundled_builtin_basic_branch_wye_prefers_specific_wye_model():
+    # branch_wye_radius (priority 50) is now a dedicated wye model, so a
+    # genuine wye node no longer needs to fall back to the broad
+    # branch_generic catch-all (priority 10).
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.wye", "Circular", _ports(3, "Circular"))
     selection = reg.select_type("builtin_basic", request, strict=True)
-    assert selection.type_def.id == "branch_generic"
+    assert selection.type_def.id == "branch_wye_radius"
 
 
 def test_bundled_smacna_branch_tee_prefers_specific_tee_model():
@@ -687,7 +694,7 @@ def test_bundled_mixed_profile_fix_does_not_disturb_exact_profile_ranking():
     # capable broad model for a real, single-profile Circular tee.
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular"))
-    for lib_id, expected in (("builtin_basic", "branch_tee_generic"), ("smacna", "branch_tee_generic")):
+    for lib_id, expected in (("builtin_basic", "branch_tee_radius"), ("smacna", "branch_tee_generic")):
         selection = reg.select_type(lib_id, request, strict=True)
         assert selection.status == "exact"
         assert selection.type_def.id == expected

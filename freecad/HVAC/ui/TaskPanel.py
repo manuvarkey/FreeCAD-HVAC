@@ -732,9 +732,28 @@ class TaskPanelTypeEditor:
         ref = self.objects[0]
 
         if hvaclib.isDuctSegment(ref):
-            # For segments, keep it simple:
-            # show all segment types from the selected library.
+            # For segments, keep it simple: show every segment type in
+            # the library, not just ones matching this segment's own
+            # current family/profile -- unlike a junction's family
+            # (a topological fact the classifier computes), a segment's
+            # straight/curved family is closer to "which backend draws
+            # this same duct run", so a user may deliberately want to
+            # switch between them. list_types() already ranks by
+            # kind/priority (best-suited first, same as automatic
+            # selection); layer a preference for whichever types match
+            # this segment's own current Family/Profile on top of that,
+            # without narrowing the list any candidates drop out of.
+            family = getattr(ref, "Family", "")
+            profile = getattr(ref, "Profile", "")
             type_defs = lib.list_types(category="segment")
+            if family or profile:
+                type_defs = sorted(
+                    type_defs,
+                    key=lambda t: (
+                        0 if (family and family in t.family) else (1 if family else 0),
+                        0 if (profile and t.profiles and profile in t.profiles) else (1 if profile else 0),
+                    ),
+                )
 
         else:
             # For a junction's Primary/Inline DuctComponent, Family is a
