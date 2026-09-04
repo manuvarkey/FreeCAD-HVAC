@@ -24,13 +24,6 @@ def _positive(value, fallback):
     return value if value > _EPS else float(fallback)
 
 
-def _extra_trim(value, default):
-    """Resolve an additional trim measured beyond the intrinsic fitting body."""
-    if value is None:
-        return max(float(default), 0.0)
-    return max(float(value or 0.0), 0.0)
-
-
 def _trimmed(api, port, length):
     return api.copy_port(
         port,
