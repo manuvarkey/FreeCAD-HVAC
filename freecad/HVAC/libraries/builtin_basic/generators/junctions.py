@@ -816,96 +816,77 @@ def build_tap_saddle(context):
 
 
 def build_tap_shoe(context):
-    """45-degree shoe tap with a straight heel and an inclined toe. ShoeHeight
-    is the height from the run surface to the start of the 45-degree slope;
-    consequently the toe extends by the same distance along the run."""
+    """45-degree shoe tap with profile-independent geometry.
+
+    ShoeHeight is measured from the run surface to the point where the toe
+    starts sloping. At 45 degrees the toe extension at the run surface is
+    equal to ShoeHeight. The heel remains vertically aligned with the
+    original branch profile.
+    """
     api = context["hvac_api"]
     ports = api.connected_ports(context)
     if len(ports) != 3:
         raise ValueError("Fitting requires exactly three connected ports")
     run_a, run_b, branch = _find_run_pair(context, api, ports)
     p = _props(context)
-    if api.port_profile(branch) != "Rectangular":
-        raise ValueError("Shoe tap currently requires a rectangular branch")
 
-    branch_size = _size(api, branch)
-    shoe_height = _positive(p.get("ShoeHeight"), 0.5 * branch_size)
-    trim_a, trim_b = _run_trims(api, p, run_a, run_b, 0.3)
-
-    branch_dir = api.port_direction(branch)
+    trunk_center = api.center_from_context(context)
+    branch_dir = api.unit(api.port_direction(branch))
     lean = _lean_port(api, run_a, run_b, branch)
-    lean_dir = api.port_direction(lean)
+    lean_dir = api.unit(api.port_direction(lean))
+
     toe_dir = lean_dir - branch_dir * lean_dir.dot(branch_dir)
     if toe_dir.Length <= api.EPS:
         raise ValueError("Shoe tap requires a non-degenerate branch/run angle")
     toe_dir = api.unit(toe_dir)
 
-    branch_params = api.port_section_params(branch)
-    branch_width = float(branch_params.get("Width", 0.0))
-    branch_height = float(branch_params.get("Height", 0.0))
-    _, branch_x, branch_y, _ = api.make_profile_frame(branch_dir, api.port_profile_x_axis(branch))
-    tx, ty = toe_dir.dot(branch_x), toe_dir.dot(branch_y)
-    if max(abs(tx), abs(ty)) < 0.99:
-        raise ValueError("Shoe direction must align with a rectangular branch profile axis")
+    branch_center_port = api.copy_port(branch, position=trunk_center)
+    branch_profile = api.profile_from_port(branch_center_port)
+    branch_min, branch_max = api.profile_projection_bounds(branch_profile, toe_dir)
+    branch_width = branch_max - branch_min
 
-    if abs(tx) >= abs(ty):
-        toe_axis = branch_x if tx >= 0.0 else branch_x * -1.0
-        branch_half = 0.5 * branch_width
-        grow_key = "Width"
-    else:
-        toe_axis = branch_y if ty >= 0.0 else branch_y * -1.0
-        branch_half = 0.5 * branch_height
-        grow_key = "Height"
+    run_depth = 0.0
+    run_surface_offset = 0.0
+    for run_port in (run_a, run_b):
+        centered_port = api.copy_port(run_port, position=trunk_center)
+        run_profile = api.profile_from_port(centered_port)
+        p_min, p_max = api.profile_projection_bounds(run_profile, branch_dir)
+        center_proj = trunk_center.dot(branch_dir)
+        run_depth = max(run_depth, p_max - p_min)
+        run_surface_offset = max(run_surface_offset, p_max - center_proj)
 
-    def run_extent(port):
-        profile = api.port_profile(port)
-        params = api.port_section_params(port)
-        if profile == "Circular":
-            return 0.5 * float(params.get("Diameter", 0.0))
-        _, x_axis, y_axis, _ = api.make_profile_frame(api.port_direction(port), api.port_profile_x_axis(port))
-        dx, dy = branch_dir.dot(x_axis), branch_dir.dot(y_axis)
-        if profile == "Rectangular":
-            return 0.5 * float(params.get("Width", 0.0)) * abs(dx) + 0.5 * float(params.get("Height", 0.0)) * abs(dy)
-        if profile == "Oval":
-            width, height = float(params.get("Width", 0.0)), float(params.get("Height", 0.0))
-            radius = 0.5 * height
-            return 0.5 * (width - height) * abs(dx) + radius
-        raise ValueError("Unsupported run profile for shoe tap")
-
-    trunk_center = api.center_from_context(context)
-    run_half_depth = max(run_extent(run_a), run_extent(run_b))
-    run_surface = trunk_center + branch_dir * run_half_depth
-    overlap = max(0.05 * min(branch_size, 2.0 * run_half_depth), 1.0)
-
+    shoe_height = _positive(p.get("ShoeHeight"), 0.5 * branch_width)
+    overlap = 0.5 * min(branch_width, run_depth)
+    run_surface = trunk_center + branch_dir * run_surface_offset
     shoe_top = run_surface + branch_dir * shoe_height
-    base_position = run_surface - branch_dir * overlap
+    shoe_base = run_surface - branch_dir * overlap
+
+    trim_a, trim_b = _run_trims(api, p, run_a, run_b, 0.3)
+    required_branch_trim = max(0.0, (shoe_top - api.port_position(branch)).dot(branch_dir))
+    trim_branch = _sane_trim(p.get("TrimBranch"), max(0.75 * branch_width, required_branch_trim), branch_width)
+    trim_branch = max(trim_branch, required_branch_trim)
+
+    top_port = api.copy_port(branch, position=shoe_top)
+    base_port = api.copy_port(branch, position=shoe_base)
+    top_profile = api.profile_from_port(top_port)
+    base_profile = api.profile_from_port(base_port)
+
     toe_extension = shoe_height + overlap
-    base_params = dict(branch_params)
-    base_params[grow_key] = float(base_params[grow_key]) + toe_extension
-    base_center = base_position + toe_axis * (0.5 * toe_extension)
+    base_profile = api.stretch_profile_one_sided(base_profile, toe_dir, toe_extension)
 
-    toe_reach = branch_half + toe_extension
-    heel_reach = branch_half + overlap
-    if lean is run_a:
-        trim_a = max(trim_a, toe_reach)
-        trim_b = max(trim_b, heel_reach)
-    else:
-        trim_b = max(trim_b, toe_reach)
-        trim_a = max(trim_a, heel_reach)
-
-    branch_floor = max(0.0, (shoe_top - api.port_position(branch)).dot(branch_dir))
-    trim_branch = _sane_trim(p.get("TrimBranch"), max(0.75 * branch_size, branch_floor), branch_size)
-    trim_branch = max(trim_branch, branch_floor)
+    center_a = trunk_center.dot(api.port_direction(run_a))
+    center_b = trunk_center.dot(api.port_direction(run_b))
+    _, base_a_max = api.profile_projection_bounds(base_profile, api.port_direction(run_a))
+    _, base_b_max = api.profile_projection_bounds(base_profile, api.port_direction(run_b))
+    trim_a = max(trim_a, base_a_max - center_a)
+    trim_b = max(trim_b, base_b_max - center_b)
 
     trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)])
     branch_end = _trimmed(api, branch, trim_branch)
-    top_port = api.copy_port(branch, position=shoe_top)
-    base_port = api.copy_port(branch, position=base_center)
-    base_port["section_params"] = base_params
+    profiles = [api.profile_from_port(branch_end), top_profile, base_profile]
+    if (api.port_position(branch_end) - shoe_top).Length <= api.EPS:
+        profiles.pop(0)
 
-    profiles = [api.profile_from_port(top_port), api.profile_from_port(base_port)]
-    if (api.port_position(branch_end) - shoe_top).Length > api.EPS:
-        profiles.insert(0, api.profile_from_port(branch_end))
     stub = api.loft(profiles, solid=True, ruled=True)
 
     return {

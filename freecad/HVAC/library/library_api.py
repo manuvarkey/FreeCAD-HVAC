@@ -858,6 +858,59 @@ class HVACLibraryAPI:
         )
 
     @staticmethod
+    def profile_projection_bounds(profile, direction):
+        """Return the minimum and maximum projection of a profile along direction."""
+        shape = profile.wire if hasattr(profile, "wire") else profile
+        d = FreeCAD.Vector(direction.x, direction.y, direction.z)
+        if d.Length <= HVACLibraryAPI.EPS:
+            raise ValueError("Projection direction must be non-zero")
+        d.normalize()
+    
+        probe = shape.copy()
+        rotation = FreeCAD.Rotation(d, FreeCAD.Vector(1.0, 0.0, 0.0))
+        probe.transformShape(rotation.toMatrix())
+        return probe.BoundBox.XMin, probe.BoundBox.XMax
+    
+    
+    @staticmethod
+    def stretch_profile_one_sided(profile, direction, extension):
+        """Stretch a profile along direction while keeping its heel side fixed.
+    
+        The profile's minimum projection along direction is treated as the heel.
+        The opposite side is extended by ``extension``. No assumption is made
+        about profile type or geometry.
+        """
+        shape = profile.wire if hasattr(profile, "wire") else profile
+        d = FreeCAD.Vector(direction.x, direction.y, direction.z)
+        if d.Length <= HVACLibraryAPI.EPS:
+            raise ValueError("Stretch direction must be non-zero")
+        d.normalize()
+    
+        p_min, p_max = HVACLibraryAPI.profile_projection_bounds(shape, d)
+        width = p_max - p_min
+        if width <= HVACLibraryAPI.EPS:
+            raise ValueError("Profile has zero extent along stretch direction")
+    
+        factor = (width + float(extension)) / width
+        k = factor - 1.0
+    
+        matrix = FreeCAD.Matrix()
+        matrix.A11 = 1.0 + k * d.x * d.x
+        matrix.A12 = k * d.x * d.y
+        matrix.A13 = k * d.x * d.z
+        matrix.A21 = k * d.y * d.x
+        matrix.A22 = 1.0 + k * d.y * d.y
+        matrix.A23 = k * d.y * d.z
+        matrix.A31 = k * d.z * d.x
+        matrix.A32 = k * d.z * d.y
+        matrix.A33 = 1.0 + k * d.z * d.z
+        matrix.A14 = -k * p_min * d.x
+        matrix.A24 = -k * p_min * d.y
+        matrix.A34 = -k * p_min * d.z
+    
+        return shape.transformGeometry(matrix)
+
+    @staticmethod
     def _offset_polygon(points, distance):
         """Offset a simple polygon by intersecting adjacent shifted edges."""
         pts = [(float(x), float(y)) for x, y in points]
