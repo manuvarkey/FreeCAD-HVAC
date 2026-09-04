@@ -843,10 +843,6 @@ def build_lateral_tee(context):
     return _star_tee(context, 0.65, 0.65)
 
 
-def build_wye(context):
-    return _star_wye(context, 0.70)
-
-
 def build_wye_mitered(context):
     return _star_wye(context, 0.70)
 
