@@ -489,94 +489,71 @@ def _star_junction(context, default_factor=0.6):
         "shape": api.refine(api.fuse(*legs)),
         "connection_lengths": api.build_trim_rec_from_port_lengths([(port, trim) for port in ports]),
     }
-
-
-def _run_trims(api, p, run_a, run_b, factor):
-    """Independent (TrimRunA, TrimRunB) trim lengths for a tee/tap's two
-    collinear run ports, each defaulting off (and floored at a sane
-    minimum relative to) its own port's own size."""
-    run_a_size, run_b_size = _size(api, run_a), _size(api, run_b)
-    trim_a = _sane_trim(p.get("TrimRunA"), factor * run_a_size, run_a_size)
-    trim_b = _sane_trim(p.get("TrimRunB"), factor * run_b_size, run_b_size)
-    return trim_a, trim_b
-
-
-def _star_tee(context, run_factor, branch_factor):
-    """Like ``_star_junction``, but a tee/lateral-tee's run/branch legs
-    (found via ``_find_run_pair``) each read their own independent
-    TrimRunA/TrimRunB/TrimBranch property instead of one uniform value."""
-    api = context["hvac_api"]
-    ports = api.connected_ports(context)
-    if len(ports) != 3:
-        raise ValueError("Fitting requires exactly three connected ports")
-    run_a, run_b, branch = _find_run_pair(context, api, ports)
-    p = _props(context)
-    trim_a, trim_b = _run_trims(api, p, run_a, run_b, run_factor)
-    trim_branch = _sane_trim(p.get("TrimBranch"), branch_factor * _size(api, branch), _size(api, branch))
-    center = sum((api.port_position(port) for port in ports), api.vec((0, 0, 0))) / len(ports)
-    legs = []
-    for port, trim in ((run_a, trim_a), (run_b, trim_b), (branch, trim_branch)):
-        end = _trimmed(api, port, trim)
-        hub = api.copy_port(port, position=center, direction=api.port_direction(port) * -1.0)
-        legs.append(_loft(api, [end, hub], 0.0, ruled=True))
-    return {
-        "shape": api.refine(api.fuse(*legs)),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(
-            [(run_a, trim_a), (run_b, trim_b), (branch, trim_branch)]
-        ),
-    }
-
-
-def _radius_tee(context, run_factor, branch_factor, run_margin=0.2):
-    """Tee/tap with the run left straight and the branch swept along a
-    tangent arc that leans into the run (the branch-topology analogue of
-    ``build_elbow``'s smooth swept-arc bend). TrimRunA/TrimRunB/TrimBranch
-    are each independently settable; the run leg the branch leans toward
-    is floored at whatever length the arc's own tangent point requires
-    (``run_margin`` extra clearance beyond that), and the branch leg is
-    extended past the arc's tangent point (``_extend_leg``) if TrimBranch
-    asks for more than the arc alone provides."""
-    api = context["hvac_api"]
-    ports = api.connected_ports(context)
-    if len(ports) != 3:
-        raise ValueError("Fitting requires exactly three connected ports")
-    run_a, run_b, branch = _find_run_pair(context, api, ports)
-    p = _props(context)
-    run_a_size, run_b_size = _size(api, run_a), _size(api, run_b)
-    branch_size = _size(api, branch)
-    trim_a, trim_b = _run_trims(api, p, run_a, run_b, run_factor)
-    trim_branch = _sane_trim(p.get("TrimBranch"), branch_factor * branch_size, branch_size)
-    radius = _positive(p.get("BranchRadius"), branch_factor * branch_size)
-    radius = max(radius, 0.5 * branch_size)
-
-    trunk_center = api.center_from_context(context)
-    lean = _lean_port(api, run_a, run_b, branch)
-    trunk_axis_port = api.copy_port(branch, position=trunk_center, direction=api.port_direction(lean))
-    route = api.make_elbow_path(branch, trunk_axis_port, radius)
-    branch_route_trim, lean_route_trim = route["trim_lengths"]
-    if lean is run_a:
-        trim_a = max(trim_a, lean_route_trim + run_margin * run_a_size)
-    else:
-        trim_b = max(trim_b, lean_route_trim + run_margin * run_b_size)
-
-    trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)])
-    stub = api.sweep([api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])], route["path"], solid=True)
-    stub = _extend_leg(api, stub, branch, branch_route_trim, trim_branch)
-    trim_branch = max(trim_branch, branch_route_trim)
-
-    return {
-        "shape": api.refine(api.fuse(trunk, stub)),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(
-            [(run_a, trim_a), (run_b, trim_b), (branch, trim_branch)]
-        ),
-    }
-
+    
 
 def _extra_trim(value, default):
     """Additional trim measured beyond the intrinsic fitting body."""
     if value is None:
         return max(float(default), 0.0)
     return max(float(value or 0.0), 0.0)
+
+
+def _junction_minimums(api, center, ports):
+    """Minimum visible body length along each port required to contain the
+    other port profiles at the junction centre."""
+    centered_profiles = [api.profile_from_port(api.copy_port(port, position=center)) for port in ports]
+    minimums = []
+    for port in ports:
+        direction = api.unit(api.port_direction(port))
+        center_projection = center.dot(direction)
+        minimum = 0.0
+        for profile in centered_profiles:
+            _, p_max = api.profile_projection_bounds(profile, direction)
+            minimum = max(minimum, p_max - center_projection)
+        minimums.append(max(minimum, 1.0))
+    return minimums
+
+
+def _junction_shape_minimums(api, center, ports, shape, minimums=None):
+    """Expand junction minimums to contain the actual generated intrinsic shape."""
+    result = list(minimums or _junction_minimums(api, center, ports))
+    for i, port in enumerate(ports):
+        direction = api.unit(api.port_direction(port))
+        _, p_max = api.profile_projection_bounds(shape, direction)
+        result[i] = max(result[i], p_max - center.dot(direction))
+    return result
+
+
+def _junction_trims(api, p, ports, names, factors, minimums):
+    """Total connection lengths = intrinsic fitting body + additional trims."""
+    trims = []
+    for port, name, factor, minimum in zip(ports, names, factors, minimums):
+        extra = _extra_trim(p.get(name), factor * _size(api, port))
+        trims.append(minimum + extra)
+    return trims
+
+
+def _clip_junction_to_body(api, shape, center, ports, trims):
+    """Prevent overlap geometry from extending beyond connection planes."""
+    for port, trim in zip(ports, trims):
+        direction = api.unit(api.port_direction(port))
+        plane_origin = api.port_position(port) + direction * trim
+        side = "positive" if (center - plane_origin).dot(direction) >= 0.0 else "negative"
+        shape = api.clip_plane(shape, (plane_origin, direction), side=side)
+    return shape
+
+
+def _star_body(api, center, ports, trims, minimums):
+    """Build robust straight-legged junction geometry with controlled overlap."""
+    legs = []
+    for port, trim, minimum in zip(ports, trims, minimums):
+        direction = api.unit(api.port_direction(port))
+        end = _trimmed(api, port, trim)
+        embed = max(0.10 * minimum, 1.0)
+        inner = api.copy_port(port, position=center - direction * embed)
+        legs.append(_loft(api, [end, inner], 0.0, ruled=True))
+    shape = api.fuse(*legs)
+    return _clip_junction_to_body(api, shape, center, ports, trims)
 
 
 def _tap_geometry(context, api, run_a, run_b, branch):
@@ -726,6 +703,90 @@ def _saddle_tap(context, run_factor, branch_factor, flare_factor=0.6):
             [(run_a, trim_a), (run_b, trim_b), (branch, trim_branch)]
         ),
     }
+
+
+def _star_tee(context, run_factor, branch_factor):
+    """Straight-legged tee with trims measured beyond the intrinsic junction body."""
+    api = context["hvac_api"]
+    ports = api.connected_ports(context)
+    if len(ports) != 3:
+        raise ValueError("Fitting requires exactly three connected ports")
+    run_a, run_b, branch = _find_run_pair(context, api, ports)
+    p = _props(context)
+
+    center = api.center_from_context(context)
+    tee_ports = [run_a, run_b, branch]
+    minimums = _junction_minimums(api, center, tee_ports)
+    trims = _junction_trims(api, p, tee_ports, ("TrimRunA", "TrimRunB", "TrimBranch"), (run_factor, run_factor, branch_factor), minimums)
+    shape = _star_body(api, center, tee_ports, trims, minimums)
+
+    return {
+        "shape": api.refine(shape),
+        "connection_lengths": api.build_trim_rec_from_port_lengths(
+            [(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]
+        ),
+    }
+    
+
+def _radius_tee(context, run_factor, branch_factor):
+    """Radiused tee with trims measured beyond the actual generated bend body."""
+    api = context["hvac_api"]
+    ports = api.connected_ports(context)
+    if len(ports) != 3:
+        raise ValueError("Fitting requires exactly three connected ports")
+    run_a, run_b, branch = _find_run_pair(context, api, ports)
+    p = _props(context)
+
+    center = api.center_from_context(context)
+    tee_ports = [run_a, run_b, branch]
+    branch_size = _size(api, branch)
+    radius = _positive(p.get("BranchRadius"), branch_factor * branch_size)
+    radius = max(radius, 0.5 * branch_size)
+
+    lean = _lean_port(api, run_a, run_b, branch)
+    trunk_axis_port = api.copy_port(branch, position=center, direction=api.port_direction(lean))
+    route = api.make_elbow_path(branch, trunk_axis_port, radius)
+    branch_route_trim, lean_route_trim = route["trim_lengths"]
+    stub = api.sweep([api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])], route["path"], solid=True)
+
+    minimums = _junction_minimums(api, center, tee_ports)
+    minimums = _junction_shape_minimums(api, center, tee_ports, stub, minimums)
+    minimums[2] = max(minimums[2], branch_route_trim)
+    lean_index = 0 if lean is run_a else 1
+    minimums[lean_index] = max(minimums[lean_index], lean_route_trim)
+
+    trims = _junction_trims(api, p, tee_ports, ("TrimRunA", "TrimRunB", "TrimBranch"), (run_factor, run_factor, branch_factor), minimums)
+    stub = _extend_leg(api, stub, branch, branch_route_trim, trims[2])
+
+    trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])])
+    shape = api.fuse(trunk, stub)
+    shape = _clip_junction_to_body(api, shape, center, tee_ports, trims)
+
+    return {
+        "shape": api.refine(shape),
+        "connection_lengths": api.build_trim_rec_from_port_lengths(
+            [(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]
+        ),
+    }
+
+def _star_wye(context, factor=0.70):
+    """Straight-legged wye with independent trims outside its minimum body."""
+    api = context["hvac_api"]
+    ports = list(api.connected_ports(context))
+    if len(ports) != 3:
+        raise ValueError("Fitting requires exactly three connected ports")
+    p = _props(context)
+
+    center = api.center_from_context(context)
+    minimums = _junction_minimums(api, center, ports)
+    names = ("TrimBranchA", "TrimBranchB", "TrimBranchC")
+    trims = _junction_trims(api, p, ports, names, (factor, factor, factor), minimums)
+    shape = _star_body(api, center, ports, trims, minimums)
+
+    return {
+        "shape": api.refine(shape),
+        "connection_lengths": api.build_trim_rec_from_port_lengths(list(zip(ports, trims))),
+    }
     
 
 def build_tee_radius(context):
@@ -737,46 +798,43 @@ def build_tee_mitered(context):
 
 
 def build_tee_mitered_shoe(context):
-    """Like ``build_tee_radius``, but the branch leans into the run via a
-    flat mitre cut (``_mitered_bend`` with a single joint) instead of a
-    smooth swept arc -- the branch-topology analogue of
-    ``build_elbow_mitered``. TrimRunA/TrimRunB/TrimBranch are each
-    independently settable, with the same floor/extension treatment
-    ``_radius_tee`` applies (the run leg the branch leans toward can't be
-    shorter than the mitre's own tangent point; the branch leg extends
-    past it via ``_extend_leg`` on request)."""
+    """Mitered branch tee with trims outside the generated bend body."""
     api = context["hvac_api"]
     ports = api.connected_ports(context)
     if len(ports) != 3:
         raise ValueError("Tee fitting requires exactly three connected ports")
     run_a, run_b, branch = _find_run_pair(context, api, ports)
     p = _props(context)
-    run_a_size, run_b_size = _size(api, run_a), _size(api, run_b)
+
+    center = api.center_from_context(context)
+    tee_ports = [run_a, run_b, branch]
     branch_size = _size(api, branch)
-    trim_a, trim_b = _run_trims(api, p, run_a, run_b, 0.4)
-    trim_branch = _sane_trim(p.get("TrimBranch"), 0.6 * branch_size, branch_size)
     radius = _positive(p.get("BranchRadius"), 0.6 * branch_size)
     radius = max(radius, 0.5 * branch_size)
     cuts = max(int(p.get("NumberOfCuts", 1) or 1), 1)
 
-    trunk_center = (api.port_position(run_a) + api.port_position(run_b)) / 2.0
     lean = _lean_port(api, run_a, run_b, branch)
-    trunk_axis_port = api.copy_port(branch, position=trunk_center, direction=api.port_direction(lean))
-    bend_shape, trims = _mitered_bend(api, branch, trunk_axis_port, radius, cuts)
-    branch_route_trim, lean_route_trim = trims
-    if lean is run_a:
-        trim_a = max(trim_a, lean_route_trim + 0.2 * run_a_size)
-    else:
-        trim_b = max(trim_b, lean_route_trim + 0.2 * run_b_size)
+    trunk_axis_port = api.copy_port(branch, position=center, direction=api.port_direction(lean))
+    bend_shape, route_trims = _mitered_bend(api, branch, trunk_axis_port, radius, cuts)
+    branch_route_trim, lean_route_trim = route_trims
 
-    trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)])
-    bend_shape = _extend_leg(api, bend_shape, branch, branch_route_trim, trim_branch)
-    trim_branch = max(trim_branch, branch_route_trim)
+    minimums = _junction_minimums(api, center, tee_ports)
+    minimums = _junction_shape_minimums(api, center, tee_ports, bend_shape, minimums)
+    minimums[2] = max(minimums[2], branch_route_trim)
+    lean_index = 0 if lean is run_a else 1
+    minimums[lean_index] = max(minimums[lean_index], lean_route_trim)
+
+    trims = _junction_trims(api, p, tee_ports, ("TrimRunA", "TrimRunB", "TrimBranch"), (0.4, 0.4, 0.6), minimums)
+    bend_shape = _extend_leg(api, bend_shape, branch, branch_route_trim, trims[2])
+
+    trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])])
+    shape = api.fuse(trunk, bend_shape)
+    shape = _clip_junction_to_body(api, shape, center, tee_ports, trims)
 
     return {
-        "shape": api.refine(api.fuse(trunk, bend_shape)),
+        "shape": api.refine(shape),
         "connection_lengths": api.build_trim_rec_from_port_lengths(
-            [(run_a, trim_a), (run_b, trim_b), (branch, trim_branch)]
+            [(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]
         ),
     }
 
@@ -786,100 +844,65 @@ def build_lateral_tee(context):
 
 
 def build_wye(context):
-    return _star_junction(context, 0.70)
+    return _star_wye(context, 0.70)
 
 
 def build_wye_mitered(context):
-    """Like ``_star_junction``, but each of a wye's three legs reads its
-    own independent TrimBranchA/TrimBranchB/TrimBranchC property (in
-    ``connected_ports(context)`` order -- a wye has no run/branch
-    distinction, unlike a tee's TrimRunA/TrimRunB/TrimBranch, so there's no
-    meaningful role to name each leg after beyond its position). Straight
-    legs meeting at a sharp crotch, same as ``build_tee_mitered`` -- see
-    ``build_wye_radius`` for the smooth-branch alternative."""
-    api = context["hvac_api"]
-    ports = api.connected_ports(context)
-    if len(ports) != 3:
-        raise ValueError("Fitting requires exactly three connected ports")
-    p = _props(context)
-    names = ("TrimBranchA", "TrimBranchB", "TrimBranchC")
-    sizes = [_size(api, port) for port in ports]
-    trims = [_sane_trim(p.get(name), 0.70 * size, size) for name, size in zip(names, sizes)]
-    center = sum((api.port_position(port) for port in ports), api.vec((0, 0, 0))) / len(ports)
-    legs = []
-    for port, trim in zip(ports, trims):
-        end = _trimmed(api, port, trim)
-        hub = api.copy_port(port, position=center, direction=api.port_direction(port) * -1.0)
-        legs.append(_loft(api, [end, hub], 0.0, ruled=True))
-    return {
-        "shape": api.refine(api.fuse(*legs)),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(list(zip(ports, trims))),
-    }
+    return _star_wye(context, 0.70)
 
 
 def build_wye_radius(context):
-    """Wye with one main leg (its largest port) continuing straight and
-    the other two legs each swept along their own tangent arc into the
-    main leg's own axis -- two smooth radiused branches off one main run,
-    the branch-topology analogue of ``build_elbow``'s swept-arc bend
-    applied twice against a shared axis. Distinct from
-    ``build_wye_mitered``'s symmetric straight-legged crotch, where no leg
-    is singled out as the "main" run.
-
-    TrimBranchA/TrimBranchB/TrimBranchC (positional, same as
-    ``build_wye_mitered``) are each independently settable; the main leg
-    is floored at whatever length is needed to contain both branches' own
-    tangent points (plus margin), and each branch leg extends past its own
-    tangent point (``_extend_leg``) on request, exactly as
-    ``_radius_tee`` does for a tee.
-    """
+    """Radiused wye with each trim measured beyond the actual generated body."""
     api = context["hvac_api"]
-    ports = api.connected_ports(context)
+    ports = list(api.connected_ports(context))
     if len(ports) != 3:
         raise ValueError("Fitting requires exactly three connected ports")
     p = _props(context)
     names = ("TrimBranchA", "TrimBranchB", "TrimBranchC")
-    legs = sorted(
-        ((_size(api, port), name, port) for port, name in zip(ports, names)),
-        key=lambda leg: leg[0],
-        reverse=True,
-    )
-    (main_size, main_name, main), *branch_legs = legs
 
-    main_trim = _sane_trim(p.get(main_name), 0.70 * main_size, main_size)
-    smallest_branch_size = min(size for size, _, _ in branch_legs)
+    center = api.center_from_context(context)
+    legs = sorted(((_size(api, port), names[i], i, port) for i, port in enumerate(ports)), key=lambda leg: leg[0], reverse=True)
+    main_size, main_name, main_index, main = legs[0]
+    branch_legs = legs[1:]
+
+    smallest_branch_size = min(size for size, _, _, _ in branch_legs)
     radius = _positive(p.get("BranchRadius"), 0.6 * smallest_branch_size)
     radius = max(radius, 0.5 * smallest_branch_size)
 
-    main_dir = api.port_direction(main)
-    main_pos = api.port_position(main)
+    main_dir = api.unit(api.port_direction(main))
     routes = []
-    for branch_size, branch_name, branch in branch_legs:
+    route_shapes = []
+    for branch_size, branch_name, branch_index, branch in branch_legs:
         branch_radius = max(radius, 0.5 * branch_size)
-        trunk_axis_port = api.copy_port(branch, position=main_pos, direction=main_dir)
+        trunk_axis_port = api.copy_port(branch, position=center, direction=main_dir)
         route = api.make_elbow_path(branch, trunk_axis_port, branch_radius)
-        routes.append((branch, branch_name, branch_size, route))
-    main_trim = max(main_trim, max(route["trim_lengths"][1] for *_, route in routes) + 0.2 * main_size)
+        stub = api.sweep([api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])], route["path"], solid=True)
+        routes.append((branch, branch_name, branch_index, branch_size, route, stub))
+        route_shapes.append(stub)
 
-    main_end = _trimmed(api, main, main_trim)
-    shape = api.extrude(api.profile_from_port(main_end), main_dir * -main_trim, solid=True)
+    intrinsic_shape = api.fuse(*route_shapes)
+    minimums = _junction_minimums(api, center, ports)
+    minimums = _junction_shape_minimums(api, center, ports, intrinsic_shape, minimums)
 
-    lengths = [(main, main_trim)]
-    for branch, branch_name, branch_size, route in routes:
-        branch_route_trim = route["trim_lengths"][0]
-        trim_branch = _sane_trim(p.get(branch_name), 0.70 * branch_size, branch_size)
-        stub = api.sweep(
-            [api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])],
-            route["path"], solid=True,
-        )
-        stub = _extend_leg(api, stub, branch, branch_route_trim, trim_branch)
-        trim_branch = max(trim_branch, branch_route_trim)
+    for branch, branch_name, branch_index, branch_size, route, stub in routes:
+        minimums[branch_index] = max(minimums[branch_index], route["trim_lengths"][0])
+        minimums[main_index] = max(minimums[main_index], route["trim_lengths"][1])
+
+    trims = _junction_trims(api, p, ports, names, (0.70, 0.70, 0.70), minimums)
+
+    main_end = _trimmed(api, main, trims[main_index])
+    main_center = api.copy_port(main, position=center)
+    shape = _loft(api, [main_end, main_center], 0.0, ruled=True)
+
+    for branch, branch_name, branch_index, branch_size, route, stub in routes:
+        stub = _extend_leg(api, stub, branch, route["trim_lengths"][0], trims[branch_index])
         shape = api.fuse(shape, stub)
-        lengths.append((branch, trim_branch))
+
+    shape = _clip_junction_to_body(api, shape, center, ports, trims)
 
     return {
         "shape": api.refine(shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(lengths),
+        "connection_lengths": api.build_trim_rec_from_port_lengths(list(zip(ports, trims))),
     }
 
 
