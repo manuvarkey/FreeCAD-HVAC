@@ -611,16 +611,26 @@ class DuctJunctionViewProvider:
         return hvaclib.get_icon_path("DuctsIcon.svg")
 
     def onDelete(self, vobj, subelements):
+        # Permit direct deletion from the tree -- e.g. of a stale junction
+        # left over from an older schema that the owning network's own
+        # sync loop never picked up for cleanup. Remove this junction's own
+        # DuctComponent children first (found by ParentJunctionName rather
+        # than through the owner network, since a genuinely orphaned
+        # junction may have no resolvable owner) so they aren't left behind
+        # as their own dangling orphans; then, if a live network still owns
+        # this junction, ask it to resync afterwards, so anything still
+        # topologically required gets regenerated fresh from library
+        # defaults (see DuctNetwork.syncJunctions/syncJunctionComponents).
         obj = vobj.Object
         owner = hvaclib.getOwnerNetwork(obj)
-        if getattr(obj.Proxy, "_allow_delete", False):
-            return True
-        if owner and getattr(owner.Proxy, "_allow_internal_delete", False):
-            return True
-        FreeCAD.Console.PrintWarning(
-            "HVAC - Internal junction '{}' cannot be deleted directly.\n".format(obj.Label)
-        )
-        return False
+        doc = obj.Document
+        for comp in list(doc.Objects):
+            if hvaclib.isDuctComponent(comp) and getattr(comp, "ParentJunctionName", "") == obj.Name:
+                if doc.getObject(comp.Name) is not None:
+                    doc.removeObject(comp.Name)
+        if owner and getattr(owner, "Proxy", None):
+            owner.Proxy.requestSync(force_recompute=True)
+        return True
 
     def claimChildren(self):
         try:

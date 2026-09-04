@@ -832,16 +832,17 @@ class DuctSegmentViewProvider:
         return hvaclib.get_icon_path("DuctsIcon.svg")
 
     def onDelete(self, vobj, subelements):
+        # Permit direct deletion from the tree -- e.g. of a stale segment
+        # left over from an older schema that the owning network's own
+        # sync loop never picked up for cleanup. If a live network still
+        # owns it, ask that network to resync afterwards, so anything
+        # still topologically required gets regenerated fresh from
+        # library defaults (see DuctNetwork.syncSegments).
         obj = vobj.Object
         owner = hvaclib.getOwnerNetwork(obj)
-        if getattr(obj.Proxy, "_allow_delete", False):
-            return True
-        if owner and getattr(owner.Proxy, "_allow_internal_delete", False):
-            return True
-        FreeCAD.Console.PrintWarning(
-            "HVAC - Internal segment '{}' cannot be deleted directly.\n".format(obj.Label)
-        )
-        return False
+        if owner and getattr(owner, "Proxy", None):
+            owner.Proxy.requestSync(force_recompute=True)
+        return True
 
     def canDropObjects(self):
         return False
