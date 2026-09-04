@@ -840,7 +840,81 @@ def build_tee_mitered_shoe(context):
 
 
 def build_lateral_tee(context):
-    return _star_tee(context, 0.65, 0.65)
+    """Straight lateral tee with branch geometry starting at the actual run
+    surface. TrimRunA/TrimRunB are measured beyond the minimum branch
+    footprint and TrimBranch is measured outward from the inclined run
+    surface intersection."""
+    api = context["hvac_api"]
+    ports = api.connected_ports(context)
+    if len(ports) != 3:
+        raise ValueError("Fitting requires exactly three connected ports")
+    run_a, run_b, branch = _find_run_pair(context, api, ports)
+    p = _props(context)
+
+    center = api.center_from_context(context)
+    branch_dir = api.unit(api.port_direction(branch))
+    lean = _lean_port(api, run_a, run_b, branch)
+    run_dir = api.unit(api.port_direction(lean))
+
+    transverse = branch_dir - run_dir * branch_dir.dot(run_dir)
+    sin_angle = transverse.Length
+    if sin_angle <= api.EPS:
+        raise ValueError("Lateral tee branch is parallel to the run")
+    surface_dir = api.unit(transverse)
+
+    center_projection = center.dot(surface_dir)
+    surface_projection = None
+    for run_port in (run_a, run_b):
+        centered_port = api.copy_port(run_port, position=center)
+        run_profile = api.profile_from_port(centered_port)
+        _, p_max = api.profile_projection_bounds(run_profile, surface_dir)
+        surface_projection = p_max if surface_projection is None else max(surface_projection, p_max)
+
+    if surface_projection is None:
+        raise ValueError("Could not determine run surface")
+
+    normal_depth = surface_projection - center_projection
+    branch_depth = normal_depth / sin_angle
+    run_surface = center + branch_dir * branch_depth
+    surface_port = api.copy_port(branch, position=run_surface)
+    surface_profile = api.profile_from_port(surface_port)
+
+    run_a_dir = api.unit(api.port_direction(run_a))
+    run_b_dir = api.unit(api.port_direction(run_b))
+    _, max_a = api.profile_projection_bounds(surface_profile, run_a_dir)
+    _, max_b = api.profile_projection_bounds(surface_profile, run_b_dir)
+    min_a = max(0.0, max_a - center.dot(run_a_dir))
+    min_b = max(0.0, max_b - center.dot(run_b_dir))
+
+    trim_a = min_a + _extra_trim(p.get("TrimRunA"), 0.65 * _size(api, run_a))
+    trim_b = min_b + _extra_trim(p.get("TrimRunB"), 0.65 * _size(api, run_b))
+
+    branch_min = max(0.0, (run_surface - api.port_position(branch)).dot(branch_dir) * 2.0)
+    trim_branch = branch_min + _extra_trim(p.get("TrimBranch"), 0.65 * _size(api, branch))
+
+    trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)])
+    branch_end = _trimmed(api, branch, trim_branch)
+
+    visible_reach = max(0.0, (api.port_position(branch_end) - run_surface).dot(branch_dir))
+    visible_stub = api.extrude(api.profile_from_port(branch_end), branch_dir * -visible_reach, solid=True)
+
+    embed_reach = max(0.0, (run_surface - center).dot(branch_dir))
+    embedded_stub = api.extrude(surface_profile, branch_dir * -embed_reach, solid=True)
+
+    for run_port, trim in ((run_a, trim_a), (run_b, trim_b)):
+        direction = api.unit(api.port_direction(run_port))
+        plane_origin = api.port_position(run_port) + direction * trim
+        side = "positive" if (center - plane_origin).dot(direction) >= 0.0 else "negative"
+        embedded_stub = api.clip_plane(embedded_stub, (plane_origin, direction), side=side)
+
+    shape = api.fuse(trunk, visible_stub, embedded_stub)
+
+    return {
+        "shape": api.refine(shape),
+        "connection_lengths": api.build_trim_rec_from_port_lengths(
+            [(run_a, trim_a), (run_b, trim_b), (branch, trim_branch)]
+        ),
+    }
 
 
 def build_wye_mitered(context):
