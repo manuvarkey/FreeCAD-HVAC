@@ -14,6 +14,21 @@
   },
   "properties": [
     {
+        "name": "TapHeight",
+        "prop_type": "App::PropertyLength",
+        "group": "Dimensions",
+        "description": "Height of tap connector",
+        "default": 150.0,
+        "min": 1.0
+    },
+    {
+      "name": "SaddleGrowth",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Growth applied to the stub's base as it flares to conform to the run",
+      "default": 25.0
+    },
+    {
       "name": "TrimRunA",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
@@ -33,13 +48,6 @@
       "group": "Dimensions",
       "description": "Trim length for the tap's own branch duct",
       "default": 80.0
-    },
-    {
-      "name": "SaddleGrowth",
-      "prop_type": "App::PropertyLength",
-      "group": "Dimensions",
-      "description": "Growth applied to the stub's base as it flares to conform to the run",
-      "default": 40.0
     }
   ],
   "generator": {

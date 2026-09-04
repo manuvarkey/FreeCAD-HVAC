@@ -14,11 +14,11 @@
   },
   "properties": [
     {
-        "name": "ShoeHeight",
+        "name": "TapHeight",
         "prop_type": "App::PropertyLength",
         "group": "Dimensions",
-        "description": "Height of shoe connector",
-        "default": 100.0,
+        "description": "Height of tap connector",
+        "default": 75.0,
         "min": 1.0
     },
     {
