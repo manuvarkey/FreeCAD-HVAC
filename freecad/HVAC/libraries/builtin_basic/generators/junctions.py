@@ -900,12 +900,7 @@ def build_lateral_tee(context):
 
     embed_reach = max(0.0, (run_surface - center).dot(branch_dir))
     embedded_stub = api.extrude(surface_profile, branch_dir * -embed_reach, solid=True)
-
-    for run_port, trim in ((run_a, trim_a), (run_b, trim_b)):
-        direction = api.unit(api.port_direction(run_port))
-        plane_origin = api.port_position(run_port) + direction * trim
-        side = "positive" if (center - plane_origin).dot(direction) >= 0.0 else "negative"
-        embedded_stub = api.clip_plane(embedded_stub, (plane_origin, direction), side=side)
+    embedded_stub = _clip_junction_to_body(api, embedded_stub, center, (run_a, run_b), (trim_a, trim_b))
 
     shape = api.fuse(trunk, visible_stub, embedded_stub)
 
