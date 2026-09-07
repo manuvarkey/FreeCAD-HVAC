@@ -67,11 +67,17 @@ class FakeParser:
         return [list(g) for g in self._groups]
 
 
-def make_junction(name, topology="through", family="", design_flow=0.0, is_flow_source=False,
-                   library_id="", type_id=""):
+def make_junction(name, topology="through", family="", design_flow=0.0, flow_boundary=None,
+                   is_flow_source=False, library_id="", type_id=""):
+    # flow_boundary=None mirrors network_fixtures.make_junction's own
+    # backward-compatible default: a 0.0 design_flow means "Auto" (the
+    # old "blank DesignFlowRate" balancing-terminal heuristic), any other
+    # value means "Fixed".
+    if flow_boundary is None:
+        flow_boundary = "Auto" if design_flow == 0.0 else "Fixed"
     return FakeObj(
         Name=name, Label=name, Number="", Topology=topology, Family=family,
-        DesignFlowRate=design_flow, IsFlowSource=is_flow_source,
+        DesignFlowRate=design_flow, FlowBoundary=flow_boundary, IsFlowSource=is_flow_source,
         LibraryId=library_id, TypeId=type_id,
     )
 
@@ -239,10 +245,26 @@ def test_unset_flow_terminal_is_chosen_as_source_over_geometry_fallback():
     assert junction_map["N1"].Number == "J001"
 
 
+def test_closed_terminal_is_not_treated_as_the_auto_balancing_candidate():
+    # J1 (the geometrically-lowest terminal, so it would win any fallback
+    # tie) is Closed instead of Auto; J4 is the genuine Auto candidate.
+    # Under the old "0 means unset" convention a Closed terminal at 0 L/s
+    # would have looked identical to a real balancing terminal -- it must
+    # not be picked here.
+    net, segment_map, junction_map = _tee_net()
+    junction_map["N1"].FlowBoundary = "Closed"
+    junction_map["N4"].FlowBoundary = "Auto"
+
+    renumber_network(net)
+
+    assert junction_map["N4"].Number == "J001"
+
+
 def test_flow_source_flag_is_preferred_over_blank_flow_heuristic():
     net, segment_map, junction_map = _tee_net()
-    # Simulate a stale/edited DesignFlowRate on J1 alongside a previously
+    # Simulate a stale/edited Flow Condition on J1 alongside a previously
     # solved IsFlowSource -- the solved flag should win.
+    junction_map["N1"].FlowBoundary = "Fixed"
     junction_map["N1"].DesignFlowRate = 5.0
     junction_map["N1"].IsFlowSource = True
 

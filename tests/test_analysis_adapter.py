@@ -92,6 +92,37 @@ def test_component_models_use_their_own_construction_roughness(monkeypatch):
     assert model.inline_chains["edge"][1].roughness_mm == 0.09
 
 
+def test_node_model_reads_flow_boundary_off_the_junction(monkeypatch):
+    """
+    NodeModel.flow_boundary must mirror DuctJunction.FlowBoundary exactly
+    (defaulting to "Auto" if the property is missing, e.g. a non-terminal
+    node or an older test double) -- see analysis/flow.py for how this
+    tri-state replaces the old "DesignFlowRate == 0 means unset" heuristic.
+    """
+    monkeypatch.setattr(
+        _analysis_adapter, "construction_for", lambda obj: SimpleNamespace(hydraulic_roughness=lambda default: default)
+    )
+    analysis = SimpleNamespace(connected_ports=[], topology="end", degree=1)
+    registry = SimpleNamespace(resolve_type=lambda library_id, type_id: None)
+
+    closed_junction = SimpleNamespace(DesignFlowRate=999.0, FlowBoundary="Closed", Family="", Proxy=SimpleNamespace(
+        getPrimaryComponent=lambda: None, getPortChains=lambda: {},
+    ))
+    model = _analysis_adapter._build_node_model(
+        "node", closed_junction, analysis, {}, registry, SimpleNamespace(), {}, default_roughness_mm=0.09,
+    )
+    assert model.flow_boundary == "Closed"
+    assert model.design_flow_lps == 999.0  # preserved on the model -- flow.py is what ignores it for Closed
+
+    no_boundary_junction = SimpleNamespace(DesignFlowRate=0.0, Family="", Proxy=SimpleNamespace(
+        getPrimaryComponent=lambda: None, getPortChains=lambda: {},
+    ))
+    model = _analysis_adapter._build_node_model(
+        "node", no_boundary_junction, analysis, {}, registry, SimpleNamespace(), {}, default_roughness_mm=0.09,
+    )
+    assert model.flow_boundary == "Auto"
+
+
 def test_loss_evaluator_exposes_component_construction_and_roughness():
     captured = {}
     type_def = SimpleNamespace(properties=[])

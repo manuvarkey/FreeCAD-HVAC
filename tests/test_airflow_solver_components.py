@@ -132,7 +132,9 @@ def test_primary_and_chain_losses_on_the_same_edge_are_summed_as_pa(monkeypatch)
         "N3": _single_component_junction("J3", "end_terminal_marker", _port("B", "end", 180.0, True)),
     }
     junction_map["N1"].DesignFlowRate = 0.0
+    junction_map["N1"].FlowBoundary = "Auto"
     junction_map["N3"].DesignFlowRate = 80.0
+    junction_map["N3"].FlowBoundary = "Fixed"
     junction_map["N2"].Proxy = _FakeChainJunctionProxy([reducer, damper])
 
     net = make_net(parser, segment_map, junction_map)
@@ -236,8 +238,11 @@ def _tee_network(k_tee, k_run_damper, k_branch_damper):
         "N4": _single_component_junction("J4", "end_terminal_marker", _port("C", "end", 200.0, True)),
     }
     junction_map["N1"].DesignFlowRate = 0.0
+    junction_map["N1"].FlowBoundary = "Auto"
     junction_map["N3"].DesignFlowRate = 700.0
+    junction_map["N3"].FlowBoundary = "Fixed"
     junction_map["N4"].DesignFlowRate = 300.0
+    junction_map["N4"].FlowBoundary = "Fixed"
     junction_map["N2"].Proxy = _FakeChainJunctionProxy([tee, run_damper, branch_damper])
 
     net = make_net(parser, segment_map, junction_map)
@@ -343,7 +348,9 @@ def test_inline_component_on_inlet_edge_derives_velocity_from_that_edges_own_flo
         "N3": _single_component_junction("J3", "end_terminal_marker", _port("B", "end", 250.0, True)),
     }
     junction_map["N1"].DesignFlowRate = 0.0
+    junction_map["N1"].FlowBoundary = "Auto"
     junction_map["N3"].DesignFlowRate = 60.0
+    junction_map["N3"].FlowBoundary = "Fixed"
     junction_map["N2"].Proxy = _FakeChainJunctionProxy([primary, inlet_damper])
 
     net = make_net(parser, segment_map, junction_map)

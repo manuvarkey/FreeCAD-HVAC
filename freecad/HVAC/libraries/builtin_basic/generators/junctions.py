@@ -114,6 +114,21 @@ def build_diffuser_generic(context):
     return {"shape": api.refine(shape)}
 
 
+def build_duct_closure_generic(context):
+    """A thin blanking plate/cap sealing off a single terminal port."""
+    api = context["hvac_api"]
+    ports = api.connected_ports(context)
+    if not ports:
+        return _marker(context, 150.0)
+    p = ports[0]
+    thickness = _positive(_props(context).get("PlateThickness"), 3.0)
+    shape = api.extrude(api.profile_from_port(p), api.port_direction(p) * thickness, solid=True)
+    return {
+        "shape": api.refine(shape),
+        "connection_lengths": api.build_trim_rec_from_context_uniform(context, thickness),
+    }
+
+
 def build_elbow(context):
     api = context["hvac_api"]
     ports = list(api.connected_ports(context))

@@ -37,6 +37,10 @@ class FakeJunctionObj:
         self.ConnectedEdgeKeys = connected_edge_keys or []
         self.AnalysisJson = "{}"
         self.ConnectionLengthsJson = "[]"
+        self._editor_modes = {}
+
+    def setEditorMode(self, name, mode):
+        self._editor_modes[name] = mode
 
 
 class FakeComponentObj:
@@ -59,6 +63,7 @@ def _bare_junction(obj):
     dj = junction_mod.DuctJunction.__new__(junction_mod.DuctJunction)
     dj.Object = obj
     dj._mirroring_design_flow_rate = False
+    dj._mirroring_flow_boundary = False
     return dj
 
 
@@ -616,3 +621,57 @@ def test_on_changed_is_a_noop_without_a_primary_component(monkeypatch):
 
     dj = _bare_junction(junction)
     dj.onChanged(junction, "DesignFlowRate")  # must not raise
+
+
+# ----------------------------------------------------------------------
+# onChanged: FlowBoundary two-way mirror onto the Primary component (see
+# Component.py's own onChanged/_syncFlowBoundary for the reverse
+# direction), plus the "Closed always means 0 flow" and "DesignFlowRate is
+# only editable when Fixed" side effects.
+# ----------------------------------------------------------------------
+
+def test_on_changed_pushes_flow_boundary_down_to_primary_component(monkeypatch):
+    junction = FakeJunctionObj(topology="end")
+    junction.FlowBoundary = "Fixed"
+    primary = FakeComponentObj("C0", "Junc0", "Primary")
+    primary.PropertiesList = ["FlowBoundary"]
+    primary.FlowBoundary = "Auto"
+    net = FakeNetworkObj([primary])
+    _patch_component_lookup(monkeypatch, net)
+
+    dj = _bare_junction(junction)
+    dj.onChanged(junction, "FlowBoundary")
+
+    assert primary.FlowBoundary == "Fixed"
+
+
+def test_on_changed_snaps_design_flow_rate_to_zero_when_closed(monkeypatch):
+    junction = FakeJunctionObj(topology="end")
+    junction.DesignFlowRate = 400.0
+    junction.FlowBoundary = "Closed"
+    net = FakeNetworkObj([])
+    _patch_component_lookup(monkeypatch, net)
+
+    dj = _bare_junction(junction)
+    dj.onChanged(junction, "FlowBoundary")
+
+    assert junction.DesignFlowRate == 0.0
+
+
+def test_on_changed_makes_design_flow_rate_editable_only_when_fixed(monkeypatch):
+    junction = FakeJunctionObj(topology="end")
+    net = FakeNetworkObj([])
+    _patch_component_lookup(monkeypatch, net)
+    dj = _bare_junction(junction)
+
+    junction.FlowBoundary = "Auto"
+    dj.onChanged(junction, "FlowBoundary")
+    assert junction._editor_modes["DesignFlowRate"] == 1
+
+    junction.FlowBoundary = "Fixed"
+    dj.onChanged(junction, "FlowBoundary")
+    assert junction._editor_modes["DesignFlowRate"] == 0
+
+    junction.FlowBoundary = "Closed"
+    dj.onChanged(junction, "FlowBoundary")
+    assert junction._editor_modes["DesignFlowRate"] == 1

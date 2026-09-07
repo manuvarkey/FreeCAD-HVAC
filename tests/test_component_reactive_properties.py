@@ -80,6 +80,7 @@ def _bare_component(obj):
     dc = component_mod.DuctComponent.__new__(component_mod.DuctComponent)
     dc.Object = obj
     dc._mirroring_design_flow_rate = False
+    dc._mirroring_flow_boundary = False
     return dc
 
 
@@ -433,7 +434,7 @@ def test_sync_design_flow_rate_editable_only_for_end_topology_primary(role, topo
     obj.Document = _FakeParentDoc(_FakeParentJunction(topology))
 
     dc = _bare_component(obj)
-    dc._syncDesignFlowRate(obj)
+    dc._syncFlowBoundary(obj)
 
     assert obj._editor_modes["DesignFlowRate"] == expected_mode
 
@@ -447,7 +448,7 @@ def test_sync_design_flow_rate_pulls_down_current_parent_value():
     obj.Document = _FakeParentDoc(_FakeParentJunction("end", design_flow_rate=250.0))
 
     dc = _bare_component(obj)
-    dc._syncDesignFlowRate(obj)
+    dc._syncFlowBoundary(obj)
 
     assert obj.DesignFlowRate == 250.0
 
@@ -498,3 +499,88 @@ def test_on_changed_never_pushes_an_inline_components_own_edit():
     dc.onChanged(obj, "DesignFlowRate")
 
     assert parent.DesignFlowRate == 0.0
+
+
+# ----------------------------------------------------------------------
+# FlowBoundary: same two-way proxy pattern as DesignFlowRate, plus a
+# library-driven lock (flow_boundary_locked) that forces both properties
+# on every sync -- see Component.py's _syncFlowBoundary/onChanged.
+# ----------------------------------------------------------------------
+
+class _FakeParentJunctionWithBoundary(_FakeParentJunction):
+    def __init__(self, topology, design_flow_rate=0.0, flow_boundary="Auto"):
+        super().__init__(topology, design_flow_rate)
+        self.FlowBoundary = flow_boundary
+
+
+def _flow_boundary_obj(component_role="Primary", flow_boundary="Auto"):
+    obj = FakeDuctObj()
+    obj.addProperty("App::PropertyFloat", "DesignFlowRate", "Airflow", "")
+    obj.addProperty("App::PropertyEnumeration", "FlowBoundary", "Airflow", "")
+    obj.addProperty("App::PropertyBool", "FlowBoundaryLocked", "Airflow", "")
+    obj.FlowBoundary = flow_boundary
+    obj.ComponentRole = component_role
+    obj.ParentJunctionName = "Junc0"
+    return obj
+
+
+def test_sync_flow_boundary_pulls_down_current_parent_value():
+    obj = _flow_boundary_obj(flow_boundary="Auto")
+    obj.Document = _FakeParentDoc(_FakeParentJunctionWithBoundary("end", flow_boundary="Fixed"))
+
+    dc = _bare_component(obj)
+    dc._syncFlowBoundary(obj)
+
+    assert obj.FlowBoundary == "Fixed"
+    assert not obj.FlowBoundaryLocked
+
+
+def test_on_changed_pushes_flow_boundary_edit_up_to_parent_junction():
+    parent = _FakeParentJunctionWithBoundary("end", flow_boundary="Auto")
+    obj = _flow_boundary_obj(flow_boundary="Fixed")
+    obj.Document = _FakeParentDoc(parent)
+
+    dc = _bare_component(obj)
+    dc.onChanged(obj, "FlowBoundary")
+
+    assert parent.FlowBoundary == "Fixed"
+
+
+def test_on_changed_snaps_design_flow_rate_to_zero_when_closed():
+    parent = _FakeParentJunctionWithBoundary("end", design_flow_rate=250.0, flow_boundary="Fixed")
+    obj = _flow_boundary_obj(flow_boundary="Closed")
+    obj.DesignFlowRate = 250.0
+    obj.Document = _FakeParentDoc(parent)
+
+    dc = _bare_component(obj)
+    dc.onChanged(obj, "FlowBoundary")
+
+    assert obj.DesignFlowRate == 0.0
+
+
+def test_sync_flow_boundary_reasserts_locked_type_every_sync(monkeypatch):
+    """A library type that prescribes+locks FlowBoundary (e.g. a duct
+    closure/end cap) must win over whatever the parent junction currently
+    holds -- and force DesignFlowRate to 0 too, every sync."""
+    parent = _FakeParentJunctionWithBoundary("end", design_flow_rate=123.0, flow_boundary="Fixed")
+    obj = _flow_boundary_obj(flow_boundary="Fixed")
+    obj.DesignFlowRate = 123.0
+    obj.LibraryId = "builtin_basic"
+    obj.TypeId = "end_duct_closure_generic"
+    obj.Document = _FakeParentDoc(parent)
+
+    type_def = _FakeTypeDef([])
+    type_def.flow_boundary = "Closed"
+    type_def.flow_boundary_locked = True
+    _patch_registry(monkeypatch, _FakeRegistry(type_def))
+
+    dc = _bare_component(obj)
+    dc._syncFlowBoundary(obj)
+
+    assert obj.FlowBoundary == "Closed"
+    assert obj.DesignFlowRate == 0.0
+    assert obj.FlowBoundaryLocked is True
+    assert parent.FlowBoundary == "Closed"
+    assert parent.DesignFlowRate == 0.0
+    assert obj._editor_modes["FlowBoundary"] == 1  # read-only, not hidden -- locked but still visible
+    assert obj._editor_modes["DesignFlowRate"] == 1

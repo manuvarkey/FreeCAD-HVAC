@@ -114,11 +114,12 @@ class ComponentModel:
 class NodeModel:
     """
     One junction. `ports` are this node's REAL ports (one per connected
-    segment). `design_flow_lps` mirrors DuctJunction.DesignFlowRate exactly:
-    a terminal with |design_flow_lps| <= 1e-9 (the FreeCAD default, 0.0, or
-    explicitly left at 0) is the candidate balancing terminal -- see
-    analysis/flow.py -- there's no separate "unset" sentinel, matching the
-    real FreeCAD property this mirrors.
+    segment). `flow_boundary` mirrors DuctJunction.FlowBoundary exactly --
+    one of "Auto" (this terminal's flow is solved by mass balance; exactly
+    one per sub-network), "Fixed" (use `design_flow_lps` as-is, including
+    0.0 -- a genuine zero flow, not "unset"), or "Closed" (a sealed
+    termination; contributes zero flow regardless of `design_flow_lps`) --
+    see analysis/flow.py for how each state is used.
 
     `inline_chains` holds, per real edge_key, that edge's own additional
     Inline devices in series with the Primary (only ever non-empty at a
@@ -130,6 +131,7 @@ class NodeModel:
     degree: int
     ports: List[PortModel] = field(default_factory=list)
     design_flow_lps: float = 0.0
+    flow_boundary: str = "Auto"
     primary_component: Optional[ComponentModel] = None
     inline_chains: Dict[str, List[ComponentModel]] = field(default_factory=dict)
 

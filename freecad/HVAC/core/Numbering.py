@@ -165,7 +165,7 @@ def _choose_root(comp_nodes, node_point, node_key, junction_map, warnings):
     Pick this sub-network's traversal source, preferring (in order):
       1. a node whose junction was solved as the flow source last time
          AirflowSolver ran (IsFlowSource) -- if exactly one such node,
-      2. else, a topology="end" terminal with no design flow rate set --
+      2. else, a topology="end" terminal whose Flow Condition is "Auto" --
          the same "balancing terminal" heuristic analysis/flow.py itself
          uses to find a network's source before a solve even runs,
       3. else, the geometrically-lowest "end" (degree-1) terminal,
@@ -184,7 +184,7 @@ def _choose_root(comp_nodes, node_point, node_key, junction_map, warnings):
     if len(flow_sources) == 1:
         return flow_sources[0]
 
-    unset_flow = [n for n in terminals if not float(getattr(junction_for(n), "DesignFlowRate", 0.0) or 0.0)]
+    unset_flow = [n for n in terminals if str(getattr(junction_for(n), "FlowBoundary", "Auto") or "Auto") == "Auto"]
     if len(unset_flow) == 1:
         return unset_flow[0]
 

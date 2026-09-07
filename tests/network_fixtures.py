@@ -201,12 +201,19 @@ class FakeJunctionObj(FakeObj):
         self._component.TypeId = value
 
 
-def make_junction(label, design_flow=0.0, library_id="testlib", type_id="branch_tee_generic"):
+def make_junction(label, design_flow=0.0, flow_boundary=None, library_id="testlib", type_id="branch_tee_generic"):
+    # flow_boundary=None keeps every existing caller's behavior unchanged:
+    # a 0.0 design_flow defaults to "Auto" (the balancing terminal), any
+    # other value defaults to "Fixed" -- exactly the old "0 means unset"
+    # convention this fixture used to hardcode via DesignFlowRate alone.
+    if flow_boundary is None:
+        flow_boundary = "Auto" if design_flow == 0.0 else "Fixed"
     return FakeJunctionObj(
         Label=label,
         Name=label,
         Family="",
         DesignFlowRate=design_flow,
+        FlowBoundary=flow_boundary,
         Topology="branch",
         LibraryId=library_id,
         TypeId=type_id,

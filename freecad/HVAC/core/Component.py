@@ -66,6 +66,7 @@ class DuctComponent:
         self.Object = obj
         self._allow_delete = False
         self._mirroring_design_flow_rate = False
+        self._mirroring_flow_boundary = False
         self.setProperties(obj)
         self.updateMetadata(
             parent_junction=parent_junction,
@@ -81,6 +82,7 @@ class DuctComponent:
         self.Object = obj
         self._allow_delete = False
         self._mirroring_design_flow_rate = False
+        self._mirroring_flow_boundary = False
         self.setProperties(obj)
         _construction_schema.normalize_material_properties(obj)
 
@@ -98,7 +100,7 @@ class DuctComponent:
         # recomputes placement, so it stays decoupled from FreeCAD's
         # automatic recompute ordering (same reasoning as DuctJunction/
         # DuctSegment not using Placement/Link-based dependencies).
-        self._syncDesignFlowRate(obj)
+        self._syncFlowBoundary(obj)
 
         library_id = getattr(obj, "LibraryId", "")
         type_id = getattr(obj, "TypeId", "")
@@ -202,17 +204,45 @@ class DuctComponent:
             return None
         return doc.getObject(parent_name)
 
-    def _syncDesignFlowRate(self, obj):
+    def _resolveFlowBoundaryPolicy(self, obj):
         """
-        Keep DesignFlowRate's editor mode and value in step with the parent
-        junction every sync (see the property's own comment in
-        setProperties()): editable only on a Primary component whose parent
-        is an "end" (terminal) node, hidden everywhere else, and always
-        pulled down from the parent's current value here -- any edit made
-        directly on this component was already pushed up to the parent by
-        onChanged() before this runs, so this is a no-op in that case and
-        only actually does something when the parent changed some other way
-        (a fresh sync, a document restore, or an edit on the parent itself).
+        (prescribed, locked) declared by this component's own selected
+        library type -- ("", False) if it has none, no type selected, or
+        the type can't be resolved. Never referenced by name -- only ever
+        read off the type-def's own flow_boundary/flow_boundary_locked
+        fields (see library/Library.py), so a duct-closure/end-cap type is
+        just data, not a hardcoded case here.
+        """
+        library_id = getattr(obj, "LibraryId", "")
+        type_id = getattr(obj, "TypeId", "")
+        if not library_id or not type_id:
+            return "", False
+        reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
+        type_def = reg.resolve_type(library_id, type_id)
+        if type_def is None:
+            return "", False
+        return str(getattr(type_def, "flow_boundary", "") or ""), bool(getattr(type_def, "flow_boundary_locked", False))
+
+    def _syncFlowBoundary(self, obj):
+        """
+        Keep FlowBoundary/DesignFlowRate's editor modes and values in step
+        with the parent junction every sync (see each property's own
+        comment in setProperties()): editable only on a Primary component
+        whose parent is an "end" (terminal) node -- DesignFlowRate further
+        only when the current FlowBoundary is "Fixed" -- hidden everywhere
+        else.
+
+        If the selected library type locks FlowBoundary (flow_boundary_locked),
+        its prescribed value is re-asserted here on *both* this component
+        and the parent junction, every sync, so a user can never leave a
+        locked terminal (e.g. a duct closure) in a different state -- even
+        via a stale document or a direct Python edit. Otherwise, this pulls
+        the parent's current value down onto this component, exactly like
+        DesignFlowRate's own mirror: any edit made directly on this
+        component was already pushed up to the parent by onChanged() before
+        this runs, so that pulldown is a no-op in that case and only
+        actually does something when the parent changed some other way (a
+        fresh sync, a document restore, or an edit on the parent itself).
         """
         if "DesignFlowRate" not in obj.PropertiesList:
             return
@@ -220,9 +250,44 @@ class DuctComponent:
         is_primary = getattr(obj, "ComponentRole", "") == "Primary"
         parent = self._parentObj(obj)
         topology = getattr(parent, "Topology", "") if (is_primary and parent is not None) else ""
-        editable = is_primary and topology == "end"
+        editable_context = is_primary and topology == "end"
+
+        prescribed, locked = self._resolveFlowBoundaryPolicy(obj) if editable_context else ("", False)
+        if "FlowBoundaryLocked" in obj.PropertiesList and bool(getattr(obj, "FlowBoundaryLocked", False)) != locked:
+            obj.FlowBoundaryLocked = locked
+
+        has_flow_boundary = "FlowBoundary" in obj.PropertiesList
+        if has_flow_boundary and not self._mirroring_flow_boundary:
+            if locked and prescribed:
+                self._mirroring_flow_boundary = True
+                try:
+                    if str(getattr(obj, "FlowBoundary", "Auto") or "Auto") != prescribed:
+                        obj.FlowBoundary = prescribed
+                    if parent is not None and str(getattr(parent, "FlowBoundary", "Auto") or "Auto") != prescribed:
+                        parent.FlowBoundary = prescribed
+                    if prescribed == "Closed":
+                        if float(getattr(obj, "DesignFlowRate", 0.0) or 0.0) != 0.0:
+                            obj.DesignFlowRate = 0.0
+                        if parent is not None and float(getattr(parent, "DesignFlowRate", 0.0) or 0.0) != 0.0:
+                            parent.DesignFlowRate = 0.0
+                finally:
+                    self._mirroring_flow_boundary = False
+            elif parent is not None:
+                parent_boundary = str(getattr(parent, "FlowBoundary", "Auto") or "Auto")
+                if str(getattr(obj, "FlowBoundary", "Auto") or "Auto") != parent_boundary:
+                    self._mirroring_flow_boundary = True
+                    try:
+                        obj.FlowBoundary = parent_boundary
+                    finally:
+                        self._mirroring_flow_boundary = False
+
+        current_boundary = str(getattr(obj, "FlowBoundary", "Auto") or "Auto") if has_flow_boundary else "Fixed"
+        flow_boundary_editable = editable_context and not locked
+        design_flow_editable = editable_context and not locked and current_boundary == "Fixed"
         try:
-            obj.setEditorMode("DesignFlowRate", 0 if editable else 2)
+            if has_flow_boundary:
+                obj.setEditorMode("FlowBoundary", 0 if flow_boundary_editable else (1 if editable_context else 2))
+            obj.setEditorMode("DesignFlowRate", 0 if design_flow_editable else (1 if editable_context else 2))
         except Exception:
             pass
 
@@ -238,6 +303,24 @@ class DuctComponent:
             self._mirroring_design_flow_rate = False
 
     def onChanged(self, obj, prop):
+        if prop == "FlowBoundary" and not self._mirroring_flow_boundary:
+            if getattr(obj, "ComponentRole", "") != "Primary":
+                return
+            boundary = str(getattr(obj, "FlowBoundary", "Auto") or "Auto")
+            if boundary == "Closed" and float(getattr(obj, "DesignFlowRate", 0.0) or 0.0) != 0.0:
+                obj.DesignFlowRate = 0.0
+            parent = self._parentObj(obj)
+            if parent is None:
+                return
+            if str(getattr(parent, "FlowBoundary", "Auto") or "Auto") == boundary:
+                return
+            self._mirroring_flow_boundary = True
+            try:
+                parent.FlowBoundary = boundary
+            finally:
+                self._mirroring_flow_boundary = False
+            return
+
         if prop != "DesignFlowRate" or self._mirroring_design_flow_rate:
             return
         if getattr(obj, "ComponentRole", "") != "Primary":
@@ -292,23 +375,46 @@ class DuctComponent:
         # declared construction -- see the matching comment in Segment.py's
         # own setProperties().
 
-        # Two-way proxy for the parent junction's own DesignFlowRate (see
-        # Junction.py's DesignFlowRate/onChanged) -- a junction has no Shape
-        # and can't be picked in the 3D view, so a terminal's design flow
-        # rate needs to be settable from its visible Primary fitting too.
-        # Editor mode/value are kept in sync with the parent every sync, from
-        # execute()'s _syncDesignFlowRate -- editable only for a Primary
-        # component whose parent junction is an "end" (terminal) node,
-        # hidden everywhere else since it has no meaning there. Starts
-        # hidden (mode 2) here purely as this property's one-time initial
-        # default when first added to an object; _syncDesignFlowRate
-        # corrects it on the very next sync.
+        # Two-way proxy for the parent junction's own FlowBoundary/
+        # DesignFlowRate (see Junction.py's onChanged) -- a junction has no
+        # Shape and can't be picked in the 3D view, so a terminal's flow
+        # condition needs to be settable from its visible Primary fitting
+        # too. Editor mode/value are kept in sync with the parent every
+        # sync, from execute()'s _syncFlowBoundary -- editable only for a
+        # Primary component whose parent junction is an "end" (terminal)
+        # node, hidden everywhere else since it has no meaning there. Starts
+        # hidden (mode 2) here purely as each property's one-time initial
+        # default when first added to an object; _syncFlowBoundary corrects
+        # it on the very next sync.
+        if "FlowBoundary" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyEnumeration", "FlowBoundary", "Airflow",
+                "Terminal flow condition, mirrored to/from the parent junction: Auto (solved by mass "
+                "balance), Fixed (use Design Flow Rate as-is, 0 included), or Closed (sealed "
+                "termination, always 0 flow)"
+            )
+            obj.FlowBoundary = ["Auto", "Fixed", "Closed"]
+            obj.FlowBoundary = "Auto"
+            try:
+                obj.setEditorMode("FlowBoundary", 2)
+            except Exception:
+                pass
+
+        self._addProperty(
+            obj, "App::PropertyBool", "FlowBoundaryLocked", "Airflow",
+            "Internal: true if the selected library type prescribes and locks this terminal's flow "
+            "condition (e.g. a duct closure/end cap), so the user can't change it"
+        )
+        try:
+            obj.setEditorMode("FlowBoundaryLocked", 2)
+        except Exception:
+            pass
+
         if "DesignFlowRate" not in obj.PropertiesList:
             obj.addProperty(
                 "App::PropertyFloat", "DesignFlowRate", "Airflow",
                 "User-specified design flow rate for this terminal (L/s), mirrored to/from the parent "
-                "junction. Leave blank/0 on exactly one terminal per sub-network to solve it as the "
-                "balancing terminal."
+                "junction, used when Flow Boundary is 'Fixed' -- 0 is a valid value."
             )
             try:
                 obj.setEditorMode("DesignFlowRate", 2)
@@ -419,6 +525,20 @@ class DuctComponent:
         if type_id and getattr(obj, "TypeId", "") != str(type_id):
             obj.TypeId = str(type_id)
             changed = True
+            # This component just adopted a new type -- apply its
+            # prescribed FlowBoundary (if any) once, as a starting point
+            # (flow_boundary_locked types get re-asserted continuously by
+            # _syncFlowBoundary instead; this covers the "prescribed but
+            # not locked" case, applied only at the moment of selection so
+            # a later user override isn't fought on every subsequent sync).
+            effective_library_id = str(library_id) if library_id else getattr(obj, "LibraryId", "")
+            reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
+            type_def = reg.resolve_type(effective_library_id, str(type_id))
+            prescribed = str(getattr(type_def, "flow_boundary", "") or "") if type_def is not None else ""
+            if prescribed and "FlowBoundary" in obj.PropertiesList:
+                obj.FlowBoundary = prescribed
+                if prescribed == "Closed":
+                    obj.DesignFlowRate = 0.0
 
         if profile and getattr(obj, "Profile", "") != str(profile):
             obj.Profile = str(profile)

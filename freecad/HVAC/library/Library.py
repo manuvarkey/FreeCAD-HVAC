@@ -80,6 +80,13 @@ SELECTION_KIND_PLACEHOLDER = "placeholder"
 SELECTION_KIND_INLINE = "inline"
 VALID_SELECTION_KINDS = {SELECTION_KIND_MODEL, SELECTION_KIND_PLACEHOLDER, SELECTION_KIND_INLINE}
 
+# Flow boundary conditions a terminal junction type-def may prescribe under
+# its own top-level "flow_boundary" key -- see core/Junction.py's/
+# core/Component.py's own FlowBoundary property for what each means to the
+# solver (analysis/flow.py). "" means the type-def doesn't prescribe one at
+# all (the user's own FlowBoundary choice, default "Auto", is left alone).
+VALID_FLOW_BOUNDARIES = {"", "Auto", "Fixed", "Closed"}
+
 
 @dataclass
 class HVACSelectionDef:
@@ -139,6 +146,14 @@ class HVACTypeDef:
     # flanges, stiffeners, seams, ... -- see library/construction.py).
     # Parsed from the JSON "construction" block's own "features" array.
     features: list[ConstructionFeatureDef] = field(default_factory=list)
+    # Optional prescribed FlowBoundary ("Auto"/"Fixed"/"Closed", "" = not
+    # declared) for a terminal (topology "end") junction type -- applied
+    # once when a component adopts this type (core/Component.py's
+    # updateMetadata()). If flow_boundary_locked is also true, it's instead
+    # re-asserted on every sync so the user can never change it (e.g. a
+    # duct-closure/end-cap fitting that must always stay "Closed").
+    flow_boundary: str = ""
+    flow_boundary_locked: bool = False
 
 
 @dataclass(frozen=True)
@@ -955,6 +970,15 @@ class HVACLibraryRegistry:
             priority=int(selection_raw.get("priority", 0) or 0),
         )
 
+        flow_boundary = str(raw.get("flow_boundary", "") or "")
+        if flow_boundary not in VALID_FLOW_BOUNDARIES:
+            raise ValueError(
+                "Type '{}' in '{}' has invalid flow_boundary '{}'; expected one of {}".format(
+                    raw.get("id", "?"), filepath, flow_boundary, sorted(VALID_FLOW_BOUNDARIES)
+                )
+            )
+        flow_boundary_locked = bool(raw.get("flow_boundary_locked", False))
+
         # "construction" is an object with its own "layers"/"features"
         # arrays (see freecad/HVAC/libraries/README.md's "Construction
         # layers"/"Construction features" sections) -- both optional, a
@@ -998,4 +1022,6 @@ class HVACLibraryRegistry:
             selection=selection,
             construction=construction,
             features=features,
+            flow_boundary=flow_boundary,
+            flow_boundary_locked=flow_boundary_locked,
         )

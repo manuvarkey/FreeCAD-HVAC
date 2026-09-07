@@ -217,13 +217,44 @@ def test_loop_detected_and_reported_as_warning_not_exception():
 
 def test_all_terminals_specified_is_an_error():
     net, segment_map, junction_map = _base_tree()
-    junction_map["N1"].DesignFlowRate = 80.0  # no terminal left unspecified
+    junction_map["N1"].FlowBoundary = "Fixed"
+    junction_map["N1"].DesignFlowRate = 80.0  # no terminal left as the Auto balancing candidate
 
     result = AirflowSolver(net).solve()
 
     assert result.components == []
     assert len(result.warnings) == 1
-    assert "Design Flow Rate" in result.warnings[0]
+    assert "Flow Condition" in result.warnings[0]
+
+
+def test_closed_terminal_is_excluded_from_balancing_and_carries_zero_flow():
+    """A Closed terminal contributes zero flow and is never the balancing
+    candidate, even though it's just as "unspecified" as an Auto terminal
+    would look under the old float-only convention."""
+    net, segment_map, junction_map = _base_tree(j4_flow=999.0)
+    junction_map["N4"].FlowBoundary = "Closed"
+    junction_map["N4"].DesignFlowRate = 999.0  # must be ignored -- Closed always means 0 flow
+
+    result = AirflowSolver(net).solve()
+
+    assert not result.warnings
+    seg_by_key = {s.key: s for comp in result.components for s in comp.segments}
+    assert seg_by_key["C"].flow_lps == pytest.approx(0.0)
+
+
+def test_fixed_terminal_at_zero_flow_is_not_treated_as_balancing_candidate():
+    """0 L/s is now a perfectly valid Fixed flow rate -- it must not be
+    confused with the Auto balancing candidate."""
+    net, segment_map, junction_map = _base_tree(j4_flow=0.0)
+    junction_map["N4"].FlowBoundary = "Fixed"
+    junction_map["N4"].DesignFlowRate = 0.0
+
+    result = AirflowSolver(net).solve()
+
+    assert not result.warnings
+    seg_by_key = {s.key: s for comp in result.components for s in comp.segments}
+    assert seg_by_key["C"].flow_lps == pytest.approx(0.0)
+    assert seg_by_key["A"].flow_lps == pytest.approx(50.0)  # J1 (Auto) balances J3's 50 L/s alone
 
 
 def test_missing_duct_size_is_an_error():

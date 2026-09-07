@@ -84,6 +84,7 @@ class DuctJunction:
         self.Object = obj
         self._allow_delete = False
         self._mirroring_design_flow_rate = False
+        self._mirroring_flow_boundary = False
         self.setProperties(obj)
         self.updateMetadata(
             owner=owner,
@@ -99,6 +100,7 @@ class DuctJunction:
         self.Object = obj
         self._allow_delete = False
         self._mirroring_design_flow_rate = False
+        self._mirroring_flow_boundary = False
         self.setProperties(obj)
 
     def dumps(self):
@@ -114,12 +116,40 @@ class DuctJunction:
         pass
 
     def onChanged(self, obj, prop):
-        # DesignFlowRate has a two-way mirror onto the Primary component's
-        # own DesignFlowRate (see Component.py's onChanged) -- a junction
-        # has no Shape and can't be picked in the 3D view, so a user needs
-        # to be able to set/see this from the visible terminal fitting too.
-        # The guard flag stops the two onChanged handlers from bouncing the
-        # same edit back and forth forever.
+        # DesignFlowRate/FlowBoundary each have a two-way mirror onto the
+        # Primary component's own copy (see Component.py's onChanged) -- a
+        # junction has no Shape and can't be picked in the 3D view, so a
+        # user needs to be able to set/see these from the visible terminal
+        # fitting too. Each guard flag stops its own pair of onChanged
+        # handlers from bouncing the same edit back and forth forever.
+        if prop == "FlowBoundary" and not self._mirroring_flow_boundary:
+            boundary = str(getattr(obj, "FlowBoundary", "Auto") or "Auto")
+
+            # A terminal forced to "Closed" always carries zero flow (see
+            # analysis/flow.py) -- snap DesignFlowRate to match so the
+            # property state never shows a stale nonzero value for a
+            # sealed terminal.
+            if boundary == "Closed" and float(getattr(obj, "DesignFlowRate", 0.0) or 0.0) != 0.0:
+                obj.DesignFlowRate = 0.0
+
+            # DesignFlowRate is only meaningful (and editable) when Fixed.
+            if getattr(obj, "Topology", "") == "end":
+                try:
+                    obj.setEditorMode("DesignFlowRate", 0 if boundary == "Fixed" else 1)
+                except Exception:
+                    pass
+
+            primary = self.getPrimaryComponent()
+            if primary is not None and "FlowBoundary" in primary.PropertiesList:
+                value = str(getattr(obj, "FlowBoundary", "Auto") or "Auto")
+                if str(getattr(primary, "FlowBoundary", "Auto") or "Auto") != value:
+                    self._mirroring_flow_boundary = True
+                    try:
+                        primary.FlowBoundary = value
+                    finally:
+                        self._mirroring_flow_boundary = False
+            return
+
         if prop != "DesignFlowRate" or self._mirroring_design_flow_rate:
             return
         primary = self.getPrimaryComponent()
@@ -149,7 +179,16 @@ class DuctJunction:
         self._addProperty(obj, "App::PropertyString", "ConnectionLengthsJson", "HVAC", "Aggregate per-edge connection lengths (from the outermost component on each side)")
         self._addProperty(obj, "App::PropertyString", "AnalysisJson", "HVAC", "Serialized topology analysis")
 
-        self._addProperty(obj, "App::PropertyFloat", "DesignFlowRate", "Airflow", "User-specified design flow rate for this terminal (L/s). Leave blank/0 on exactly one terminal per sub-network to solve it as the balancing terminal.")
+        if "FlowBoundary" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyEnumeration", "FlowBoundary", "Airflow",
+                "Terminal flow condition: Auto (solved by mass balance -- exactly one terminal per "
+                "sub-network), Fixed (use Design Flow Rate as-is, 0 included), or Closed (sealed "
+                "termination, always 0 flow)"
+            )
+            obj.FlowBoundary = ["Auto", "Fixed", "Closed"]
+            obj.FlowBoundary = "Auto"
+        self._addProperty(obj, "App::PropertyFloat", "DesignFlowRate", "Airflow", "User-specified design flow rate for this terminal (L/s), used when Flow Boundary is 'Fixed' -- 0 is a valid value. Ignored when Flow Boundary is 'Auto' or 'Closed'.")
         self._addProperty(obj, "App::PropertyFloat", "CalcTotalFlowRate", "Airflow", "Computed total flow through this junction (L/s)")
         self._addProperty(obj, "App::PropertyFloat", "CalcStaticPressure", "Airflow", "Computed relative static pressure (Pa), referenced to 0 Pa at this sub-network's balancing terminal")
         self._addProperty(obj, "App::PropertyBool", "IsFlowSource", "Airflow", "True if flow physically leaves the system at this terminal (a supply/source opening)")
@@ -236,7 +275,11 @@ class DuctJunction:
             changed = True
 
         try:
-            obj.setEditorMode("DesignFlowRate", 0 if getattr(obj, "Topology", "") == "end" else 1)
+            is_terminal = getattr(obj, "Topology", "") == "end"
+            boundary = str(getattr(obj, "FlowBoundary", "Auto") or "Auto")
+            obj.setEditorMode("FlowBoundary", 0 if is_terminal else 1)
+            # DesignFlowRate is only meaningful (and editable) when Fixed.
+            obj.setEditorMode("DesignFlowRate", 0 if (is_terminal and boundary == "Fixed") else 1)
         except Exception:
             pass
 

@@ -38,22 +38,49 @@ def test_loop_detected_and_reported_as_warning():
 
 def test_all_terminals_specified_is_an_error():
     net = base_tree()
-    net.nodes["N1"].design_flow_lps = 80.0  # every terminal now has a design flow -- no balancing terminal left
+    net.nodes["N1"].flow_boundary = "Fixed"
+    net.nodes["N1"].design_flow_lps = 80.0  # every terminal now Fixed -- no Auto balancing terminal left
 
     components, warnings = flow.solve_flow_components(net)
     assert components == []
     assert len(warnings) == 1
-    assert "Design Flow Rate" in warnings[0]
+    assert "Flow Condition" in warnings[0]
 
 
 def test_multiple_unspecified_terminals_is_an_error():
     net = base_tree()
-    net.nodes["N3"].design_flow_lps = 0.0  # now both N1 and N3 look like balancing-terminal candidates
+    net.nodes["N3"].flow_boundary = "Auto"  # now both N1 and N3 are Auto balancing-terminal candidates
 
     components, warnings = flow.solve_flow_components(net)
     assert components == []
     assert len(warnings) == 1
-    assert "Design Flow Rate" in warnings[0]
+    assert "Flow Condition" in warnings[0]
+
+
+def test_closed_terminal_contributes_zero_flow_regardless_of_design_flow_rate():
+    net = base_tree()
+    net.nodes["N4"].flow_boundary = "Closed"
+    net.nodes["N4"].design_flow_lps = 999.0  # must be ignored -- Closed always means 0 flow
+
+    components, warnings = flow.solve_flow_components(net)
+
+    assert warnings == []
+    assert len(components) == 1
+    comp = components[0]
+    assert comp.edge_flow_lps["C"] == 0.0
+    assert comp.edge_flow_lps["A"] == 50.0  # A = B (50) + C (0), not B + 999
+
+
+def test_fixed_terminal_at_zero_flow_is_not_a_balancing_candidate():
+    net = base_tree(j4_flow=0.0, j4_flow_boundary="Fixed")
+
+    components, warnings = flow.solve_flow_components(net)
+
+    assert warnings == []
+    assert len(components) == 1
+    comp = components[0]
+    assert comp.root_node_id == "N1"
+    assert comp.edge_flow_lps == {"A": 50.0, "B": 50.0, "C": 0.0}
 
 
 def test_inconsistent_flow_direction_is_an_error():

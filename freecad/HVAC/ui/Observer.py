@@ -774,14 +774,91 @@ class DuctNetworkSelectionObserver:
             self._redirecting = False
 
 
+class FlowBoundaryDialog(QtWidgets.QDialog):
+    """
+    Terminal/port popup for editing a junction's Flow Condition (Auto/
+    Fixed/Closed) and Flow Rate together -- see FlowBoundary/DesignFlowRate
+    on core/Junction.py. Reads/writes the real FreeCAD properties directly
+    (no separate dialog-side state): the dialog is seeded from the
+    junction's current properties, and the properties are only ever written
+    once, on accept.
+
+    Never references a type id/family name -- a locked terminal (e.g. a
+    duct closure/end cap) is detected purely from the Primary component's
+    plain FlowBoundaryLocked bool, so this dialog stays generic across
+    whatever library types happen to prescribe/lock a flow condition.
+    """
+
+    CONDITIONS = ("Auto", "Fixed", "Closed")
+
+    def __init__(self, junction, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(translate("HVAC", "Flow Condition"))
+
+        primary = junction.Proxy.getPrimaryComponent() if getattr(junction, "Proxy", None) else None
+        self.locked = bool(getattr(primary, "FlowBoundaryLocked", False)) if primary is not None else False
+        current_condition = str(getattr(junction, "FlowBoundary", "Auto") or "Auto")
+        current_rate = float(getattr(junction, "DesignFlowRate", 0.0) or 0.0)
+
+        layout = QtWidgets.QFormLayout(self)
+
+        self.condition_combo = QtWidgets.QComboBox()
+        self.condition_combo.addItems([
+            translate("HVAC", "Auto"), translate("HVAC", "Fixed"), translate("HVAC", "Closed"),
+        ])
+        self.condition_combo.setCurrentIndex(self.CONDITIONS.index(current_condition))
+        layout.addRow(translate("HVAC", "Flow Condition:"), self.condition_combo)
+
+        self.rate_spin = QtWidgets.QDoubleSpinBox()
+        self.rate_spin.setRange(0.0, 1.0e6)
+        self.rate_spin.setDecimals(2)
+        self.rate_spin.setSuffix(" L/s")
+        self.rate_spin.setValue(current_rate)
+        layout.addRow(translate("HVAC", "Flow Rate:"), self.rate_spin)
+
+        if self.locked:
+            self.condition_combo.setEnabled(False)
+            self.rate_spin.setEnabled(False)
+            note = QtWidgets.QLabel(
+                translate("HVAC", "Locked by the selected fitting type.")
+            )
+            layout.addRow(note)
+        else:
+            self.condition_combo.currentIndexChanged.connect(self._onConditionChanged)
+            self._onConditionChanged(self.condition_combo.currentIndex())
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def _onConditionChanged(self, index):
+        condition = self.CONDITIONS[index]
+        if condition == "Fixed":
+            self.rate_spin.setEnabled(True)
+        else:
+            if condition == "Closed":
+                self.rate_spin.setValue(0.0)
+            self.rate_spin.setEnabled(False)
+
+    def condition(self):
+        return self.CONDITIONS[self.condition_combo.currentIndex()]
+
+    def rate(self):
+        return self.rate_spin.value()
+
+
 class TerminalFlowRateObserver:
     """
     Session-scoped 3D overlay, active while a Calculate Airflow / Size
     Ducts task panel is open: draws one colored flow-direction arrow plus
     one colored port plane at every terminal ("end" topology) junction in
-    the network -- green if that terminal's DesignFlowRate is set
-    (non-zero), red otherwise -- and lets a user click an arrow to set
-    that terminal's DesignFlowRate from a dialog. Purely visual/
+    the network -- green if that terminal's Flow Condition is "Fixed",
+    orange if it's "Closed" (a sealed terminal), red if it's still "Auto"
+    -- and lets a user click an arrow to edit that terminal's Flow
+    Condition/Flow Rate from a dialog (FlowBoundaryDialog, above). Purely visual/
     interactive -- like buildArrowCoinNodes'/buildPortHighlightCoinNode's
     own overlays, this never touches the document or undo stack except
     for the one property write a user explicitly makes through the
@@ -807,6 +884,7 @@ class TerminalFlowRateObserver:
     SEPARATION_FRACTION = 0.2
     COLOR_SET = (0.0, 0.7, 0.0)
     COLOR_UNSET = (0.85, 0.0, 0.0)
+    COLOR_CLOSED = (1.0, 0.55, 0.0)
     COLOR_TEXT = (0, 0, 0)
     TRANSPARENCY = 0.5
     DIALOG_DELAY_MS = 200
@@ -916,22 +994,35 @@ class TerminalFlowRateObserver:
         separation = dimension * self.SEPARATION_FRACTION
 
         design_flow_rate = float(getattr(junction, "DesignFlowRate", 0.0) or 0.0)
-        color = self.COLOR_SET if design_flow_rate != 0.0 else self.COLOR_UNSET
+        flow_boundary = str(getattr(junction, "FlowBoundary", "Auto") or "Auto")
+        if flow_boundary == "Closed":
+            color = self.COLOR_CLOSED
+        elif flow_boundary == "Auto":
+            color = self.COLOR_UNSET
+        else:
+            color = self.COLOR_SET
+
+        plane_port = hvaclib.translated_port_position(junction, port)
+        arrow_origin = plane_port.get("position", center)
 
         arrow_node = buildTerminalFlowArrowCoinNode(
-            center, direction, bool(flow_into_junction), separation, dimension, color, self.TRANSPARENCY,
+            arrow_origin, direction, bool(flow_into_junction), separation, dimension, color, self.TRANSPARENCY,
         )
         if arrow_node is not None:
             self._root.addChild(arrow_node)
             self._arrows.append((arrow_node, junction))
 
-        plane_port = hvaclib.translated_port_position(junction, port)
         plane_node = buildPortHighlightCoinNode(plane_port, color=color, transparency=self.TRANSPARENCY)
         if plane_node is not None:
             self._root.addChild(plane_node)
             self._planes.append((plane_node, junction))
 
-        label_text = "{:.0f} L/s".format(design_flow_rate) if design_flow_rate != 0.0 else "Not set"
+        if flow_boundary == "Fixed":
+            label_text = "{:.0f} L/s".format(design_flow_rate)
+        elif flow_boundary == "Closed":
+            label_text = "Closed"
+        else:
+            label_text = "Auto"
         label_node = buildFlowRateLabelCoinNode(plane_port, label_text, self.COLOR_TEXT)
         if label_node is not None:
             self._root.addChild(label_node)
@@ -981,17 +1072,21 @@ class TerminalFlowRateObserver:
         return None
 
     def _openFlowRateDialog(self, junction):
-        current = float(getattr(junction, "DesignFlowRate", 0.0) or 0.0)
-        value, ok = QtWidgets.QInputDialog.getDouble(
-            Gui.getMainWindow(),
-            translate("HVAC", "Design Flow Rate"),
-            translate("HVAC", "Design flow rate for '{}' (L/s):").format(junction.Label),
-            current, 0.0, 1.0e6, 2,
-        )
-        if not ok:
+        dialog = FlowBoundaryDialog(junction, Gui.getMainWindow())
+        if dialog.exec_() != QtWidgets.QDialog.Accepted or dialog.locked:
             return
-        if float(getattr(junction, "DesignFlowRate", 0.0) or 0.0) != value:
-            junction.DesignFlowRate = value
+
+        condition = dialog.condition()
+        rate = 0.0 if condition != "Fixed" else dialog.rate()
+        changed = False
+        if str(getattr(junction, "FlowBoundary", "Auto") or "Auto") != condition:
+            junction.FlowBoundary = condition
+            changed = True
+        if condition == "Fixed" and float(getattr(junction, "DesignFlowRate", 0.0) or 0.0) != rate:
+            junction.DesignFlowRate = rate
+            changed = True
+
+        if changed:
             doc = getattr(junction, "Document", None)
             if doc is not None:
                 doc.recompute()
@@ -1951,7 +2046,7 @@ def buildFlowRateLabelCoinNode(port, text, color, row_index=0, scale=2.0, top_ex
     return root
 
 def buildTerminalFlowArrowCoinNode(
-    center, direction, flow_into_junction, offset_mm, length_mm, color, transparency=0.0,
+    origin, direction, flow_into_junction, offset_mm, length_mm, color, transparency=0.0,
 ):
     """
     Build one Coin node: a colored cone-and-shaft arrow marking a terminal
@@ -1959,7 +2054,11 @@ def buildTerminalFlowArrowCoinNode(
     terminal (not overlapping the duct itself) -- see
     TerminalFlowRateObserver.
 
-    center: the junction's own CenterPoint.
+    origin: the terminal's real, post-fitting port position (see
+    utils/hvaclib.translated_port_position) -- the same point the
+    matching port-highlight plane is drawn at, not the junction's own
+    (pre-fitting) CenterPoint, so the arrow lines up with the actual
+    terminal face rather than floating at the node's logical center.
     direction: the terminal's single real port's own direction (points
     away from the junction, into the duct network -- see
     NetworkParser.JunctionPort) -- the arrow is drawn on the opposite side,
@@ -1977,7 +2076,7 @@ def buildTerminalFlowArrowCoinNode(
         return None
     away_dir.normalize()
 
-    near_point = FreeCAD.Vector(center) + away_dir * offset_mm
+    near_point = FreeCAD.Vector(origin) + away_dir * offset_mm
     far_point = near_point + away_dir * length_mm
 
     head_len = length_mm * 0.5

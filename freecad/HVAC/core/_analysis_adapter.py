@@ -218,6 +218,7 @@ def _build_node_model(
 ):
     ports = _junction_ports_to_models(ja.connected_ports, node_key)
     design_flow_lps = float(getattr(junction_obj, "DesignFlowRate", 0.0) or 0.0)
+    flow_boundary = str(getattr(junction_obj, "FlowBoundary", "Auto") or "Auto")
 
     primary_obj = junction_obj.Proxy.getPrimaryComponent()
     primary_component = None
@@ -268,7 +269,8 @@ def _build_node_model(
 
     return NodeModel(
         node_id=node_key, topology=ja.topology, degree=ja.degree, ports=ports,
-        design_flow_lps=design_flow_lps, primary_component=primary_component, inline_chains=inline_chains,
+        design_flow_lps=design_flow_lps, flow_boundary=flow_boundary,
+        primary_component=primary_component, inline_chains=inline_chains,
     )
 
 

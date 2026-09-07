@@ -28,14 +28,18 @@ answer before they can do their own, separate calculation, so it's solved
 once here and shared -- a pure port of core/FlowNetwork.py's algorithm,
 operating on NetworkModel instead of a live FreeCAD document.
 
-How it works: each connected sub-network must be a tree (no loops). Exactly
-one open end (terminal) is left with no Design Flow Rate -- that's the
-balancing terminal (e.g. the fan/AHU connection), and its flow is whatever
-makes everything else balance. Every other terminal has a user-set design
-flow rate (e.g. a diffuser). Starting from the terminals and working inward
-towards the balancing terminal, each segment's flow is just conservation of
-mass: flow out of a junction equals flow into it. A segment's own fixed flow
-direction is read from its ports (flow_into_node).
+How it works: each connected sub-network must be a tree (no loops). Every
+terminal has a FlowBoundary of "Auto", "Fixed", or "Closed" (see
+analysis/model.py's NodeModel). Exactly one terminal is left "Auto" -- the
+balancing terminal (e.g. the fan/AHU connection) -- and its flow is
+whatever makes everything else balance. Every other terminal is either
+"Fixed" (a user-set design flow rate, e.g. a diffuser -- 0 L/s is a
+perfectly valid fixed flow) or "Closed" (a sealed/capped terminal, which
+always contributes exactly 0 flow regardless of its own DesignFlowRate).
+Starting from the terminals and working inward towards the balancing
+terminal, each segment's flow is just conservation of mass: flow out of a
+junction equals flow into it. A segment's own fixed flow direction is read
+from its ports (flow_into_node).
 
 A sub-network that isn't a tree (has a loop) is reported as an error rather
 than solved.
@@ -115,11 +119,6 @@ def solve_flow_components(network: NetworkModel):
 # Per-component flow solve
 # ----------------------------------------------------------------------------
 
-def _is_balancing_candidate(design_flow_lps):
-    """A terminal with (near enough to) zero Design Flow Rate is the balancing-terminal candidate."""
-    return abs(design_flow_lps) <= 1e-9
-
-
 def _solve_component_flow(network, comp_nodes, graph):
     # Step 1: a tree with N nodes always has exactly N-1 edges -- if this
     # sub-network has more edges than that, it must contain a loop.
@@ -152,7 +151,7 @@ def _solve_component_flow(network, comp_nodes, graph):
             port_lookup[(node_id, port.edge_key)] = port
 
     # Step 3: find every open end (terminal), and check exactly one of them
-    # is the balancing terminal (no Design Flow Rate set).
+    # is the balancing terminal (FlowBoundary == "Auto").
     terminal_ids = [n for n in comp_nodes if graph.degree[n] == 1]
     if len(terminal_ids) < 2:
         raise FlowSolveError(
@@ -162,23 +161,26 @@ def _solve_component_flow(network, comp_nodes, graph):
 
     specified = []
     unspecified = []
+    closed = []
     for node_id in terminal_ids:
-        design = network.nodes[node_id].design_flow_lps
-        if _is_balancing_candidate(design):
+        boundary = network.nodes[node_id].flow_boundary
+        if boundary == "Auto":
             unspecified.append(node_id)
+        elif boundary == "Closed":
+            closed.append(node_id)
         else:
             specified.append(node_id)
 
     if len(unspecified) == 0:
         raise FlowSolveError(
-            "All terminals in this sub-network have a Design Flow Rate set ({}). "
-            "Leave exactly one terminal's Design Flow Rate blank to act as the "
-            "balancing terminal.".format(", ".join(specified))
+            "All terminals in this sub-network have a Flow Condition of Fixed or Closed ({}). "
+            "Leave exactly one terminal's Flow Condition set to Auto to act as the "
+            "balancing terminal.".format(", ".join(specified + closed))
         )
     if len(unspecified) > 1:
         raise FlowSolveError(
-            "Multiple terminals have no Design Flow Rate set ({}). Set Design Flow Rate "
-            "on all terminals except exactly one.".format(", ".join(unspecified))
+            "Multiple terminals have a Flow Condition of Auto ({}). Set Flow Condition to "
+            "Fixed or Closed on all terminals except exactly one.".format(", ".join(unspecified))
         )
 
     root_node_id = unspecified[0]
@@ -202,8 +204,14 @@ def _solve_component_flow(network, comp_nodes, graph):
         edge = parent_edge[node_id]
 
         if graph.degree[node_id] == 1:
-            # A leaf's own edge simply carries its design flow rate.
-            edge_flow_lps[edge] = abs(network.nodes[node_id].design_flow_lps)
+            # A leaf's own edge carries its design flow rate -- except a
+            # Closed terminal, which always contributes exactly zero flow
+            # regardless of whatever DesignFlowRate happens to hold.
+            node = network.nodes[node_id]
+            if node.flow_boundary == "Closed":
+                edge_flow_lps[edge] = 0.0
+            else:
+                edge_flow_lps[edge] = abs(node.design_flow_lps)
             continue
 
         # Add up the flow on every OTHER edge at this node (already solved),

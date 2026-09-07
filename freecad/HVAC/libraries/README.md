@@ -86,7 +86,25 @@ Common fields, both segments and junctions:
 | `lengths_module` / `lengths_function` | optional, junctions: computes per-port trim lengths separately from the shape |
 | `loss_module` / `loss_function` | optional: fitting-loss coefficient function for the airflow solver; its context provides `HVACLossAPI` as `context["loss_api"]` |
 
-Junctions additionally carry a `topology` field (see below).
+Junctions additionally carry a `topology` field (see below), plus two
+optional fields a terminal (`topology: "end"`) type may use to prescribe
+its own flow condition -- see `core/Junction.py`'s `FlowBoundary` property
+and `analysis/flow.py`:
+
+| field | meaning |
+|---|---|
+| `flow_boundary` | `"Auto"` \| `"Fixed"` \| `"Closed"` (omit to leave the user's own choice, default `"Auto"`, untouched). Applied once, the moment a component adopts this type. |
+| `flow_boundary_locked` | `true` to re-assert `flow_boundary` on every sync instead of just once, so the user can never change it (e.g. a duct-closure/end-cap type that must always stay `"Closed"`) |
+
+```json
+"flow_boundary": "Closed",
+"flow_boundary_locked": true
+```
+
+The solver and popup never branch on a type's id/family to detect this --
+they only ever read the plain `FlowBoundary`/`FlowBoundaryLocked`
+properties these two fields drive.
+
 The loss context also contains the component's own role-based
 `context["construction"]` and its resolved effective
 `context["hydraulic_roughness_mm"]`. The latter uses the network default
