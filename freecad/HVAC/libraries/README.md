@@ -78,13 +78,44 @@ Common fields, both segments and junctions:
 | `category` | `"segment"` or `"junction"` |
 | `family` | list of dotted family strings the parser's classifier matches against (segments: e.g. `["straight_segment"]`; junctions: e.g. `["through.bend", "through.bend_90"]` -- see `classify_junction_family`, documented in [`freecad/HVAC/core/TOPOLOGY_CLASSIFICATION.md`](../core/TOPOLOGY_CLASSIFICATION.md)) |
 | `profiles` | allowed cross-section profiles, e.g. `["Circular"]`, `["Rectangular"]` |
-| `constraints` | e.g. `{"degree": 1}` restricting how many ports a junction may have |
+| `constraints` | e.g. `{"degree": 1}` restricting how many ports a junction may have; junctions can additionally constrain `flow_class`, `qualifiers.<key>`, `profile_relation`, `inlet_profile`, `outlet_profile`, and any `derived_values` entry (e.g. `area_ratio`) -- see below |
 | `properties` | list of property defs (below) |
 | `construction` | optional `{"layers": [...], "features": [...]}` object (below); when omitted, inherits the library manifest's `default_construction`, or falls back to one roleless implicit layer if the manifest has no default |
 | `geometry` | `{"backend": "partscript"\|"static", "file"\|"descriptor": "..."}` |
 | `generator` | legacy alternative to `geometry`: `{"module": "...", "function": "..."}` |
 | `lengths_module` / `lengths_function` | optional, junctions: computes per-port trim lengths separately from the shape |
 | `loss_module` / `loss_function` | optional: fitting-loss coefficient function for the airflow solver; its context provides `HVACLossAPI` as `context["loss_api"]` |
+
+### Flow-classification constraints
+
+Beyond `degree`/`degree_min`/`degree_max`, a junction type-def's
+`constraints` can filter on `DuctNetworkParser`'s flow-classification
+output (`flow_class`/`qualifiers`/`derived_values` -- see
+[`freecad/HVAC/core/TOPOLOGY_CLASSIFICATION.md`](../core/TOPOLOGY_CLASSIFICATION.md)),
+reusing the same `enum`/`minimum`/`maximum`/exclusive-bound operators as
+`properties[].validation`:
+
+```json
+"constraints": {
+  "flow_class": {"enum": ["expansion"]},
+  "qualifiers": {
+    "alignment": {"enum": ["eccentric"]},
+    "transition_form": {"enum": ["single_plane"]}
+  },
+  "area_ratio": {
+    "minimum": 1.0,
+    "maximum": 4.0
+  }
+}
+```
+
+`profile_relation`/`inlet_profile`/`outlet_profile` can be constrained the
+same way, either directly (as shown for `flow_class`) or nested under
+`qualifiers` -- both read from the same classifier-produced qualifier.
+These constraints never expand `HVACMatchKey`: a type-def is still indexed
+purely by (category, topology, family, profile) for the automatic-selection
+lookup, and this extra data only filters candidates *after* that lookup,
+exactly like the existing `degree`/topology/profile checks.
 
 Junctions additionally carry a `topology` field (see below), plus two
 optional fields a terminal (`topology: "end"`) type may use to prescribe
@@ -513,7 +544,7 @@ Worked examples (from `smacna/types/junctions/`):
 |---|---|---|---|
 | `branch_tee_generic` | branch | tee | generic |
 | `branch_wye_generic` | branch | wye | generic |
-| `branch_marker` | branch | *(all)* | marker |
+| `branch_generic` / `branch_marker` | branch | *(all)* | generic / marker |
 | `through_elbow_generic` | through | elbow | generic |
 | `through_transition_generic` | through | transition | generic |
 | `through_damper_generic` | through | damper | generic |

@@ -6,6 +6,7 @@
   "family": [
     "through.straight",
     "through.offset",
+    "through.transition",
     "through.bend",
     "through.bend.3d",
     "through.bend_90",

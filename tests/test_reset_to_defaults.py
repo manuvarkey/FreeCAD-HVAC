@@ -19,6 +19,7 @@ construction (see libraries/smacna/types/segments/circular_straight.json).
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/Materials/MatGui/PySide stubs
 
 from freecad.HVAC.core import Network as network_mod
+from freecad.HVAC.core import _construction_schema
 from freecad.HVAC.core.Segment import DuctSegment
 from freecad.HVAC.utils import hvaclib
 from freecad.HVAC.library.construction import ROLE_STRUCTURAL_SHELL, ROLE_THERMAL_INSULATION, role_property_suffix
@@ -169,6 +170,13 @@ def test_reset_to_defaults_tolerates_no_default_material_set(monkeypatch):
     segment.Layer_casing_Material = existing
 
     monkeypatch.setattr(network_mod.FreeCAD, "ActiveDocument", doc)
+    # get_material_by_uuid()'s own real-FreeCAD contract is "None if it
+    # isn't (yet) known -- e.g. register_material_resources() hasn't run
+    # yet" (see utils/materials.py); the stubbed Materials module (a bare
+    # MagicMock, see conftest.py) can't reproduce that lookup-miss on its
+    # own, so force it here to actually exercise the "no material resolves
+    # at all, even the sentinel Default" path this test is named for.
+    monkeypatch.setattr(_construction_schema.hvac_materials, "get_material_by_uuid", lambda uuid: None)
 
     network_mod.DuctNetwork.resetObjectsToNetworkDefaults([segment])  # must not raise
 

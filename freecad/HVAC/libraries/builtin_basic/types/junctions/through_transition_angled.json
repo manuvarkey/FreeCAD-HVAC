@@ -3,7 +3,7 @@
   "label": "Transition - Angled",
   "category": "junction",
   "topology": "through",
-  "family": ["through.straight", "through.offset"],
+  "family": ["through.transition"],
   "profiles": ["Circular", "Rectangular", "Oval"],
   "selection": {
     "kind": "model",

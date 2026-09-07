@@ -4,8 +4,7 @@
   "category": "junction",
   "topology": "through",
   "family": [
-    "through.straight",
-    "through.offset"
+    "through.transition"
   ],
   "profiles": [
     "Circular",

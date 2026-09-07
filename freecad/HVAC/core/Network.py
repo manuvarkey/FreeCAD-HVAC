@@ -731,6 +731,11 @@ class DuctNetwork:
                     analysis = {}
                 connected_ports = list(analysis.get("connected_ports", []) or [])
                 profile = hvaclib.HVACLibraryService.match_profile_from_ports(connected_ports)
+                match_context = {
+                    "flow_class": analysis.get("flow_class", ""),
+                    "qualifiers": dict(analysis.get("qualifiers", {}) or {}),
+                    "derived_values": dict(analysis.get("derived_values", {}) or {}),
+                }
 
                 # Explicit reset always runs fresh automatic selection against
                 # the network's default library -- see the segment branch above.
@@ -740,6 +745,7 @@ class DuctNetwork:
                     family_key=family_key,
                     profile=profile,
                     connected_ports=connected_ports,
+                    context=match_context,
                 )
                 default_type_id = selection.type_def.id if selection.type_def else ""
 
@@ -1370,6 +1376,9 @@ class DuctNetwork:
             point = junction_analysis.point
             connected_edge_keys = [p.edge_key for p in junction_analysis.connected_ports]
             match_profile = hvaclib.HVACLibraryService.match_profile_from_ports(connected_ports)
+            flow_class = junction_analysis.flow_class
+            qualifiers = junction_analysis.qualifiers
+            derived_values = junction_analysis.derived_values
 
             # If initial sync, the tags are regenerated hence find element based on position
             # Also update the existing junction's key in the dictionary with the modified key
@@ -1438,6 +1447,7 @@ class DuctNetwork:
                 junction_obj, topology, family, match_profile, connected_ports,
                 components_by_parent.get(junction_obj.Name, []), default_lib,
                 hide_new=bool(self._hidden_source_names) if is_new_junction else None,
+                flow_class=flow_class, qualifiers=qualifiers, derived_values=derived_values,
             )
             changed = changed or components_changed
 
@@ -1462,6 +1472,7 @@ class DuctNetwork:
     def syncJunctionComponents(
         self, junction_obj, topology, family, match_profile, connected_ports,
         existing_components, default_lib, hide_new=None,
+        flow_class="", qualifiers=None, derived_values=None,
     ):
         """
         Create/update a junction's Primary DuctComponent (sticky type
@@ -1551,6 +1562,13 @@ class DuctNetwork:
                 doc, "{}_Comp0".format(junction_obj.Name),
                 parent_junction=junction_obj, role="Primary", attached_edge_key="", port_sequence=0, owner_network=net,
             )
+            # DuctComponent.create()'s own setProperties() seeds LibraryId
+            # from the registry's global "active" library (whichever loaded
+            # first) as a generic object-creation default -- override it
+            # with this network's actual configured default library, the
+            # same way syncSegments() does for a newly-created segment.
+            if hasattr(primary, "LibraryId"):
+                primary.LibraryId = default_lib.id
             changed = True
             if hide_new is not None:
                 self._setGeometryVisibilityDeferred(primary, not hide_new)
@@ -1566,6 +1584,11 @@ class DuctNetwork:
         # directly before LibraryId/TypeId moved onto the Primary component.
         library_id = getattr(primary, "LibraryId", "") or default_lib.id
         current_type_id = getattr(primary, "TypeId", "")
+        match_context = {
+            "flow_class": flow_class,
+            "qualifiers": dict(qualifiers or {}),
+            "derived_values": dict(derived_values or {}),
+        }
         selection = hvaclib.HVACLibraryService.resolve_junction_type(
             library_id,
             current_type_id,
@@ -1573,6 +1596,7 @@ class DuctNetwork:
             family_key=family,
             profile=match_profile,
             connected_ports=connected_ports,
+            context=match_context,
         )
         type_id = selection.type_def.id if selection.type_def else ""
 

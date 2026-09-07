@@ -56,6 +56,12 @@ def _junction_request(topology, family, profile, ports):
     )
 
 
+def _junction_request_ctx(topology, family, profile, ports, **extra_context):
+    ctx = {"connected_ports": ports, "topology": topology}
+    ctx.update(extra_context)
+    return HVACTypeMatchRequest(category="junction", topology=topology, family=family, profile=profile, context=ctx)
+
+
 def _segment_request(family, profile):
     return HVACTypeMatchRequest(
         category="segment", topology="generic", family=family, profile=profile, context={"profile": profile}
@@ -359,6 +365,86 @@ def test_select_type_rejects_connected_port_profile_mismatch():
     ports = _ports(2, "Circular") + [{"profile": "Rectangular"}]
     selection = lib.select_type(_junction_request("branch", "branch.tee", "Mixed", ports))
     assert selection.type_def is None
+
+
+def test_select_type_filters_by_flow_class_constraint():
+    # Only wins the tier when the classifier's flow_class matches -- see
+    # NetworkParser.classify_flow / TOPOLOGY_CLASSIFICATION.md.
+    t = _type_def(
+        "through_transition_expansion", "junction", family=["through.transition"], topology="through",
+        profiles=["Circular"], constraints={"flow_class": {"enum": ["expansion"]}},
+    )
+    lib = _library_with(t)
+
+    contraction = _junction_request_ctx(
+        "through", "through.transition", "Circular", _ports(2), flow_class="contraction",
+    )
+    expansion = _junction_request_ctx(
+        "through", "through.transition", "Circular", _ports(2), flow_class="expansion",
+    )
+
+    assert lib.select_type(contraction).type_def is None
+    assert lib.select_type(expansion).type_def is t
+
+
+def test_select_type_filters_by_qualifier_constraint():
+    # A single-plane eccentric reducer should only be offered when the
+    # classifier's own qualifiers dict says so.
+    t = _type_def(
+        "through_transition_eccentric", "junction", family=["through.transition"], topology="through",
+        profiles=["Rectangular"],
+        constraints={"qualifiers": {"alignment": {"enum": ["eccentric"]}}},
+    )
+    lib = _library_with(t)
+
+    concentric = _junction_request_ctx(
+        "through", "through.transition", "Rectangular", _ports(2, "Rectangular"),
+        qualifiers={"alignment": "concentric"},
+    )
+    eccentric = _junction_request_ctx(
+        "through", "through.transition", "Rectangular", _ports(2, "Rectangular"),
+        qualifiers={"alignment": "eccentric", "aligned_side": "top"},
+    )
+
+    assert lib.select_type(concentric).type_def is None
+    assert lib.select_type(eccentric).type_def is t
+
+
+def test_select_type_filters_by_numeric_derived_value_constraint():
+    # area_ratio (a JunctionAnalysis.derived_values entry) constrained with
+    # plain minimum/maximum, exactly like the JSON example in
+    # freecad/HVAC/libraries/README.md.
+    t = _type_def(
+        "through_transition_moderate", "junction", family=["through.transition"], topology="through",
+        profiles=["Circular"], constraints={"area_ratio": {"minimum": 1.0, "maximum": 4.0}},
+    )
+    lib = _library_with(t)
+
+    too_large = _junction_request_ctx(
+        "through", "through.transition", "Circular", _ports(2), derived_values={"area_ratio": 5.0},
+    )
+    in_range = _junction_request_ctx(
+        "through", "through.transition", "Circular", _ports(2), derived_values={"area_ratio": 2.25},
+    )
+
+    assert lib.select_type(too_large).type_def is None
+    assert lib.select_type(in_range).type_def is t
+
+
+def test_select_type_missing_flow_context_does_not_reject_candidate():
+    # A request built with no flow_class key in context at all (e.g. a
+    # caller that hasn't been updated to pass one) must not be treated as a
+    # constraint violation -- absence of data is not the same as a mismatch,
+    # matching how the existing profile check only applies "if profile".
+    t = _type_def(
+        "through_transition_expansion", "junction", family=["through.transition"], topology="through",
+        profiles=["Circular"], constraints={"flow_class": {"enum": ["expansion"]}},
+    )
+    lib = _library_with(t)
+
+    bare = _junction_request("through", "through.transition", "Circular", _ports(2))
+    assert lib.select_type(bare).type_def is t
+    assert lib.matches_type(t, bare) is True
 
 
 def test_matches_type_and_select_type_agree_on_compatibility():
@@ -802,4 +888,7 @@ def test_bundled_reclassifying_dampers_to_inline_does_not_disturb_other_selectio
     request = _junction_request("through", "through.straight", "Circular", _ports(2))
     selection = reg.select_type("smacna", request, strict=True)
     assert selection.type_def is not None
-    assert selection.type_def.id == "through_transition_generic"
+    # through_transition_generic now only matches "through.transition"
+    # (a real section change), so a plain equal-size straight run falls to
+    # the broad through_generic catch-all model instead.
+    assert selection.type_def.id == "through_generic"

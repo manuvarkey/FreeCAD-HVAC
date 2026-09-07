@@ -577,6 +577,37 @@ def get_section_extents(section_params):
     # fallback
     return 0.0, 0.0
 
+def profile_area(profile, section_params):
+    """
+    Return a duct cross-section's area from its profile-dependent section
+    parameters, or None when the profile/parameters aren't known well
+    enough to compute one (e.g. a "Generic"/custom profile) -- used by
+    NetworkParser to derive flow_class/derived_values from base-segment
+    geometry, never from the hydraulic solver.
+    """
+    profile = str(profile or "")
+    params = section_params or {}
+
+    if profile == "Circular":
+        d = float(params.get("Diameter", 0.0) or 0.0)
+        if d <= 0.0:
+            return None
+        return math.pi / 4.0 * d * d
+
+    if profile in ("Rectangular", "Oval"):
+        w = float(params.get("Width", 0.0) or 0.0)
+        h = float(params.get("Height", 0.0) or 0.0)
+        if w <= 0.0 or h <= 0.0:
+            return None
+        if profile == "Rectangular":
+            return w * h
+        # Oval "stadium" section: a rectangle capped by two semicircles,
+        # using the shorter side as the semicircle diameter.
+        major, minor = (w, h) if w >= h else (h, w)
+        return (major - minor) * minor + math.pi / 4.0 * minor * minor
+
+    return None
+
 def translated_port_position(junction_obj, port):
     """
     A connected_ports entry's own "position" is the raw, pre-fitting

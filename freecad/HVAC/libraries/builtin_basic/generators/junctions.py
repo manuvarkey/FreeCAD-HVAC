@@ -1036,6 +1036,10 @@ def build_tap_shoe(context):
     }
 
 
+def build_branch_generic(context):
+    return _star_junction(context, 0.60)
+
+
 def build_cross(context):
     return _star_junction(context, 0.60)
 

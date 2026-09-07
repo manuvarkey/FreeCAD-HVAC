@@ -56,8 +56,12 @@ profile-specific logic feeds into this. The only qualifier in use today is
 single port.
 
 **Degree 2 (`through`)**:
-- Ports collinear, eccentricity ~0 → `straight`.
-- Ports collinear, nonzero eccentricity → `offset` (a jog).
+- Ports collinear:
+  - Same profile and section size, eccentricity ~0 → `straight`.
+  - Same profile and section size, nonzero eccentricity → `offset` (a jog).
+  - Different profile or section size (regardless of eccentricity) →
+    `transition` (a real section change, whether or not the axes also
+    happen to be displaced).
 - Ports not collinear, angle ~90° → `bend_90`; otherwise → `bend`.
   `["3d"]` appended if the two ports aren't coplanar.
 
@@ -88,6 +92,43 @@ against a type-def's `family` list as a **prefix** match: a type-def entry
 key starting with `"through.bend."`). This means a type-def can choose to
 cover the planar and 3D variants of a family together with one entry, or
 list them separately if the two need different geometry/constraints.
+
+## Flow classification: `flow_class` / `qualifiers` / `derived_values`
+
+A second, independent classifier (`DuctNetworkParser.classify_flow`) runs
+alongside `topology`/`family`/`family_key` and is kept on separate
+`JunctionAnalysis` fields -- it never changes `family_key`, and a type-def's
+`family` list is still the only thing that decides index-lookup eligibility
+(see "Matching against type-defs" below). Like topology/family, it is
+derived purely from base-segment orientation
+(`JunctionPort.flow_role`/`flow_direction`), never from the hydraulic
+solver.
+
+- `flow_class`: for a `through.transition`-eligible pair (collinear, degree
+  2), one of `expansion`/`contraction`/`constant`/`unknown` (by outlet vs.
+  inlet cross-section area); for a degree-3 branch, one of
+  `diverging`/`converging`/`unknown` (by inlet/outlet port count); `unknown`
+  everywhere else (bends, wye, cross, multiport, ...).
+- `qualifiers` (`dict[str, str]`): degree-2 collinear pairs get
+  `inlet_profile`/`outlet_profile`/`profile_relation`
+  (`"same"`/`"mixed"`), plus `alignment`
+  (`"concentric"`/`"eccentric"`/`"double_eccentric"`/`"offset"`, rectangular
+  profiles only get side/corner detail via `aligned_side`/`aligned_corner`;
+  other profile pairs only ever get `"concentric"`/`"offset"`) and
+  `transition_form` (`"conical"`/`"pyramidal"`/`"single_plane"`/
+  `"profile_change"`, only where reliably derivable from profile/extent
+  data). A degree-3 tee/lateral_tee (one geometrically identified
+  trunk/run pair) gets `common_leg` (`"run"`/`"branch"`) from which port's
+  flow role is the odd one out relative to that trunk pair -- e.g. an
+  ordinary dividing tee is `common_leg="run"`, a bullhead dividing tee is
+  `common_leg="branch"`; a wye has no trunk pair, so no `common_leg`.
+- `derived_values` (`dict[str, float]`): `area_ratio`, `aspect_ratio_in`/
+  `aspect_ratio_out`, `offset_ratio` where computable; a branch tee/
+  lateral_tee also gets `area_ratio` as branch-leg area over trunk-leg area.
+
+A type-def's JSON `constraints` can filter on any of these -- see
+`freecad/HVAC/library/validation.py`'s `context_violations()` and
+`freecad/HVAC/libraries/README.md`.
 
 A new family string has no effect on its own — it only becomes reachable
 once some type-def's `family` list references its dotted key. If a real

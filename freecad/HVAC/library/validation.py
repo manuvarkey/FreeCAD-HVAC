@@ -114,6 +114,20 @@ def resolve_params(type_def, obj=None, supplied=None):
     return params
 
 
+def _check_rule(violations, type_def, label, value, rules):
+    """Validate one context value against a constraint sub-rule, appending
+    a human-readable message to `violations` instead of raising -- reuses
+    validate_value()'s enum/minimum/maximum/exclusive-bound operators so
+    flow_class/qualifiers/derived_values constraints follow the same rules
+    as a type-def's own property validation."""
+    if value is None:
+        return
+    try:
+        validate_value(type_def.id, label, value, rules)
+    except ValueError as exc:
+        violations.append(str(exc))
+
+
 def context_violations(type_def, context):
     """
     Return a list of human-readable constraint violations for the given
@@ -183,6 +197,39 @@ def context_violations(type_def, context):
                             type_def.id, profile, index
                         )
                     )
+
+        # Flow classification (NetworkParser.JunctionAnalysis.flow_class/
+        # qualifiers/derived_values) -- independent of topology/family, so a
+        # type-def can additionally require e.g. an expansion transition
+        # with an eccentric, single-plane alignment. "qualifiers" is a
+        # dict[str, str]; profile_relation/inlet_profile/outlet_profile are
+        # looked up there too when not given directly in context.
+        if "flow_class" in constraints:
+            _check_rule(violations, type_def, "flow_class", context.get("flow_class"), constraints["flow_class"])
+
+        qualifiers = dict(context.get("qualifiers", {}) or {})
+        for key in ("profile_relation", "inlet_profile", "outlet_profile"):
+            if key in constraints:
+                value = context.get(key, qualifiers.get(key))
+                _check_rule(violations, type_def, key, value, constraints[key])
+
+        if "qualifiers" in constraints:
+            for key, rule in dict(constraints["qualifiers"] or {}).items():
+                _check_rule(violations, type_def, "qualifiers.{}".format(key), qualifiers.get(key), rule)
+
+        # Any other declared constraint key is checked against a matching
+        # derived_values entry (e.g. "area_ratio", "transition_angle") --
+        # numeric values only ever live in derived_values, never qualifiers.
+        derived_values = dict(context.get("derived_values", {}) or {})
+        handled_keys = {
+            "degree", "degree_min", "degree_max",
+            "flow_class", "qualifiers", "profile_relation", "inlet_profile", "outlet_profile",
+        }
+        for key, rule in constraints.items():
+            if key in handled_keys:
+                continue
+            if key in derived_values:
+                _check_rule(violations, type_def, key, derived_values.get(key), rule)
 
     elif category == "segment" and profiles and "Generic" not in profiles:
         profile = str(context.get("profile", "") or "")
