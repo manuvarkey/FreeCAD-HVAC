@@ -22,8 +22,14 @@ KNOWN_QUALIFIER_KEYS = frozenset({
     "alignment", "aligned_side", "aligned_corner", "transition_form",
     "common_leg", "profile_relation", "inlet_profile", "outlet_profile",
 })
+# NOTE: this is deliberately only the vocabulary NetworkParser.classify_flow
+# itself produces. A value like "transition_angle" that depends on a
+# *selected fitting's own* properties (e.g. TransitionLength) is a
+# fitting/type-derived value, not a parser-derived one -- it belongs in a
+# separate vocabulary exposed by the library layer once that's needed, never
+# pretended to be parser output here.
 KNOWN_DERIVED_VALUE_KEYS = frozenset({
-    "area_ratio", "transition_angle", "aspect_ratio_in", "aspect_ratio_out", "offset_ratio",
+    "area_ratio", "aspect_ratio_in", "aspect_ratio_out", "offset_ratio", "branch_angle",
 })
 # Top-level constraint keys flow_classification_violations()/context_violations()
 # already give dedicated handling -- never checked against

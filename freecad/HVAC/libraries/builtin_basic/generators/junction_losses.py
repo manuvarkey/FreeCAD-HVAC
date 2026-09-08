@@ -35,10 +35,13 @@ applied uniformly to every outlet port, or None to fall back to the solver's
 generic default coefficient. Whatever is returned, these functions must not
 do any pressure-unit arithmetic themselves -- that's the solver's job.
 
-Elbow/transition/tee/wye losses are computed from real SMACNA/ASHRAE duct
-fitting tables via HVACLossAPI.elbow_loss/transition_loss/branch_loss
-(see library/smacna_loss.py for the table data and its sourcing/accuracy
-caveats). Cross and multiport fittings use HVACLossAPI.manifold_loss,
+Elbow/transition/tee losses are computed from real SMACNA/ASHRAE duct
+fitting tables via HVACLossAPI.elbow_loss/transition_loss/branch_loss (see
+library/smacna_loss.py for the table data and its sourcing/accuracy
+caveats). A true Wye has no Tee-style common/straight leg, so it uses the
+separate HVACLossAPI.wye_loss instead -- see that method's own docstring
+for why a Wye isn't routed through the Tee-oriented branch_loss(). Cross
+and multiport fittings use HVACLossAPI.manifold_loss,
 which decomposes the junction into a sequence of the same tee/wye table
 lookups (no dedicated SMACNA table exists for 4+ port fittings) -- see its
 docstring for the single-trunk assumption and what falls back to the
@@ -73,7 +76,11 @@ def loss_tee_generic(context):
 
 
 def loss_wye_generic(context):
-    return context["loss_api"].branch_loss(context)
+    # A true Wye has no Tee-style common/straight leg, so this routes to
+    # the Wye-specific API rather than branch_loss() (see HVACLossAPI.
+    # wye_loss's own docstring, and TOPOLOGY_CLASSIFICATION.md's
+    # common_leg qualifier, which a Wye never gets).
+    return context["loss_api"].wye_loss(context)
 
 
 # ----------------------------------------------------------------------

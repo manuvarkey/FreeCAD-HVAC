@@ -49,7 +49,16 @@ class _NodeAnalysis:
         self.degree = degree if degree is not None else len(connected_ports)
         self.port_origins = [p.position for p in connected_ports]
         self.edge_vectors = [p.direction for p in connected_ports]
-        self.edge_angles = {}
+        # Derived the same way node_analysis()/_edge_angles() do in
+        # production -- pairwise angle between each two ports' own
+        # `direction`, keyed by the sorted index pair -- so tests exercise
+        # the same precomputed lookup _pair_angle_lookup()/branch_angle
+        # actually read from, rather than a hand-picked stand-in.
+        self.edge_angles = {
+            str((i, j)): DuctNetworkParser._angle_bw_vectors(self.edge_vectors[i], self.edge_vectors[j])
+            for i in range(len(connected_ports))
+            for j in range(i + 1, len(connected_ports))
+        }
         self.orthogonal_pairs = []
         self.is_coplanar = True
 
@@ -475,3 +484,140 @@ def test_branch_wye_has_no_common_leg():
     assert flow_class == "diverging"
     assert "common_leg" not in qualifiers
     assert "area_ratio" not in derived
+
+
+# ----------------------------------------------------------------------
+# _resolve_inlet_outlet: unresolved direction must never fall back to an
+# arbitrary port order -- flow_class stays "unknown" and nothing
+# direction-dependent gets computed.
+# ----------------------------------------------------------------------
+
+def test_resolve_inlet_outlet_returns_none_when_both_ports_are_inlets():
+    parser = _parser()
+    port_a = _port("Circular", d=300.0, flow_role="inlet")
+    port_b = _port("Circular", d=300.0, flow_role="inlet")
+    assert parser._resolve_inlet_outlet(port_a, port_b) == (None, None)
+
+
+def test_resolve_inlet_outlet_returns_none_when_role_unresolved():
+    parser = _parser()
+    port_a = _port("Circular", d=300.0, flow_role="unknown")
+    port_b = _port("Circular", d=200.0, flow_role="unknown")
+    assert parser._resolve_inlet_outlet(port_a, port_b) == (None, None)
+
+
+def test_through_flow_unresolved_direction_is_unknown_not_a_guess():
+    # Different sizes (200 vs 300) would read as a clear expansion/
+    # contraction if direction were guessed from an arbitrary port order --
+    # must instead come back fully unknown/empty since neither port
+    # resolves to a role.
+    parser = _parser()
+    port_a = _port("Circular", d=200.0, flow_role="unknown", edge_key="A")
+    port_b = _port("Circular", d=300.0, flow_role="unknown", edge_key="B")
+    flow_class, qualifiers, derived = parser._classify_through_flow(port_a, port_b)
+    assert flow_class == "unknown"
+    assert qualifiers == {}
+    assert derived == {}
+
+
+# ----------------------------------------------------------------------
+# offset_ratio: transverse offset only (perpendicular to flow), never
+# including longitudinal port separation along the flow axis.
+# ----------------------------------------------------------------------
+
+def test_offset_ratio_ignores_purely_longitudinal_separation():
+    # Ports are perfectly centred on each other (no transverse offset) but
+    # separated by a large longitudinal distance along the flow axis (+z) --
+    # offset_ratio must read ~0, not something derived from that distance.
+    parser = _parser()
+    inlet = _port(
+        "Rectangular", w=400.0, h=300.0, position=(0.0, 0.0, 0.0),
+        direction=(0.0, 0.0, 1.0), profile_x_axis=(1.0, 0.0, 0.0), flow_role="inlet",
+    )
+    outlet = _port(
+        "Rectangular", w=200.0, h=150.0, position=(0.0, 0.0, 1000.0),
+        direction=(0.0, 0.0, -1.0), flow_role="outlet",
+    )
+    _, qualifiers, derived = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["alignment"] == "concentric"
+    assert derived["offset_ratio"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_offset_ratio_uses_transverse_component_only():
+    # Same transverse offset (dx=50) as test_alignment_offset_when_no_edges_
+    # line_up's dx, but with a large longitudinal separation (dz) added on
+    # top -- offset_ratio must match the transverse-only reading, unaffected
+    # by dz.
+    parser = _parser()
+    ref_dim = ((400.0 + 300.0) + (200.0 + 150.0)) / 4.0
+    inlet = _port(
+        "Rectangular", w=400.0, h=300.0, position=(0.0, 0.0, 0.0),
+        direction=(0.0, 0.0, 1.0), profile_x_axis=(1.0, 0.0, 0.0), flow_role="inlet",
+    )
+    outlet = _port(
+        "Rectangular", w=200.0, h=150.0, position=(50.0, 0.0, 1000.0),
+        direction=(0.0, 0.0, -1.0), flow_role="outlet",
+    )
+    _, _, derived = parser._classify_through_flow(inlet, outlet)
+    assert derived["offset_ratio"] == pytest.approx(50.0 / ref_dim)
+
+
+# ----------------------------------------------------------------------
+# branch_angle: geometric angle between the branch leg and the trunk,
+# derived from each port's own geometric `direction`, never flow_role/
+# flow_direction.
+# ----------------------------------------------------------------------
+
+def test_branch_angle_tee_is_90_degrees():
+    parser = _parser()
+    ports = [
+        _port("Circular", d=300.0, flow_role="inlet", direction=(1.0, 0.0, 0.0), edge_key="run_a"),
+        _port("Circular", d=300.0, flow_role="outlet", direction=(-1.0, 0.0, 0.0), edge_key="run_b"),
+        _port("Circular", d=200.0, flow_role="outlet", direction=(0.0, 1.0, 0.0), edge_key="branch"),
+    ]
+    analysis = _NodeAnalysis(ports, collinear_pairs=[EdgePair(a=0, b=1, angle=180.0, eccentricity=0.0)])
+    _, _, derived = parser._classify_branch_flow(ports, analysis)
+    assert derived["branch_angle"] == pytest.approx(90.0)
+
+
+def test_branch_angle_lateral_tee_uses_nearest_trunk_leg():
+    parser = _parser()
+    cos45 = math.cos(math.radians(45.0))
+    sin45 = math.sin(math.radians(45.0))
+    ports = [
+        _port("Circular", d=300.0, flow_role="inlet", direction=(1.0, 0.0, 0.0), edge_key="run_a"),
+        _port("Circular", d=300.0, flow_role="outlet", direction=(-1.0, 0.0, 0.0), edge_key="run_b"),
+        _port("Circular", d=200.0, flow_role="outlet", direction=(cos45, sin45, 0.0), edge_key="branch"),
+    ]
+    analysis = _NodeAnalysis(ports, collinear_pairs=[EdgePair(a=0, b=1, angle=180.0, eccentricity=0.0)])
+    _, _, derived = parser._classify_branch_flow(ports, analysis)
+    assert derived["branch_angle"] == pytest.approx(45.0)
+
+
+def test_branch_angle_absent_for_wye_with_no_trunk_pair():
+    parser = _parser()
+    ports = [
+        _port("Circular", d=200.0, flow_role="inlet", direction=(1.0, 0.0, 0.0)),
+        _port("Circular", d=200.0, flow_role="outlet", direction=(0.0, 1.0, 0.0)),
+        _port("Circular", d=200.0, flow_role="outlet", direction=(0.0, -1.0, 0.0)),
+    ]
+    analysis = _NodeAnalysis(ports, collinear_pairs=[])
+    _, _, derived = parser._classify_branch_flow(ports, analysis)
+    assert "branch_angle" not in derived
+
+
+# ----------------------------------------------------------------------
+# _geom_tol: shared size-relative geometry tolerance helper.
+# ----------------------------------------------------------------------
+
+def test_geom_tol_uses_absolute_floor_for_small_sizes():
+    parser = _parser()
+    assert parser._geom_tol(0.0) == parser.tol
+    assert parser._geom_tol(1.0, rel_tol=1e-6) == parser.tol
+
+
+def test_geom_tol_scales_with_characteristic_size():
+    parser = _parser()
+    size = 1000.0
+    rel_tol = 1e-3
+    assert parser._geom_tol(size, rel_tol=rel_tol) == pytest.approx(size * rel_tol)

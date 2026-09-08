@@ -1170,6 +1170,25 @@ class DuctNetworkParser:
                 edge_eccentricities[str((i, j))] = self._distance_between_lines(pos_i, vec_i, pos_j, vec_j)
         return edge_eccentricities
 
+    @staticmethod
+    def _pair_angle_lookup(edge_angles, i, j):
+        """
+        Look up the precomputed angle (degrees) between ports i and j from
+        a node's own edge_angles dict (keyed by the sorted index pair --
+        see _edge_angles()/node_analysis()). Shared by
+        classify_junction_family() and the flow classifier so both read
+        the exact same angle for the exact same port pair, rather than
+        each recomputing it independently from raw direction vectors.
+        """
+        a, b = sorted((i, j))
+        return abs(edge_angles[str((a, b))])
+
+    @staticmethod
+    def _pair_eccentricity_lookup(edge_eccentricities, i, j):
+        """Look up the precomputed eccentricity between ports i and j (see _pair_angle_lookup)."""
+        a, b = sorted((i, j))
+        return edge_eccentricities[str((a, b))]
+
     def _collinear_pairs(self, origins, vectors):
         """
         Return incident edge pairs whose directions are approximately opposite.
@@ -1347,12 +1366,10 @@ class DuctNetworkParser:
             return None
     
         def _pair_angle(i, j):
-            a, b = sorted((i, j))
-            return abs(edge_angles[str((a, b))])
-        
+            return self._pair_angle_lookup(edge_angles, i, j)
+
         def _pair_eccentricity(i, j):
-            a, b = sorted((i, j))
-            return edge_eccentricities[str((a, b))]
+            return self._pair_eccentricity_lookup(edge_eccentricities, i, j)
     
         # ------------------------------------------------------------
         # degree 0 / invalid
@@ -1517,17 +1534,46 @@ class DuctNetworkParser:
     # from base-segment orientation (segment start -> segment end), see
     # build_junction_ports() above.
 
-    @staticmethod
-    def _sections_equal(port_a, port_b):
+    def _geom_tol(self, characteristic_size, rel_tol=1e-6):
         """
-        True if two ports share the same profile-canonical section
-        signature -- see hvaclib.profile_signature(). Never area alone:
-        two differently-shaped sections can share an area without being
-        "the same section" for through.straight/offset vs.
-        through.transition classification purposes.
+        Shared size-relative geometry tolerance: max(self.tol, rel_tol *
+        characteristic_size). self.tol is the absolute floor (same value
+        used to snap the geometric graph itself), rel_tol scales it up
+        for larger ducts so floating-point round-off on a big section
+        doesn't get mistaken for a real geometric difference. Used
+        everywhere this classifier compares two dimensions/positions
+        against each other -- never a scattered literal 1e-6.
         """
-        return hvaclib.profile_signature(port_a.profile, port_a.section_params) == hvaclib.profile_signature(
-            port_b.profile, port_b.section_params
+        return max(self.tol, rel_tol * abs(characteristic_size))
+
+    def _sections_equal(self, port_a, port_b):
+        """
+        True if two ports share the same section within a size-relative
+        tolerance (see _geom_tol). Never area alone: two differently-
+        shaped sections can share an area without being "the same
+        section" for through.straight/offset vs. through.transition
+        classification purposes.
+        """
+        profile_a = str(port_a.profile or "")
+        profile_b = str(port_b.profile or "")
+        if not profile_a or profile_a != profile_b:
+            return False
+
+        ext_a = hvaclib.get_section_extents(port_a.section_params or {})
+        ext_b = hvaclib.get_section_extents(port_b.section_params or {})
+        if (ext_a[0] > 0.0 and ext_a[1] > 0.0) or (ext_b[0] > 0.0 and ext_b[1] > 0.0):
+            # Known Circular/Rectangular/Oval extents -- compare width/height
+            # (or diameter-as-box) with a tolerance scaled to their own size.
+            size = max(ext_a[0], ext_a[1], ext_b[0], ext_b[1])
+            tol = self._geom_tol(size)
+            return abs(ext_a[0] - ext_b[0]) <= tol and abs(ext_a[1] - ext_b[1]) <= tol
+
+        # Generic/custom profile with no recognized Width/Height/Diameter
+        # schema -- fall back to an exact canonical signature match (making
+        # this size-relative too would need a documented generic-profile
+        # dimension schema, out of scope here).
+        return hvaclib.profile_signature(profile_a, port_a.section_params) == hvaclib.profile_signature(
+            profile_b, port_b.section_params
         )
 
     def classify_flow(self, node_analysis, topology):
@@ -1549,16 +1595,28 @@ class DuctNetworkParser:
         return "unknown", {}, {}
 
     def _resolve_inlet_outlet(self, port_a, port_b):
-        """Best-effort (inlet, outlet) ordering of two ports from their own flow_role."""
+        """
+        (inlet, outlet) ordering of two ports from their own flow_role --
+        base-segment orientation is the sole source of truth here (see
+        build_junction_ports()). Returns (None, None) when the pair isn't
+        exactly one inlet and one outlet: an ambiguous or unresolved pair
+        must never fall back to an arbitrary port order, since that could
+        silently mislabel a contraction as an expansion (or vice versa).
+        """
         if port_a.flow_role == "inlet" and port_b.flow_role == "outlet":
             return port_a, port_b
         if port_b.flow_role == "inlet" and port_a.flow_role == "outlet":
             return port_b, port_a
-        # Unresolved -- fall back to a deterministic (arbitrary) order.
-        return port_a, port_b
+        return None, None
 
     def _classify_through_flow(self, port_a, port_b):
         inlet, outlet = self._resolve_inlet_outlet(port_a, port_b)
+        if inlet is None or outlet is None:
+            # Direction unresolved -- never guess expansion/contraction or
+            # any direction-dependent qualifier/derived value from an
+            # arbitrary port order.
+            return "unknown", {}, {}
+
         qualifiers = {}
         derived = {}
 
@@ -1626,30 +1684,35 @@ class DuctNetworkParser:
         """
         pos_in = FreeCAD.Vector(*inlet.position)
         pos_out = FreeCAD.Vector(*outlet.position)
-
         delta = pos_out - pos_in
-        offset_mag = delta.Length
 
         w_in, h_in = ext_in
         w_out, h_out = ext_out
         ref_dim = ((w_in + h_in) + (w_out + h_out)) / 4.0
-        offset_ratio = (offset_mag / ref_dim) if ref_dim > 1e-9 else None
 
         flow_dir = inlet.flow_direction
         z_dir = FreeCAD.Vector(*flow_dir) if flow_dir else FreeCAD.Vector(0, 0, 0)
         if z_dir.Length <= 1e-12:
-            return "unknown", {}, offset_ratio
+            # No frame to resolve a transverse offset against -- offset_ratio
+            # is undefined here, never the raw (possibly longitudinal) delta.
+            return "unknown", {}, None
 
         preferred_x = FreeCAD.Vector(*inlet.profile_x_axis) if inlet.profile_x_axis else None
         try:
             _, x_dir, y_dir, _ = hvaclib.make_profile_frame(z_dir, preferred_x=preferred_x)
         except ValueError:
-            return "unknown", {}, offset_ratio
+            return "unknown", {}, None
 
         delta_x = delta.dot(x_dir)
         delta_y = delta.dot(y_dir)
 
-        tol = self.tol
+        # offset_ratio is the TRANSVERSE offset only (perpendicular to flow,
+        # in this common frame) -- delta's own longitudinal component along
+        # z_dir is deliberately dropped, never folded into the ratio.
+        transverse_offset = math.hypot(delta_x, delta_y)
+        offset_ratio = (transverse_offset / ref_dim) if ref_dim > 1e-9 else None
+
+        tol = self._geom_tol(ref_dim)
 
         rectangular = profile_in == "Rectangular" and profile_out == "Rectangular"
         round_profiles = {"Circular", "Oval"}
@@ -1695,8 +1758,7 @@ class DuctNetworkParser:
         # isn't a well-defined concept across different section shapes.
         return "unknown", {}, offset_ratio
 
-    @staticmethod
-    def _classify_transition_form(profile_in, profile_out, ext_in, ext_out):
+    def _classify_transition_form(self, profile_in, profile_out, ext_in, ext_out):
         """
         Return a generic transition-form qualifier where reliably derivable
         from profile/extent data alone -- never a SMACNA-specific fitting id.
@@ -1711,7 +1773,7 @@ class DuctNetworkParser:
         if profile_in != profile_out:
             return "profile_change"
 
-        tol = 1e-6
+        tol = self._geom_tol(max(ext_in[0], ext_in[1], ext_out[0], ext_out[1]))
         w_changed = abs(ext_in[0] - ext_out[0]) > tol
         h_changed = abs(ext_in[1] - ext_out[1]) > tol
         if not w_changed and not h_changed:
@@ -1764,5 +1826,15 @@ class DuctNetworkParser:
             area_branch = hvaclib.profile_area(ports[branch_idx].profile, ports[branch_idx].section_params)
             if area_run and area_branch and area_run > 0.0:
                 derived["area_ratio"] = area_branch / area_run
+
+            # Geometric branch angle (degrees) between the branch leg and
+            # whichever trunk leg it's closer to -- the same acute-angle
+            # convention classify_junction_family() already uses to split
+            # tee (~90 deg) from lateral_tee, and read from the exact same
+            # precomputed edge_angles a node's family classification already
+            # used, rather than recomputing it from raw direction vectors.
+            ang_a = self._pair_angle_lookup(node_analysis.edge_angles, branch_idx, trunk.a)
+            ang_b = self._pair_angle_lookup(node_analysis.edge_angles, branch_idx, trunk.b)
+            derived["branch_angle"] = min(ang_a, ang_b)
 
         return flow_class, qualifiers, derived

@@ -150,6 +150,42 @@ class HVACLossAPI:
             return None
 
     @staticmethod
+    def _leg_angle_deg(leg_dir, reference_dir):
+        """
+        Angle (degrees) a leg makes against a reference leg, given both as
+        outward-pointing direction vectors (each pointing away from the
+        junction along its own duct, e.g. HVACLibraryAPI.vec(port["direction"])).
+        Two outward-pointing vectors that are anti-parallel represent duct
+        legs that are physically in line with each other (0 deg apart, not
+        180), so this is 180 minus the raw angle between the vectors.
+        Shared by every branch-angle lookup in this module (branch_loss,
+        _no_straight_leg_branch_zetas, manifold_loss) instead of
+        reimplementing the same clamp/acos/180-minus pattern in each.
+        """
+        cos_angle = max(-1.0, min(1.0, leg_dir.dot(reference_dir)))
+        return 180.0 - math.degrees(math.acos(cos_angle))
+
+    @staticmethod
+    def _split_single_common_port(ports):
+        """
+        Split `ports` into (primary, secondaries, diverging) where exactly
+        one port sits on one flow side (the sole inlet if diverging, the
+        sole outlet if converging) and the rest sit on the other side --
+        the single-trunk shape shared by branch_loss, branch_loss_bullhead,
+        wye_loss, and manifold_loss. Returns None when that's not the flow
+        pattern (e.g. a mixed multi-inlet/multi-outlet "true cross" has no
+        single trunk to decompose against).
+        """
+        inlets = [p for p in ports if p.get("flow_into_junction") is True]
+        outlets = [p for p in ports if p.get("flow_into_junction") is False]
+
+        if len(inlets) == 1 and outlets:
+            return inlets[0], outlets, True
+        if len(outlets) == 1 and inlets:
+            return outlets[0], inlets, False
+        return None
+
+    @staticmethod
     def branch_loss(context):
         """
         Converging (merging) or diverging (splitting) tee/wye fitting loss.
@@ -167,17 +203,10 @@ class HVACLossAPI:
             if len(ports) != 3:
                 return None
 
-            inlets = [p for p in ports if p.get("flow_into_junction") is True]
-            outlets = [p for p in ports if p.get("flow_into_junction") is False]
-
-            if len(inlets) == 1 and len(outlets) == 2:
-                diverging = True
-                primary, secondaries = inlets[0], outlets
-            elif len(inlets) == 2 and len(outlets) == 1:
-                diverging = False
-                primary, secondaries = outlets[0], inlets
-            else:
+            split = HVACLossAPI._split_single_common_port(ports)
+            if split is None:
                 return None  # ambiguous/degenerate flow pattern
+            primary, secondaries, diverging = split
 
             primary_dir = HVACLibraryAPI.vec(primary["direction"])
             sec_a, sec_b = secondaries
@@ -199,8 +228,7 @@ class HVACLossAPI:
 
             branch_dir = HVACLibraryAPI.vec(branch["direction"])
             straight_dir = HVACLibraryAPI.vec(straight["direction"])
-            cos_angle = max(-1.0, min(1.0, branch_dir.dot(straight_dir)))
-            angle_deg = 180.0 - math.degrees(math.acos(cos_angle))
+            angle_deg = HVACLossAPI._leg_angle_deg(branch_dir, straight_dir)
 
             ab_on_ac = a_branch / a_common
             vb_on_vc = float(branch.get("velocity_ms", 0.0) or 0.0) / v_common
@@ -220,6 +248,62 @@ class HVACLossAPI:
             return None
 
     @staticmethod
+    def _no_straight_leg_branch_zetas(common, legs, diverging):
+        """
+        Shared math for a 3-port branch fitting where no leg can be
+        singled out as "the straight-through continuation" of the common
+        leg -- used by both a bullhead tee/wye (branch_loss_bullhead) and
+        a true Wye (wye_loss). These are geometrically different fittings
+        (a bullhead is a Tee whose common flow sits on the branch leg; a
+        true Wye has no run/branch split at all -- see NetworkParser's
+        qualifiers["common_leg"], never assigned to a Wye), but they share
+        the exact same "every non-common leg is independently a branch
+        relative to the common leg" shape, so the underlying calculation
+        lives here once rather than duplicated.
+
+        No SMACNA table treats this shape as its own entry (neither leg
+        gets the "straight-through continuation" the ordinary branch
+        table's branch/straight split assumes), so each leg is evaluated
+        independently against the common leg with the same diverging/
+        converging branch-zeta tables an ordinary tee's own branch leg
+        uses, reusing each leg's own velocity ratio for both table
+        arguments -- a reasonable estimate, not a validated table value.
+
+        Returns {leg_edge_key: K, ...} (each already referenced to that
+        leg's own velocity), or None.
+        """
+        v_common = float(common.get("velocity_ms", 0.0) or 0.0)
+        if v_common <= 1e-9:
+            return {leg["edge_key"]: 0.0 for leg in legs}
+
+        a_common = HVACLibraryAPI.port_area(common)
+        if a_common <= 0.0:
+            return None
+
+        common_dir = HVACLibraryAPI.vec(common["direction"])
+        zeta_fn = smacna_loss.diverging_branch_zetas if diverging else smacna_loss.converging_branch_zetas
+
+        result = {}
+        for leg in legs:
+            a_leg = HVACLibraryAPI.port_area(leg)
+            if a_leg <= 0.0:
+                return None
+
+            leg_dir = HVACLibraryAPI.vec(leg["direction"])
+            angle_deg = HVACLossAPI._leg_angle_deg(leg_dir, common_dir)
+
+            a_on_ac = a_leg / a_common
+            v_on_vc = float(leg.get("velocity_ms", 0.0) or 0.0) / v_common
+            # No independent "straight-through" leg exists here, so the
+            # reference velocity ratio the table otherwise expects for it
+            # is undefined -- reuse this leg's own ratio for both table
+            # arguments.
+            zeta_leg, _ = zeta_fn(angle_deg, a_on_ac, v_on_vc, v_on_vc)
+            result[leg["edge_key"]] = zeta_leg
+
+        return result
+
+    @staticmethod
     def branch_loss_bullhead(context):
         """
         Bullhead tee/wye: the single common-flow port sits on the
@@ -229,13 +313,9 @@ class HVACLossAPI:
         common_leg == "run" case branch_loss() above already handles
         correctly). Expects exactly 3 connected_ports.
 
-        No SMACNA table treats a bullhead arrangement as its own entry
-        (neither run leg gets the "straight-through continuation" the
-        table's branch/straight split assumes), so each run leg is
-        evaluated independently against the common leg with the same
-        diverging/converging branch-zeta tables an ordinary tee's own
-        branch leg uses -- a reasonable estimate, not a validated table
-        value.
+        This is a generic approximation (see _no_straight_leg_branch_zetas),
+        not a validated SMACNA table entry for a bullhead arrangement --
+        never presented to a caller as an exact table result.
 
         Returns {run_leg_edge_key: K, ...} (one entry per run leg, each
         already referenced to that leg's own velocity), or None.
@@ -245,51 +325,50 @@ class HVACLossAPI:
             if len(ports) != 3:
                 return None
 
-            inlets = [p for p in ports if p.get("flow_into_junction") is True]
-            outlets = [p for p in ports if p.get("flow_into_junction") is False]
-
-            if len(inlets) == 1 and len(outlets) == 2:
-                diverging = True
-                common, run_legs = inlets[0], outlets
-            elif len(inlets) == 2 and len(outlets) == 1:
-                diverging = False
-                common, run_legs = outlets[0], inlets
-            else:
+            split = HVACLossAPI._split_single_common_port(ports)
+            if split is None:
                 return None  # ambiguous/degenerate flow pattern
+            common, run_legs, diverging = split
 
-            v_common = float(common.get("velocity_ms", 0.0) or 0.0)
-            if v_common <= 1e-9:
-                return {leg["edge_key"]: 0.0 for leg in run_legs}
+            return HVACLossAPI._no_straight_leg_branch_zetas(common, run_legs, diverging)
+        except Exception:
+            return None
 
-            a_common = HVACLibraryAPI.port_area(common)
-            if a_common <= 0.0:
+    @staticmethod
+    def wye_loss(context):
+        """
+        True Wye (branch.wye) fitting loss: three ports where no pair is a
+        Tee-style collinear run -- NetworkParser never assigns a
+        qualifiers["common_leg"] to a Wye, since there's no run/branch
+        split to name (see TOPOLOGY_CLASSIFICATION.md). This is therefore
+        a distinct API entry point from branch_loss()/branch_loss_bullhead()
+        rather than routing a Wye through either of those Tee-oriented
+        methods -- it never guesses a "straight-through" secondary leg,
+        since a true Wye has none by definition.
+
+        Internally this reuses the same "no independent straight leg"
+        calculation a bullhead tee/wye needs (see
+        _no_straight_leg_branch_zetas): each non-common leg is evaluated
+        independently against the common leg with the diverging/converging
+        branch-zeta tables. This is a reasonable engineering estimate, not
+        a dedicated SMACNA Wye table result (SMACNA's own branch tables are
+        keyed by one branch's angle against a straight run, not by two
+        symmetric legs) -- never presented as an exact table value.
+
+        Expects exactly 3 connected_ports. Returns {leg_edge_key: K, ...}
+        (each already referenced to that leg's own velocity), or None.
+        """
+        try:
+            ports = HVACLibraryAPI.connected_ports(context)
+            if len(ports) != 3:
                 return None
 
-            common_dir = HVACLibraryAPI.vec(common["direction"])
+            split = HVACLossAPI._split_single_common_port(ports)
+            if split is None:
+                return None  # ambiguous/degenerate flow pattern
+            common, legs, diverging = split
 
-            result = {}
-            for leg in run_legs:
-                a_leg = HVACLibraryAPI.port_area(leg)
-                if a_leg <= 0.0:
-                    return None
-
-                leg_dir = HVACLibraryAPI.vec(leg["direction"])
-                cos_angle = max(-1.0, min(1.0, leg_dir.dot(common_dir)))
-                angle_deg = 180.0 - math.degrees(math.acos(cos_angle))
-
-                a_on_ac = a_leg / a_common
-                v_on_vc = float(leg.get("velocity_ms", 0.0) or 0.0) / v_common
-                # No independent "straight-through" leg exists in a bullhead
-                # arrangement, so the reference velocity ratio the table
-                # otherwise expects for it is undefined -- reuse this leg's
-                # own ratio for both table arguments.
-                if diverging:
-                    zeta_leg, _ = smacna_loss.diverging_branch_zetas(angle_deg, a_on_ac, v_on_vc, v_on_vc)
-                else:
-                    zeta_leg, _ = smacna_loss.converging_branch_zetas(angle_deg, a_on_ac, v_on_vc, v_on_vc)
-                result[leg["edge_key"]] = zeta_leg
-
-            return result
+            return HVACLossAPI._no_straight_leg_branch_zetas(common, legs, diverging)
         except Exception:
             return None
 
@@ -327,17 +406,10 @@ class HVACLossAPI:
             if len(ports) < 3:
                 return None
 
-            inlets = [p for p in ports if p.get("flow_into_junction") is True]
-            outlets = [p for p in ports if p.get("flow_into_junction") is False]
-
-            if len(inlets) == 1:
-                diverging = True
-                primary, secondaries = inlets[0], outlets
-            elif len(outlets) == 1:
-                diverging = False
-                primary, secondaries = outlets[0], inlets
-            else:
+            split = HVACLossAPI._split_single_common_port(ports)
+            if split is None:
                 return None  # mixed multi-in/multi-out: no single trunk to decompose
+            primary, secondaries, diverging = split
 
             if len(secondaries) < 2:
                 return None
@@ -372,8 +444,7 @@ class HVACLossAPI:
 
             def _angle_deg(branch_port):
                 branch_dir = HVACLibraryAPI.vec(branch_port["direction"])
-                cos_angle = max(-1.0, min(1.0, branch_dir.dot(straight_dir)))
-                return 180.0 - math.degrees(math.acos(cos_angle))
+                return HVACLossAPI._leg_angle_deg(branch_dir, straight_dir)
 
             if diverging:
                 remaining_flow_lps = float(primary.get("flow_rate_lps", 0.0) or 0.0)

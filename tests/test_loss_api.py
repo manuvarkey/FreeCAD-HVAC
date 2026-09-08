@@ -309,6 +309,82 @@ def test_branch_loss_bullhead_ambiguous_flow_pattern_returns_none():
 
 
 # ----------------------------------------------------------------------------
+# wye_loss -- a true Wye has no Tee-style common/straight leg (see
+# NetworkParser's qualifiers["common_leg"], never assigned to a wye), so
+# this is a distinct API entry point from branch_loss()/branch_loss_bullhead
+# rather than routing a Wye through either Tee-oriented method. Internally
+# it shares branch_loss_bullhead's "no independent straight leg" math (both
+# fittings have that same shape), but the two are architecturally separate
+# entry points for two different physical fittings.
+# ----------------------------------------------------------------------------
+
+def test_wye_loss_diverging_treats_symmetric_legs_symmetrically():
+    # A genuine Wye: two outlet legs at the same angle off the common inlet,
+    # neither one a "straight-through continuation" of the other. Unlike
+    # branch_loss() (which picks one secondary as "straight" via a
+    # dot-product comparison and would tie-break this exact symmetric case
+    # arbitrarily, giving the two identical legs different K values),
+    # wye_loss() must return equal K for both.
+    cos30 = math.cos(math.radians(30.0))
+    sin30 = math.sin(math.radians(30.0))
+    primary = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
+    leg_a = _port("LEG_A", (cos30, sin30, 0.0), False, diameter=200.0, velocity_ms=3.0)
+    leg_b = _port("LEG_B", (cos30, -sin30, 0.0), False, diameter=200.0, velocity_ms=3.0)
+    context = {"connected_ports": [primary, leg_a, leg_b], "properties": {}}
+
+    result = api.wye_loss(context)
+
+    a_on_ac = (200.0 / 300.0) ** 2
+    v_on_vc = 3.0 / 5.0
+    dot = (-1.0) * cos30
+    angle_deg = 180.0 - math.degrees(math.acos(max(-1.0, min(1.0, dot))))
+    zeta_leg, _ = smacna_loss.diverging_branch_zetas(angle_deg, a_on_ac, v_on_vc, v_on_vc)
+
+    assert result == pytest.approx({"LEG_A": zeta_leg, "LEG_B": zeta_leg})
+
+
+def test_wye_loss_converging_treats_symmetric_legs_symmetrically():
+    cos30 = math.cos(math.radians(30.0))
+    sin30 = math.sin(math.radians(30.0))
+    primary = _port("OUT", (1, 0, 0), False, diameter=300.0, velocity_ms=5.0)
+    leg_a = _port("LEG_A", (-cos30, sin30, 0.0), True, diameter=200.0, velocity_ms=3.0)
+    leg_b = _port("LEG_B", (-cos30, -sin30, 0.0), True, diameter=200.0, velocity_ms=3.0)
+    context = {"connected_ports": [primary, leg_a, leg_b], "properties": {}}
+
+    result = api.wye_loss(context)
+
+    a_on_ac = (200.0 / 300.0) ** 2
+    v_on_vc = 3.0 / 5.0
+    dot = (1.0) * (-cos30)
+    angle_deg = 180.0 - math.degrees(math.acos(max(-1.0, min(1.0, dot))))
+    zeta_leg, _ = smacna_loss.converging_branch_zetas(angle_deg, a_on_ac, v_on_vc, v_on_vc)
+
+    assert result == pytest.approx({"LEG_A": zeta_leg, "LEG_B": zeta_leg})
+
+
+def test_wye_loss_zero_common_flow_returns_zero_not_none():
+    primary = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=0.0)
+    leg_a = _port("LEG_A", (1, 1, 0), False, diameter=200.0, velocity_ms=0.0)
+    leg_b = _port("LEG_B", (1, -1, 0), False, diameter=200.0, velocity_ms=0.0)
+    context = {"connected_ports": [primary, leg_a, leg_b], "properties": {}}
+    assert api.wye_loss(context) == {"LEG_A": 0.0, "LEG_B": 0.0}
+
+
+def test_wye_loss_wrong_port_count_returns_none():
+    primary = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
+    context = {"connected_ports": [primary], "properties": {}}
+    assert api.wye_loss(context) is None
+
+
+def test_wye_loss_ambiguous_flow_pattern_returns_none():
+    p1 = _port("A", (1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
+    p2 = _port("B", (0, 1, 0), True, diameter=300.0, velocity_ms=5.0)
+    p3 = _port("C", (0, 0, 1), True, diameter=300.0, velocity_ms=5.0)
+    context = {"connected_ports": [p1, p2, p3], "properties": {}}
+    assert api.wye_loss(context) is None
+
+
+# ----------------------------------------------------------------------------
 # manifold_loss
 # ----------------------------------------------------------------------------
 

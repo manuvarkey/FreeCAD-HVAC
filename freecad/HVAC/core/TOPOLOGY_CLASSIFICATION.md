@@ -108,7 +108,13 @@ solver.
   2), one of `expansion`/`contraction`/`constant`/`unknown` (by outlet vs.
   inlet cross-section area); for a degree-3 branch, one of
   `diverging`/`converging`/`unknown` (by inlet/outlet port count); `unknown`
-  everywhere else (bends, wye, cross, multiport, ...).
+  everywhere else (bends, wye, cross, multiport, ...). A degree-2 pair whose
+  two ports don't resolve to exactly one inlet and one outlet (see
+  `_resolve_inlet_outlet()`) is also `unknown` -- direction always comes
+  from base-segment orientation, never an arbitrary port order, so an
+  ambiguous pair never gets labelled `expansion`/`contraction` by guesswork
+  (and none of `qualifiers`/`derived_values` below is computed for it
+  either, since all of it depends on which port is the inlet).
 - `qualifiers` (`dict[str, str]`): degree-2 collinear pairs get
   `inlet_profile`/`outlet_profile`/`profile_relation`
   (`"same"`/`"mixed"`), plus `alignment` and (where derivable)
@@ -147,11 +153,31 @@ solver.
   pair) gets `common_leg` (`"run"`/`"branch"`) from which port's flow
   role is the odd one out relative to that trunk pair -- e.g. an ordinary
   dividing tee is `common_leg="run"`, a bullhead dividing tee is
-  `common_leg="branch"`; a wye has no trunk pair, so no `common_leg`.
+  `common_leg="branch"`; a wye has no trunk pair, so no `common_leg`
+  (never inferred by any other means -- a true Wye's own loss lookup
+  uses a separate API entry point, `HVACLossAPI.wye_loss`, rather than
+  the Tee-oriented `branch_loss`, see `library/loss_api.py`).
   Same-or-mixed-profile is also exposed as `profile_relation` here.
 - `derived_values` (`dict[str, float]`): `area_ratio`, `aspect_ratio_in`/
   `aspect_ratio_out`, `offset_ratio` where computable; a branch tee/
-  lateral_tee also gets `area_ratio` as branch-leg area over trunk-leg area.
+  lateral_tee also gets `area_ratio` as branch-leg area over trunk-leg
+  area, plus `branch_angle` -- the geometric angle (degrees) between the
+  branch leg and whichever trunk leg it's closer to, derived purely from
+  each port's own geometric `direction` (never from flow direction, so it
+  doesn't flip with base-segment orientation the way `flow_class` does).
+  `offset_ratio` is the *transverse* offset only (perpendicular to the
+  inlet's flow direction, in the same common frame `alignment` uses) over
+  a representative duct dimension -- it never includes any longitudinal
+  port separation along the flow axis.
+
+  These are all standardized keys `NetworkParser.classify_flow` itself
+  produces (see `library/validation.py`'s `KNOWN_QUALIFIER_KEYS`/
+  `KNOWN_DERIVED_VALUE_KEYS`). A value that depends on a *selected
+  fitting's own* properties instead -- e.g. a transition angle computed
+  from a chosen `TransitionLength` -- is a fitting/type-derived value,
+  not a parser-derived one, and isn't exposed through `derived_values`
+  here; that's a separate vocabulary for the library layer to expose
+  later if needed.
 
 A type-def's JSON `constraints` can filter on any of these -- see
 `freecad/HVAC/library/validation.py`'s `context_violations()` and
