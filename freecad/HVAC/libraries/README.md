@@ -84,7 +84,7 @@ Common fields, both segments and junctions:
 | `geometry` | `{"backend": "partscript"\|"static", "file"\|"descriptor": "..."}` |
 | `generator` | legacy alternative to `geometry`: `{"module": "...", "function": "..."}` |
 | `lengths_module` / `lengths_function` | optional, junctions: computes per-port trim lengths separately from the shape |
-| `loss_module` / `loss_function` | optional: fitting-loss coefficient function for the airflow solver; its context provides `HVACLossAPI` as `context["loss_api"]` |
+| `loss_module` / `loss_function` | optional: fitting-loss coefficient function for the airflow solver; its context provides `HVACLossAPI` as `context["loss_api"]`. May instead (or also) declare `loss.variants` for flow-dependent formulas -- see below |
 
 ### Flow-classification constraints
 
@@ -116,6 +116,71 @@ These constraints never expand `HVACMatchKey`: a type-def is still indexed
 purely by (category, topology, family, profile) for the automatic-selection
 lookup, and this extra data only filters candidates *after* that lookup,
 exactly like the existing `degree`/topology/profile checks.
+
+### Flow-dependent loss variants
+
+One physical fitting (one TypeId, one geometry generator) can carry
+several *flow-dependent* loss formulas -- e.g. an expanding vs.
+contracting transition, or an ordinary vs. bullhead tee -- without a
+separate TypeId per flow case: `loss.variants` is a list of `{constraints,
+module, function}` entries, each `constraints` evaluated with the exact
+same operators/keys as the type-def-level `constraints` above (see
+`validation.flow_classification_violations()`, shared by both). The
+plain `loss.module`/`loss.function` stay as the default/wildcard, used
+whenever no variant's constraints are satisfied:
+
+```json
+"loss": {
+  "module": "junction_losses",
+  "function": "loss_tee_generic",
+  "variants": [
+    {
+      "constraints": {
+        "flow_class": {"enum": ["diverging"]},
+        "qualifiers": {"common_leg": {"enum": ["run"]}}
+      },
+      "module": "junction_losses",
+      "function": "loss_branch_diverging_run"
+    },
+    {
+      "constraints": {
+        "flow_class": {"enum": ["diverging"]},
+        "qualifiers": {"common_leg": {"enum": ["branch"]}}
+      },
+      "module": "junction_losses",
+      "function": "loss_branch_diverging_branch"
+    }
+  ]
+}
+```
+
+A type-def with no `"variants"` key behaves exactly as before (the plain
+`module`/`function` form). `HVACLibraryRegistry.call_loss()` resolves
+which callable to actually invoke via `validation.resolve_loss_variant()`:
+
+- exactly one variant's `constraints` fully satisfied -> that variant;
+- more than one matches -> the most specific one wins (most declared
+  constraint keys, counting each `qualifiers` entry separately) -- e.g. a
+  library-specific variant further narrowed by a `qualifiers` entry (a
+  SMACNA-only rectangular-pyramidal-expansion formula) wins over a
+  broader one that only checks `flow_class`; a genuine tie at the top
+  specificity is a JSON-authoring ambiguity and raises `ValueError`
+  rather than silently picking one;
+- none match -> the plain `module`/`function`, if declared, as an
+  explicit fallback; otherwise `call_loss()` returns `None` -- "no
+  applicable loss model," the same clean signal a type with no loss
+  function wired up at all already gives its caller (`AirflowSolver`
+  then applies its own generic `K_DEFAULT`).
+
+`loss.variants[].constraints` and a type-def's own top-level
+`constraints` are deliberately independent: the type-level one decides
+whether the physical fitting TypeId is selectable at all (before sync
+ever writes it onto an object); a loss variant's own constraints only
+run afterward, per airflow-solve call, to pick a loss formula for a
+TypeId that's already been chosen -- see
+[`freecad/HVAC/core/TOPOLOGY_CLASSIFICATION.md`](../core/TOPOLOGY_CLASSIFICATION.md)
+for where `flow_class`/`qualifiers`/`derived_values` themselves come
+from (`NetworkParser.classify_flow`).
 
 Junctions additionally carry a `topology` field (see below), plus two
 optional fields a terminal (`topology: "end"`) type may use to prescribe

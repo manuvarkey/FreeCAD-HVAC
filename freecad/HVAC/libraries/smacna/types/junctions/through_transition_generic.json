@@ -94,6 +94,22 @@
   },
   "loss": {
     "module": "junction_losses",
-    "function": "loss_transition_generic"
+    "function": "loss_transition_generic",
+    "variants": [
+      {
+        "constraints": {
+          "flow_class": {"enum": ["expansion"]}
+        },
+        "module": "junction_losses",
+        "function": "loss_transition_expansion"
+      },
+      {
+        "constraints": {
+          "flow_class": {"enum": ["contraction"]}
+        },
+        "module": "junction_losses",
+        "function": "loss_transition_contraction"
+      }
+    ]
   }
 }

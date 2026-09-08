@@ -128,6 +128,133 @@ def _check_rule(violations, type_def, label, value, rules):
         violations.append(str(exc))
 
 
+def flow_classification_violations(type_def, constraints, context):
+    """
+    Return violation messages for the flow-classification constraint keys
+    (`flow_class`, `qualifiers.<key>`, `profile_relation`, `inlet_profile`,
+    `outlet_profile`, and any `derived_values` entry) against `constraints`
+    -- the one constraint evaluator shared by context_violations() (a
+    type-def's own top-level `constraints`, decides whether the physical
+    fitting TypeId is applicable) and resolve_loss_variant() (a loss-def's
+    own `loss.variants[].constraints`, decides which loss function applies
+    *after* the TypeId is already selected -- see that function). Both
+    ever pass the exact same `constraints`/`context` shape here, so a
+    library author uses one operator vocabulary everywhere.
+
+    `type_def` is only used for its `.id` in violation messages -- this
+    never reads `type_def.constraints` itself, since the caller decides
+    which constraints dict (`type_def.constraints` or one variant's own)
+    to check.
+    """
+    violations = []
+    constraints = dict(constraints or {})
+
+    if "flow_class" in constraints:
+        _check_rule(violations, type_def, "flow_class", context.get("flow_class"), constraints["flow_class"])
+
+    qualifiers = dict(context.get("qualifiers", {}) or {})
+    for key in ("profile_relation", "inlet_profile", "outlet_profile"):
+        if key in constraints:
+            value = context.get(key, qualifiers.get(key))
+            _check_rule(violations, type_def, key, value, constraints[key])
+
+    if "qualifiers" in constraints:
+        for key, rule in dict(constraints["qualifiers"] or {}).items():
+            _check_rule(violations, type_def, "qualifiers.{}".format(key), qualifiers.get(key), rule)
+
+    # Any other declared constraint key is checked against a matching
+    # derived_values entry (e.g. "area_ratio", "transition_angle") --
+    # numeric values only ever live in derived_values, never qualifiers.
+    derived_values = dict(context.get("derived_values", {}) or {})
+    handled_keys = {"flow_class", "qualifiers", "profile_relation", "inlet_profile", "outlet_profile"}
+    for key, rule in constraints.items():
+        if key in handled_keys:
+            continue
+        if key in derived_values:
+            _check_rule(violations, type_def, key, derived_values.get(key), rule)
+
+    return violations
+
+
+def _constraint_specificity(constraints):
+    """
+    Rough "how many leaf conditions does this constraints dict declare"
+    count, used only to rank equally-valid loss variants by specificity --
+    more declared conditions wins, a tie is ambiguous. Mirrors the
+    "specific wins" philosophy of HVACLibrary's own type-selection ranking
+    without reusing its priority field (a loss variant has no
+    HVACSelectionDef of its own).
+    """
+    constraints = dict(constraints or {})
+    count = 0
+    for key, rule in constraints.items():
+        if key == "qualifiers":
+            count += len(dict(rule or {}))
+        else:
+            count += 1
+    return count
+
+
+def resolve_loss_variant(type_def, context):
+    """
+    Pick exactly one applicable (module, function) loss-callable pair for
+    `type_def` given the current classification/context, evaluating each
+    declared `loss.variants[]` entry's own `constraints` with the exact
+    same flow_classification_violations() rules used for type-def
+    matching -- see that function's docstring for why this is the one
+    constraint evaluator, not a second incompatible one.
+
+    Precedence:
+      1. No variants declared at all -> the type-def's own top-level
+         loss_module/loss_function (the pre-existing simple schema,
+         unchanged).
+      2. Exactly one variant's constraints are all satisfied -> that
+         variant.
+      3. More than one variant matches -> the most specific one wins
+         (see _constraint_specificity); a genuine tie at the top
+         specificity is a JSON-authoring ambiguity and raises ValueError
+         rather than silently picking one.
+      4. No variant matches -> the type-def's own top-level
+         loss_module/loss_function, if declared, as an explicit
+         wildcard/default; otherwise ("", "") -- "no applicable loss
+         model", the same clean signal call_loss() already gives its
+         caller for a type with no loss function wired up at all.
+
+    Returns (module, function) -- either may be "" if nothing applies.
+
+    Expects `context` to actually carry `flow_class`/`qualifiers`/
+    `derived_values` (possibly empty/"unknown", never simply absent) --
+    see core/_analysis_adapter.py's build_loss_evaluator(), the one real
+    caller. A key genuinely missing from `context` is never treated as a
+    mismatch (same permissive rule flow_classification_violations() uses
+    for type-def matching), so a variant whose only constraint references
+    a wholly absent key would incorrectly "match" -- give it an explicit
+    value (even "" or "unknown") instead of omitting it.
+    """
+    variants = list(getattr(type_def, "loss_variants", None) or [])
+    if not variants:
+        return type_def.loss_module, type_def.loss_function
+
+    matches = [v for v in variants if not flow_classification_violations(type_def, v.constraints, context)]
+
+    if not matches:
+        return type_def.loss_module, type_def.loss_function
+
+    if len(matches) == 1:
+        winner = matches[0]
+    else:
+        max_specificity = max(_constraint_specificity(v.constraints) for v in matches)
+        top = [v for v in matches if _constraint_specificity(v.constraints) == max_specificity]
+        if len(top) != 1:
+            raise ValueError(
+                "Type '{}': ambiguous loss variant match -- {} variants (out of {} total) tie at the same "
+                "specificity for the current flow classification".format(type_def.id, len(top), len(variants))
+            )
+        winner = top[0]
+
+    return winner.module, winner.function
+
+
 def context_violations(type_def, context):
     """
     Return a list of human-readable constraint violations for the given
@@ -201,35 +328,10 @@ def context_violations(type_def, context):
         # Flow classification (NetworkParser.JunctionAnalysis.flow_class/
         # qualifiers/derived_values) -- independent of topology/family, so a
         # type-def can additionally require e.g. an expansion transition
-        # with an eccentric, single-plane alignment. "qualifiers" is a
-        # dict[str, str]; profile_relation/inlet_profile/outlet_profile are
-        # looked up there too when not given directly in context.
-        if "flow_class" in constraints:
-            _check_rule(violations, type_def, "flow_class", context.get("flow_class"), constraints["flow_class"])
-
-        qualifiers = dict(context.get("qualifiers", {}) or {})
-        for key in ("profile_relation", "inlet_profile", "outlet_profile"):
-            if key in constraints:
-                value = context.get(key, qualifiers.get(key))
-                _check_rule(violations, type_def, key, value, constraints[key])
-
-        if "qualifiers" in constraints:
-            for key, rule in dict(constraints["qualifiers"] or {}).items():
-                _check_rule(violations, type_def, "qualifiers.{}".format(key), qualifiers.get(key), rule)
-
-        # Any other declared constraint key is checked against a matching
-        # derived_values entry (e.g. "area_ratio", "transition_angle") --
-        # numeric values only ever live in derived_values, never qualifiers.
-        derived_values = dict(context.get("derived_values", {}) or {})
-        handled_keys = {
-            "degree", "degree_min", "degree_max",
-            "flow_class", "qualifiers", "profile_relation", "inlet_profile", "outlet_profile",
-        }
-        for key, rule in constraints.items():
-            if key in handled_keys:
-                continue
-            if key in derived_values:
-                _check_rule(violations, type_def, key, derived_values.get(key), rule)
+        # with an eccentric, single-plane alignment. Shared with
+        # resolve_loss_variant()'s own per-variant "constraints" -- see
+        # flow_classification_violations().
+        violations.extend(flow_classification_violations(type_def, constraints, context))
 
     elif category == "segment" and profiles and "Generic" not in profiles:
         profile = str(context.get("profile", "") or "")

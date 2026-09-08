@@ -74,6 +74,25 @@ class HVACGeometryDef:
     descriptor: str = ""
 
 
+@dataclass
+class HVACLossVariantDef:
+    """
+    One conditional entry in a type-def's own "loss.variants" list -- the
+    same physical fitting (one TypeId) can carry several flow-dependent
+    loss formulas (e.g. an ordinary vs. bullhead tee, or an expanding vs.
+    contracting transition) without needing a separate TypeId per flow
+    case. `constraints` is evaluated by
+    `validation.flow_classification_violations()` against the current
+    classification context (flow_class/qualifiers/derived_values/...) --
+    the exact same operators/keys a type-def's own top-level `constraints`
+    uses, just scoped to "which loss function" instead of "which TypeId".
+    See `HVACLibraryRegistry.call_loss()`/`validation.resolve_loss_variant()`.
+    """
+    constraints: dict = field(default_factory=dict)
+    module: str = ""
+    function: str = ""
+
+
 # Selection kinds a type descriptor may declare under "selection.kind".
 SELECTION_KIND_MODEL = "model"
 SELECTION_KIND_PLACEHOLDER = "placeholder"
@@ -134,6 +153,12 @@ class HVACTypeDef:
     lengths_function: str = ""
     loss_module: str = ""
     loss_function: str = ""
+    # Optional flow-dependent loss variants -- see HVACLossVariantDef. Empty
+    # for a type-def using the plain loss_module/loss_function form only
+    # (the common case); when non-empty, resolve_loss_variant() picks
+    # between them per-call, falling back to loss_module/loss_function as
+    # an explicit wildcard/default if none of them apply.
+    loss_variants: list[HVACLossVariantDef] = field(default_factory=list)
     selection: HVACSelectionDef = field(default_factory=HVACSelectionDef)
     # Construction layers this type declares (see library/construction.py
     # and the "construction" JSON block below) -- empty for a type that
@@ -790,11 +815,20 @@ class HVACLibraryRegistry:
             one meaningfully distinct downstream condition).
           - None: the type has no loss function wired up (caller should apply
             a fallback coefficient).
+
+        When the type-def declares `loss.variants` (flow-dependent loss
+        formulas for one physical fitting -- see HVACLossVariantDef), the
+        actual module/function are picked per-call by
+        validation.resolve_loss_variant() from the current classification
+        context (`context["flow_class"]`/`"qualifiers"`/`"derived_values"`,
+        the same shape context_violations() reads); a plain type-def
+        without variants keeps using loss_module/loss_function unchanged.
         """
-        if not type_def.loss_module or not type_def.loss_function:
+        loss_module, loss_function = validation.resolve_loss_variant(type_def, context)
+        if not loss_module or not loss_function:
             return None
-        module = self.import_generator(library_id, type_def.loss_module)
-        func = getattr(module, type_def.loss_function, None)
+        module = self.import_generator(library_id, loss_module)
+        func = getattr(module, loss_function, None)
         if func is None:
             return None
         context["hvac_api"] = HVACLibraryAPI
@@ -946,6 +980,25 @@ class HVACLibraryRegistry:
         gen = raw.get("generator", {}) or {}
         lengths = raw.get("connection_lengths", {}) or {}
         loss = raw.get("loss", {}) or {}
+
+        loss_variants = []
+        for variant_raw in loss.get("variants", []) or []:
+            variant_module = variant_raw.get("module", "")
+            variant_function = variant_raw.get("function", "")
+            if not variant_module or not variant_function:
+                raise ValueError(
+                    "Type '{}' in '{}' has a loss variant with no module/function".format(
+                        raw.get("id", "?"), filepath
+                    )
+                )
+            loss_variants.append(
+                HVACLossVariantDef(
+                    constraints=dict(variant_raw.get("constraints", {}) or {}),
+                    module=variant_module,
+                    function=variant_function,
+                )
+            )
+
         geometry_raw = raw.get("geometry", {}) or {}
         geometry = HVACGeometryDef(
             backend=geometry_raw.get("backend", ""),
@@ -1019,6 +1072,7 @@ class HVACLibraryRegistry:
             lengths_function=lengths.get("function", ""),
             loss_module=loss.get("module", ""),
             loss_function=loss.get("function", ""),
+            loss_variants=loss_variants,
             selection=selection,
             construction=construction,
             features=features,

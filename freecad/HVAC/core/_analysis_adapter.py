@@ -237,6 +237,9 @@ def _build_node_model(
                 family=getattr(junction_obj, "Family", ""),
                 construction=construction,
                 hydraulic_roughness_mm=roughness_mm,
+                flow_class=ja.flow_class,
+                qualifiers=ja.qualifiers,
+                derived_values=ja.derived_values,
             ),
             roughness_mm=roughness_mm,
         )
@@ -281,6 +284,9 @@ def build_loss_evaluator(
     family="",
     construction=None,
     hydraulic_roughness_mm=0.0,
+    flow_class="",
+    qualifiers=None,
+    derived_values=None,
 ):
     """
     A pure callable closing over everything FreeCAD/library-specific this
@@ -288,6 +294,14 @@ def build_loss_evaluator(
     LossEvaluator type. Returns None if this component's type can't be
     resolved at all (analysis/pressure.py's K_DEFAULT fallback then applies,
     exactly like an unresolved type did before this refactor).
+
+    flow_class/qualifiers/derived_values (NetworkParser.JunctionAnalysis --
+    see TOPOLOGY_CLASSIFICATION.md) are only ever meaningful for a node's
+    Primary component (an Inline component has no flow classification of
+    its own, same reasoning as `family` above), and drive
+    HVACLibraryRegistry.call_loss()'s own resolve_loss_variant() so one
+    physical fitting TypeId can carry several flow-dependent loss formulas
+    (e.g. an ordinary vs. bullhead tee) without a separate TypeId per case.
     """
     library_id = getattr(comp_obj, "LibraryId", "")
     type_id = getattr(comp_obj, "TypeId", "")
@@ -326,6 +340,9 @@ def build_loss_evaluator(
             "properties": properties,
             "connected_ports": connected_ports_ctx,
             "family": family,
+            "flow_class": flow_class,
+            "qualifiers": dict(qualifiers or {}),
+            "derived_values": dict(derived_values or {}),
             "type_id": type_id,
             "library_id": library_id,
             "air_density": air.density_kg_m3,

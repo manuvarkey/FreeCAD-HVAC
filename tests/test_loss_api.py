@@ -216,6 +216,78 @@ def test_branch_loss_ambiguous_flow_pattern_returns_none():
 
 
 # ----------------------------------------------------------------------------
+# branch_loss_bullhead (qualifiers["common_leg"] == "branch" -- see
+# NetworkParser.classify_flow / TOPOLOGY_CLASSIFICATION.md)
+# ----------------------------------------------------------------------------
+
+def test_branch_loss_bullhead_diverging_covers_both_run_legs():
+    # Single inlet on the geometric branch leg (-x), splitting into two
+    # collinear run legs (+y/-y) -- a bullhead dividing tee.
+    common = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
+    run_a = _port("RUN_A", (0, 1, 0), False, diameter=200.0, velocity_ms=3.0)
+    run_b = _port("RUN_B", (0, -1, 0), False, diameter=250.0, velocity_ms=2.0)
+    context = {"connected_ports": [common, run_a, run_b], "properties": {}}
+
+    result = api.branch_loss_bullhead(context)
+
+    def _expected(leg, velocity_ms, diameter):
+        a_on_ac = (diameter / 300.0) ** 2
+        v_on_vc = velocity_ms / 5.0
+        # common points -x, leg points +-y -> perpendicular either way.
+        zeta, _ = smacna_loss.diverging_branch_zetas(90.0, a_on_ac, v_on_vc, v_on_vc)
+        return zeta
+
+    assert result == pytest.approx({
+        "RUN_A": _expected("RUN_A", 3.0, 200.0),
+        "RUN_B": _expected("RUN_B", 2.0, 250.0),
+    })
+
+
+def test_branch_loss_bullhead_converging_covers_both_run_legs():
+    # Two collinear run legs (+y/-y) merging into a single outlet on the
+    # geometric branch leg (+x) -- a bullhead combining tee.
+    common = _port("OUT", (1, 0, 0), False, diameter=300.0, velocity_ms=5.0)
+    run_a = _port("RUN_A", (0, 1, 0), True, diameter=200.0, velocity_ms=3.0)
+    run_b = _port("RUN_B", (0, -1, 0), True, diameter=250.0, velocity_ms=2.0)
+    context = {"connected_ports": [common, run_a, run_b], "properties": {}}
+
+    result = api.branch_loss_bullhead(context)
+
+    def _expected(velocity_ms, diameter):
+        a_on_ac = (diameter / 300.0) ** 2
+        v_on_vc = velocity_ms / 5.0
+        zeta, _ = smacna_loss.converging_branch_zetas(90.0, a_on_ac, v_on_vc, v_on_vc)
+        return zeta
+
+    assert result == pytest.approx({
+        "RUN_A": _expected(3.0, 200.0),
+        "RUN_B": _expected(2.0, 250.0),
+    })
+
+
+def test_branch_loss_bullhead_zero_common_flow_returns_zero_not_none():
+    common = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=0.0)
+    run_a = _port("RUN_A", (0, 1, 0), False, diameter=200.0, velocity_ms=0.0)
+    run_b = _port("RUN_B", (0, -1, 0), False, diameter=200.0, velocity_ms=0.0)
+    context = {"connected_ports": [common, run_a, run_b], "properties": {}}
+    assert api.branch_loss_bullhead(context) == {"RUN_A": 0.0, "RUN_B": 0.0}
+
+
+def test_branch_loss_bullhead_wrong_port_count_returns_none():
+    common = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
+    context = {"connected_ports": [common], "properties": {}}
+    assert api.branch_loss_bullhead(context) is None
+
+
+def test_branch_loss_bullhead_ambiguous_flow_pattern_returns_none():
+    p1 = _port("A", (1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
+    p2 = _port("B", (0, 1, 0), True, diameter=300.0, velocity_ms=5.0)
+    p3 = _port("C", (0, 0, 1), True, diameter=300.0, velocity_ms=5.0)
+    context = {"connected_ports": [p1, p2, p3], "properties": {}}
+    assert api.branch_loss_bullhead(context) is None
+
+
+# ----------------------------------------------------------------------------
 # manifold_loss
 # ----------------------------------------------------------------------------
 

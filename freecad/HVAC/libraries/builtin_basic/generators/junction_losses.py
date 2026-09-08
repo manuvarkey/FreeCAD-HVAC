@@ -76,6 +76,39 @@ def loss_wye_generic(context):
     return context["loss_api"].branch_loss(context)
 
 
+# ----------------------------------------------------------------------
+# Flow-dependent loss variants (see freecad/HVAC/library/Library.py's
+# HVACLossVariantDef / validation.resolve_loss_variant): one physical
+# fitting TypeId can carry several of these, picked per-call from the
+# classifier's own flow_class/qualifiers["common_leg"] rather than
+# needing a separate TypeId per flow case -- see each JSON type-def's own
+# "loss.variants" and TOPOLOGY_CLASSIFICATION.md.
+# ----------------------------------------------------------------------
+
+def loss_transition_expansion(context):
+    return context["loss_api"].transition_loss(context)
+
+
+def loss_transition_contraction(context):
+    return context["loss_api"].transition_loss(context)
+
+
+def loss_branch_diverging_run(context):
+    return context["loss_api"].branch_loss(context)
+
+
+def loss_branch_converging_run(context):
+    return context["loss_api"].branch_loss(context)
+
+
+def loss_branch_diverging_branch(context):
+    return context["loss_api"].branch_loss_bullhead(context)
+
+
+def loss_branch_converging_branch(context):
+    return context["loss_api"].branch_loss_bullhead(context)
+
+
 def loss_cross_generic(context):
     result = context["loss_api"].manifold_loss(context)
     return result if result is not None else 0.75

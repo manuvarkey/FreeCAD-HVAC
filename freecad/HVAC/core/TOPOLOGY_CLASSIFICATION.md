@@ -128,7 +128,11 @@ solver.
 
 A type-def's JSON `constraints` can filter on any of these -- see
 `freecad/HVAC/library/validation.py`'s `context_violations()` and
-`freecad/HVAC/libraries/README.md`.
+`freecad/HVAC/libraries/README.md`. The same classification also drives a
+type-def's optional `loss.variants` (picking a *loss formula* for an
+already-selected TypeId, e.g. an ordinary vs. bullhead tee, rather than
+picking the TypeId itself) via `validation.resolve_loss_variant()` --
+see `freecad/HVAC/libraries/README.md`'s "Flow-dependent loss variants".
 
 A new family string has no effect on its own — it only becomes reachable
 once some type-def's `family` list references its dotted key. If a real

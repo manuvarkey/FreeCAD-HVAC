@@ -208,6 +208,80 @@ class HVACLossAPI:
             return None
 
     @staticmethod
+    def branch_loss_bullhead(context):
+        """
+        Bullhead tee/wye: the single common-flow port sits on the
+        geometric *branch* leg instead of the run (see NetworkParser's
+        qualifiers["common_leg"] == "branch" -- library JSON loss.variants
+        route here for exactly that case, distinct from the ordinary
+        common_leg == "run" case branch_loss() above already handles
+        correctly). Expects exactly 3 connected_ports.
+
+        No SMACNA table treats a bullhead arrangement as its own entry
+        (neither run leg gets the "straight-through continuation" the
+        table's branch/straight split assumes), so each run leg is
+        evaluated independently against the common leg with the same
+        diverging/converging branch-zeta tables an ordinary tee's own
+        branch leg uses -- a reasonable estimate, not a validated table
+        value.
+
+        Returns {run_leg_edge_key: K, ...} (one entry per run leg, each
+        already referenced to that leg's own velocity), or None.
+        """
+        try:
+            ports = HVACLibraryAPI.connected_ports(context)
+            if len(ports) != 3:
+                return None
+
+            inlets = [p for p in ports if p.get("flow_into_junction") is True]
+            outlets = [p for p in ports if p.get("flow_into_junction") is False]
+
+            if len(inlets) == 1 and len(outlets) == 2:
+                diverging = True
+                common, run_legs = inlets[0], outlets
+            elif len(inlets) == 2 and len(outlets) == 1:
+                diverging = False
+                common, run_legs = outlets[0], inlets
+            else:
+                return None  # ambiguous/degenerate flow pattern
+
+            v_common = float(common.get("velocity_ms", 0.0) or 0.0)
+            if v_common <= 1e-9:
+                return {leg["edge_key"]: 0.0 for leg in run_legs}
+
+            a_common = HVACLibraryAPI.port_area(common)
+            if a_common <= 0.0:
+                return None
+
+            common_dir = HVACLibraryAPI.vec(common["direction"])
+
+            result = {}
+            for leg in run_legs:
+                a_leg = HVACLibraryAPI.port_area(leg)
+                if a_leg <= 0.0:
+                    return None
+
+                leg_dir = HVACLibraryAPI.vec(leg["direction"])
+                cos_angle = max(-1.0, min(1.0, leg_dir.dot(common_dir)))
+                angle_deg = 180.0 - math.degrees(math.acos(cos_angle))
+
+                a_on_ac = a_leg / a_common
+                v_on_vc = float(leg.get("velocity_ms", 0.0) or 0.0) / v_common
+                # No independent "straight-through" leg exists in a bullhead
+                # arrangement, so the reference velocity ratio the table
+                # otherwise expects for it is undefined -- reuse this leg's
+                # own ratio for both table arguments.
+                if diverging:
+                    zeta_leg, _ = smacna_loss.diverging_branch_zetas(angle_deg, a_on_ac, v_on_vc, v_on_vc)
+                else:
+                    zeta_leg, _ = smacna_loss.converging_branch_zetas(angle_deg, a_on_ac, v_on_vc, v_on_vc)
+                result[leg["edge_key"]] = zeta_leg
+
+            return result
+        except Exception:
+            return None
+
+    @staticmethod
     def manifold_loss(context):
         """
         Cross (4-port) or multiport (5+ port) fitting loss, for the common

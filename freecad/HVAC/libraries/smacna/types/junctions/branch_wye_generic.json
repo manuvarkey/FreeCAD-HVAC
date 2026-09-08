@@ -122,6 +122,40 @@
   },
   "loss": {
     "module": "junction_losses",
-    "function": "loss_wye_generic"
+    "function": "loss_wye_generic",
+    "variants": [
+      {
+        "constraints": {
+          "flow_class": {"enum": ["diverging"]},
+          "qualifiers": {"common_leg": {"enum": ["run"]}}
+        },
+        "module": "junction_losses",
+        "function": "loss_branch_diverging_run"
+      },
+      {
+        "constraints": {
+          "flow_class": {"enum": ["converging"]},
+          "qualifiers": {"common_leg": {"enum": ["run"]}}
+        },
+        "module": "junction_losses",
+        "function": "loss_branch_converging_run"
+      },
+      {
+        "constraints": {
+          "flow_class": {"enum": ["diverging"]},
+          "qualifiers": {"common_leg": {"enum": ["branch"]}}
+        },
+        "module": "junction_losses",
+        "function": "loss_branch_diverging_branch"
+      },
+      {
+        "constraints": {
+          "flow_class": {"enum": ["converging"]},
+          "qualifiers": {"common_leg": {"enum": ["branch"]}}
+        },
+        "module": "junction_losses",
+        "function": "loss_branch_converging_branch"
+      }
+    ]
   }
 }

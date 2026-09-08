@@ -70,7 +70,10 @@ def test_component_models_use_their_own_construction_roughness(monkeypatch):
             getPortChains=lambda: {"edge": [inline, fallback]},
         ),
     )
-    analysis = SimpleNamespace(connected_ports=[], topology="through", degree=2)
+    analysis = SimpleNamespace(
+        connected_ports=[], topology="through", degree=2,
+        flow_class="unknown", qualifiers={}, derived_values={},
+    )
     registry = SimpleNamespace(resolve_type=lambda library_id, type_id: None)
 
     roughness = {"Primary": 0.12, "Inline": 0.24}
@@ -102,7 +105,10 @@ def test_node_model_reads_flow_boundary_off_the_junction(monkeypatch):
     monkeypatch.setattr(
         _analysis_adapter, "construction_for", lambda obj: SimpleNamespace(hydraulic_roughness=lambda default: default)
     )
-    analysis = SimpleNamespace(connected_ports=[], topology="end", degree=1)
+    analysis = SimpleNamespace(
+        connected_ports=[], topology="end", degree=1,
+        flow_class="unknown", qualifiers={}, derived_values={},
+    )
     registry = SimpleNamespace(resolve_type=lambda library_id, type_id: None)
 
     closed_junction = SimpleNamespace(DesignFlowRate=999.0, FlowBoundary="Closed", Family="", Proxy=SimpleNamespace(
