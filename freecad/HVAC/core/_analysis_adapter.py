@@ -35,6 +35,7 @@ or a library type-def.
 """
 
 import json
+import math
 import re
 
 from ..analysis.model import ComponentModel, NetworkModel, NodeModel, PortModel, SectionModel, SegmentModel, AirState
@@ -302,7 +303,14 @@ def build_loss_evaluator(
     HVACLibraryRegistry.call_loss()'s own resolve_loss_variant() so one
     physical fitting TypeId can carry several flow-dependent loss formulas
     (e.g. an ordinary vs. bullhead tee) without a separate TypeId per case.
+
+    If the component's own LossCoefficientSource is "Custom", the library's
+    loss formula is bypassed entirely in favor of user-supplied per-port K
+    values -- see _build_custom_loss_evaluator().
     """
+    if str(getattr(comp_obj, "LossCoefficientSource", "Library") or "Library") == "Custom":
+        return _build_custom_loss_evaluator(comp_obj)
+
     library_id = getattr(comp_obj, "LibraryId", "")
     type_id = getattr(comp_obj, "TypeId", "")
     type_def = reg.resolve_type(library_id, type_id) if library_id and type_id else None
@@ -349,5 +357,83 @@ def build_loss_evaluator(
             "air_kinematic_viscosity": air.kinematic_viscosity_m2_s,
         }
         return reg.call_loss(library_id, type_def, context)
+
+    return evaluate
+
+
+def _build_custom_loss_evaluator(comp_obj):
+    """
+    LossCoefficientSource == "Custom" path: map CustomLossCoefficients
+    (one K per LocalPortsJson entry, same order) onto each port's own
+    edge_key, entirely bypassing the library's own loss formula.
+
+    Config is validated up front, not lazily inside the returned callable,
+    so a bad Custom setup fails as soon as the network model is built --
+    "fail clearly during analysis" per the feature's own contract, the same
+    way library/validation.py raises ValueError for a malformed type-def
+    property rather than silently falling back to a default.
+    """
+    local_ports = json.loads(getattr(comp_obj, "LocalPortsJson", "") or "[]")
+    custom_k = list(getattr(comp_obj, "CustomLossCoefficients", None) or [])
+    label = element_identifier(comp_obj)
+
+    # Step 1/2 (read): local_ports/custom_k above, straight off the object.
+    # Step 3: length must match 1:1 -- the mapping is purely positional.
+    if len(custom_k) != len(local_ports):
+        raise ValueError(
+            "Component '{}': CustomLossCoefficients has {} value(s) but LocalPortsJson has {} "
+            "port(s) -- they must match 1:1.".format(label, len(custom_k), len(local_ports))
+        )
+
+    # Step 4: every K must be a finite, non-negative number.
+    for index, raw_k in enumerate(custom_k):
+        try:
+            k_value = float(raw_k)
+        except (TypeError, ValueError):
+            k_value = float("nan")
+        if not math.isfinite(k_value) or k_value < 0.0:
+            raise ValueError(
+                "Component '{}': custom loss coefficient at port index {} is '{}' -- K must be "
+                "finite and >= 0.".format(label, index, raw_k)
+            )
+
+    # Every port needs a real edge_key to map its K onto -- without one
+    # there's nothing for the pressure solver to key its result dict by.
+    for index, port in enumerate(local_ports):
+        if not port.get("edge_key"):
+            raise ValueError(
+                "Component '{}': local port at index {} has no edge_key -- can't map its custom K.".format(
+                    label, index
+                )
+            )
+
+    def evaluate(port_velocities):
+        # Step 5/6: build {edge_key: K}, same contract pressure.py already
+        # consumes for a library loss result.
+        #
+        # A degree-1 component (e.g. a terminal diffuser) has only one real
+        # duct connection to reference a loss against at all, so its single
+        # K always applies, whatever its own flow_into_junction happens to
+        # be -- exactly like loss_api.py's own terminal_component_loss,
+        # which returns its one port's K unconditionally, with no
+        # inlet/outlet check.
+        if len(local_ports) == 1:
+            return {local_ports[0]["edge_key"]: float(custom_k[0])}
+
+        # A multi-port component (e.g. a tee) only gets a K applied at its
+        # outlet ports (flow leaving the node into that edge) -- the same
+        # "fitting loss attributed at outlet ports only" convention the
+        # solver's own uniform/float-K branch applies (see pressure.py's own
+        # comment on that), and the same shape loss_api.py's own branch_loss
+        # returns (an entry per downstream leg, never the inlet). Which
+        # ports are outlets is decided by each port's own flow_into_junction,
+        # already resolved for the current flow direction when
+        # LocalPortsJson was last composed, so this stays correct even if
+        # flow direction changes.
+        return {
+            port["edge_key"]: float(k)
+            for port, k in zip(local_ports, custom_k)
+            if not port.get("flow_into_junction")
+        }
 
     return evaluate

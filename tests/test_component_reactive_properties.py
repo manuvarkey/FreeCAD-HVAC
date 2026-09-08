@@ -584,3 +584,101 @@ def test_sync_flow_boundary_reasserts_locked_type_every_sync(monkeypatch):
     assert parent.DesignFlowRate == 0.0
     assert obj._editor_modes["FlowBoundary"] == 1  # read-only, not hidden -- locked but still visible
     assert obj._editor_modes["DesignFlowRate"] == 1
+
+
+# ----------------------------------------------------------------------
+# LossCoefficientSource / CustomLossCoefficients -- lets a user override the
+# selected library type's own loss formula with explicit per-port K values.
+# See Component.py's setProperties()/onChanged()/_syncCustomLossCoefficients.
+# ----------------------------------------------------------------------
+
+def test_setproperties_defaults_loss_coefficient_source_to_library_read_only(monkeypatch):
+    monkeypatch.setattr(
+        component_mod.hvaclib.HVACLibraryService, "get_active_hvac_library", staticmethod(lambda: None)
+    )
+    obj = FakeDuctObj()
+    _bare_component(obj).setProperties(obj)
+
+    assert obj.LossCoefficientSource == "Library"
+    assert not obj.CustomLossCoefficients  # empty -- no local ports established yet
+    assert obj._editor_modes["CustomLossCoefficients"] == 1  # read-only while source is Library
+
+
+def test_setproperties_makes_custom_loss_coefficients_editable_on_restore_when_source_is_custom(monkeypatch):
+    """
+    A document opened with LossCoefficientSource already 'Custom' (e.g. a
+    saved file) must come back with CustomLossCoefficients editable again --
+    onChanged() doesn't fire on restore, so setProperties() itself has to
+    re-derive the editor mode from whatever value was loaded.
+    """
+    monkeypatch.setattr(
+        component_mod.hvaclib.HVACLibraryService, "get_active_hvac_library", staticmethod(lambda: None)
+    )
+    obj = FakeDuctObj()
+    _bare_component(obj).setProperties(obj)
+    obj.LossCoefficientSource = "Custom"
+
+    # Simulate onDocumentRestored(): setProperties() runs again against the
+    # already-populated object, with no onChanged() call in between.
+    _bare_component(obj).setProperties(obj)
+
+    assert obj._editor_modes["CustomLossCoefficients"] == 0
+
+
+def test_on_changed_toggles_custom_loss_coefficients_editor_mode():
+    obj = FakeDuctObj()
+    obj.addProperty("App::PropertyEnumeration", "LossCoefficientSource", "Airflow", "")
+    obj.addProperty("App::PropertyFloatList", "CustomLossCoefficients", "Airflow", "")
+    obj.LossCoefficientSource = "Custom"
+
+    dc = _bare_component(obj)
+    dc.onChanged(obj, "LossCoefficientSource")
+    assert obj._editor_modes["CustomLossCoefficients"] == 0
+
+    obj.LossCoefficientSource = "Library"
+    dc.onChanged(obj, "LossCoefficientSource")
+    assert obj._editor_modes["CustomLossCoefficients"] == 1
+
+
+def test_sync_custom_loss_coefficients_pads_new_ports_with_zero_and_preserves_existing():
+    obj = FakeDuctObj()
+    obj.addProperty("App::PropertyFloatList", "CustomLossCoefficients", "Airflow", "")
+    obj.CustomLossCoefficients = [0.0, 0.18]
+
+    dc = _bare_component(obj)
+    dc._syncCustomLossCoefficients(obj, [
+        _port("run_in", "end", True), _port("run_out", "start", False), _port("branch", "start", False),
+    ])
+
+    assert obj.CustomLossCoefficients == [0.0, 0.18, 0.0]
+
+
+def test_sync_custom_loss_coefficients_truncates_obsolete_trailing_entries():
+    obj = FakeDuctObj()
+    obj.addProperty("App::PropertyFloatList", "CustomLossCoefficients", "Airflow", "")
+    obj.CustomLossCoefficients = [0.0, 0.18, 1.05]
+
+    dc = _bare_component(obj)
+    dc._syncCustomLossCoefficients(obj, [_port("A", "end", True), _port("B", "start", False)])
+
+    assert obj.CustomLossCoefficients == [0.0, 0.18]
+
+
+def test_execute_syncs_custom_loss_coefficients_to_local_port_count(monkeypatch):
+    obj = FakeDuctObj()
+    obj.LibraryId = "smacna"
+    obj.TypeId = "branch_tee_generic"
+    obj.LocalPortsJson = json.dumps([
+        _port("run_in", "end", True), _port("run_out", "start", False), _port("branch", "start", False),
+    ])
+    obj.addProperty("App::PropertyFloatList", "CustomLossCoefficients", "Airflow", "")
+    obj.CustomLossCoefficients = [0.0, 0.18]  # stale: only 2 entries for what is now a 3-port tee
+    _give_single_implicit_layer(obj)
+
+    geometry_result = {"shape": object(), "connection_lengths": [], "computed_properties": {}}
+    _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([]), geometry_result))
+
+    dc = _bare_component(obj)
+    dc.execute(obj)
+
+    assert obj.CustomLossCoefficients == [0.0, 0.18, 0.0]

@@ -1,8 +1,10 @@
 """Focused tests for construction-derived analysis inputs and diagnostic labels."""
 
+import json
 from types import SimpleNamespace
 
 import conftest  # noqa: F401 -- installs FreeCAD/Materials stubs
+import pytest
 
 from freecad.HVAC.core import _analysis_adapter
 
@@ -157,3 +159,177 @@ def test_loss_evaluator_exposes_component_construction_and_roughness():
     assert evaluator({}) == 0.3
     assert captured["construction"] is construction
     assert captured["hydraulic_roughness_mm"] == 0.12
+
+
+# ----------------------------------------------------------------------
+# LossCoefficientSource == "Custom": per-port K bypasses the library's own
+# loss formula entirely -- see Component.py's CustomLossCoefficients and
+# _analysis_adapter._build_custom_loss_evaluator().
+# ----------------------------------------------------------------------
+
+def _port(edge_key, flow_into_junction):
+    return {"edge_key": edge_key, "flow_into_junction": flow_into_junction, "position": [0.0, 0.0, 0.0]}
+
+
+class _UncalledRegistry:
+    """A registry whose call_loss must never be reached in Custom mode."""
+
+    @staticmethod
+    def resolve_type(library_id, type_id):
+        raise AssertionError("resolve_type must not be called for LossCoefficientSource='Custom'")
+
+    @staticmethod
+    def call_loss(library_id, type_def, context):
+        raise AssertionError("call_loss must not be called for LossCoefficientSource='Custom'")
+
+
+def test_custom_loss_evaluator_two_port_component():
+    """A 2-port inline device: only the outlet port's own K is returned, keyed by its edge_key."""
+    component = SimpleNamespace(
+        Name="Comp1", LossCoefficientSource="Custom",
+        LocalPortsJson=json.dumps([_port("A", True), _port("B", False)]),
+        CustomLossCoefficients=[0.0, 0.42],
+    )
+    evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
+
+    assert evaluator({}) == {"B": 0.42}
+
+
+def test_custom_loss_evaluator_three_port_tee_run_and_branch_k():
+    """A 3-port tee (run inlet, run outlet, branch outlet): both outlets get their own distinct K."""
+    component = SimpleNamespace(
+        Name="Tee1", LossCoefficientSource="Custom",
+        LocalPortsJson=json.dumps([_port("run_in", True), _port("run_out", False), _port("branch", False)]),
+        CustomLossCoefficients=[0.0, 0.18, 1.05],
+    )
+    evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
+
+    assert evaluator({}) == {"run_out": 0.18, "branch": 1.05}
+
+
+def test_custom_loss_evaluator_applies_single_port_k_unconditionally():
+    """
+    A degree-1 terminal (e.g. a diffuser) has only one real duct connection
+    to reference a loss against, so its one K must always apply -- whatever
+    its own flow_into_junction happens to be -- matching loss_api.py's own
+    terminal_component_loss, which never filters its single port either.
+    """
+    inlet_terminal = SimpleNamespace(
+        Name="Terminal1", LossCoefficientSource="Custom",
+        LocalPortsJson=json.dumps([_port("A", True)]),
+        CustomLossCoefficients=[0.6],
+    )
+    evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), inlet_terminal, air=SimpleNamespace())
+    assert evaluator({}) == {"A": 0.6}
+
+    outlet_terminal = SimpleNamespace(
+        Name="Terminal2", LossCoefficientSource="Custom",
+        LocalPortsJson=json.dumps([_port("A", False)]),
+        CustomLossCoefficients=[0.6],
+    )
+    evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), outlet_terminal, air=SimpleNamespace())
+    assert evaluator({}) == {"A": 0.6}
+
+
+def test_loss_evaluator_switches_between_library_and_custom():
+    """Flipping LossCoefficientSource must switch the evaluation path, not blend the two."""
+    type_def = SimpleNamespace(properties=[])
+    registry = SimpleNamespace(
+        resolve_type=lambda library_id, type_id: type_def,
+        call_loss=lambda library_id, resolved_type, context: 0.75,
+    )
+    air = SimpleNamespace(density_kg_m3=1.204, kinematic_viscosity_m2_s=1.51e-5)
+    component = SimpleNamespace(
+        Name="Comp1", LibraryId="smacna", TypeId="through_damper_generic",
+        LossCoefficientSource="Library",
+        LocalPortsJson=json.dumps([_port("A", True), _port("B", False)]),
+        CustomLossCoefficients=[0.0, 0.5],
+    )
+
+    library_evaluator = _analysis_adapter.build_loss_evaluator(registry, component, air)
+    assert library_evaluator({}) == 0.75
+
+    component.LossCoefficientSource = "Custom"
+    custom_evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air)
+    assert custom_evaluator({}) == {"B": 0.5}
+
+    component.LossCoefficientSource = "Library"
+    library_evaluator_again = _analysis_adapter.build_loss_evaluator(registry, component, air)
+    assert library_evaluator_again({}) == 0.75
+
+
+def test_custom_loss_evaluator_accepts_zero_as_valid_explicit_k():
+    component = SimpleNamespace(
+        Name="Comp1", LossCoefficientSource="Custom",
+        LocalPortsJson=json.dumps([_port("A", True), _port("B", False)]),
+        CustomLossCoefficients=[0.0, 0.0],
+    )
+    evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
+
+    assert evaluator({}) == {"B": 0.0}
+
+
+def test_custom_loss_evaluator_rejects_negative_k():
+    component = SimpleNamespace(
+        Name="Comp1", LossCoefficientSource="Custom",
+        LocalPortsJson=json.dumps([_port("A", True), _port("B", False)]),
+        CustomLossCoefficients=[0.0, -0.1],
+    )
+    with pytest.raises(ValueError):
+        _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
+
+
+def test_custom_loss_evaluator_rejects_non_finite_k():
+    component = SimpleNamespace(
+        Name="Comp1", LossCoefficientSource="Custom",
+        LocalPortsJson=json.dumps([_port("A", True), _port("B", False)]),
+        CustomLossCoefficients=[0.0, float("inf")],
+    )
+    with pytest.raises(ValueError):
+        _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
+
+
+def test_custom_loss_evaluator_rejects_mismatched_list_length():
+    component = SimpleNamespace(
+        Name="Comp1", LossCoefficientSource="Custom",
+        LocalPortsJson=json.dumps([_port("A", True), _port("B", False), _port("C", False)]),
+        CustomLossCoefficients=[0.0, 0.5],  # only 2 values for 3 ports
+    )
+    with pytest.raises(ValueError):
+        _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
+
+
+def test_custom_loss_evaluator_rejects_port_missing_edge_key():
+    component = SimpleNamespace(
+        Name="Comp1", LossCoefficientSource="Custom",
+        LocalPortsJson=json.dumps([{"flow_into_junction": True}, _port("B", False)]),
+        CustomLossCoefficients=[0.0, 0.5],
+    )
+    with pytest.raises(ValueError):
+        _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
+
+
+def test_library_loss_behaviour_unchanged_when_source_is_library():
+    """Default/explicit 'Library' source must still call reg.call_loss exactly as before this feature."""
+    captured = {}
+    type_def = SimpleNamespace(properties=[])
+
+    class Registry:
+        @staticmethod
+        def resolve_type(library_id, type_id):
+            return type_def
+
+        @staticmethod
+        def call_loss(library_id, resolved_type, context):
+            captured.update(context)
+            return 0.3
+
+    component = SimpleNamespace(
+        LibraryId="smacna", TypeId="through_elbow_rectangular", LocalPortsJson="[]",
+        LossCoefficientSource="Library",
+    )
+    air = SimpleNamespace(density_kg_m3=1.204, kinematic_viscosity_m2_s=1.51e-5)
+    evaluator = _analysis_adapter.build_loss_evaluator(Registry(), component, air)
+
+    assert evaluator({}) == 0.3
+    assert captured["library_id"] == "smacna"

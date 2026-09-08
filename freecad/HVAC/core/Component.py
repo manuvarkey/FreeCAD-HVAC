@@ -112,6 +112,12 @@ class DuctComponent:
             ports = json.loads(raw_ports)
         except Exception:
             return
+
+        # Keep CustomLossCoefficients sized to exactly one K per local port
+        # every time the port list itself changes -- see the property's own
+        # comment in setProperties() for why this can't wait for a user edit.
+        self._syncCustomLossCoefficients(obj, ports)
+
         # A Primary component standing in for a whole non-through junction
         # (a tee, cross, multiport, or end/terminal device) carries however
         # many real ports that node actually has -- 1, 3, 4, ... -- not
@@ -302,7 +308,41 @@ class DuctComponent:
         finally:
             self._mirroring_design_flow_rate = False
 
+    @staticmethod
+    def _syncCustomLossCoefficients(obj, ports):
+        """
+        Keep CustomLossCoefficients sized to exactly one K per entry in
+        `ports` (LocalPortsJson, already parsed), preserving existing values
+        at unchanged indices, padding new ports with 0.0, and truncating
+        trailing entries for ports that no longer exist. The mapping always
+        follows LocalPortsJson's own stable order -- never current
+        inlet/outlet role, since that can flip with flow direction.
+        """
+        if "CustomLossCoefficients" not in obj.PropertiesList:
+            return
+        target_len = len(ports)
+        current = list(getattr(obj, "CustomLossCoefficients", None) or [])
+        if len(current) == target_len:
+            return
+        resized = current[:target_len] + [0.0] * (target_len - len(current))
+        obj.CustomLossCoefficients = resized
+
+    @staticmethod
+    def _syncLossCoefficientEditorMode(obj):
+        """CustomLossCoefficients is only editable while LossCoefficientSource == 'Custom' -- read-only otherwise."""
+        if "CustomLossCoefficients" not in obj.PropertiesList:
+            return
+        source = str(getattr(obj, "LossCoefficientSource", "Library") or "Library")
+        try:
+            obj.setEditorMode("CustomLossCoefficients", 0 if source == "Custom" else 1)
+        except Exception:
+            pass
+
     def onChanged(self, obj, prop):
+        if prop == "LossCoefficientSource":
+            self._syncLossCoefficientEditorMode(obj)
+            return
+
         if prop == "FlowBoundary" and not self._mirroring_flow_boundary:
             if getattr(obj, "ComponentRole", "") != "Primary":
                 return
@@ -431,6 +471,38 @@ class DuctComponent:
                 obj.setEditorMode(prop, 1)
             except Exception:
                 pass
+
+        # Lets a user override the selected library type's own loss formula
+        # with explicit per-port K values -- e.g. a manufacturer datasheet
+        # gives a different K than the generic library formula. Analysis
+        # only, never affects geometry, so both are Prop_NoRecompute (16).
+        # Not named "LossCoefficient" -- some library types' own JSON
+        # type-def properties already use that exact name (see
+        # library/loss_api.py's terminal_component_loss/inline_device_loss),
+        # and this is a distinct, core DuctComponent property.
+        if "LossCoefficientSource" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyEnumeration", "LossCoefficientSource", "Airflow",
+                "Loss coefficient (K) source for this component: 'Library' uses the selected type's "
+                "own loss formula, 'Custom' uses per-port K values from CustomLossCoefficients instead",
+                16,
+            )
+            obj.LossCoefficientSource = ["Library", "Custom"]
+            obj.LossCoefficientSource = "Library"
+
+        # One K per local port, in LocalPortsJson's own order (index-for-
+        # index, e.g. a 3-port tee: [run-inlet K, run-outlet K, branch K]) --
+        # never re-derived from current inlet/outlet role, since flow
+        # direction (and so which ports are inlets/outlets) can change.
+        # Kept in sync with the port list by _syncCustomLossCoefficients(),
+        # called every execute() alongside LocalPortsJson itself.
+        self._addProperty(
+            obj, "App::PropertyFloatList", "CustomLossCoefficients", "Airflow",
+            "Custom per-port loss coefficients (K), one entry per local port in LocalPortsJson's "
+            "own order. Used only when LossCoefficientSource is 'Custom'.",
+            16,
+        )
+        self._syncLossCoefficientEditorMode(obj)
 
         if not getattr(obj, "LibraryId", ""):
             lib = hvaclib.HVACLibraryService.get_active_hvac_library()
