@@ -215,3 +215,67 @@ def test_execute_applies_computed_properties_to_matching_object_property(monkeyp
     assert obj.angle == 42.0
     assert not hasattr(obj, "not_a_real_property")
     assert obj.Layer_shape_Shape is geometry_result["shape"]
+
+
+def test_execute_folds_attachment_offset_into_effective_points_without_a_source_edge(monkeypatch):
+    """
+    A segment with no routable source edge (e.g. defined directly by
+    StartPoint/EndPoint, no sketch geometry) must still honor a non-default
+    Attachment/Offset -- both in the geometry it builds (context["start_point"]/
+    ["end_point"], used by the real duct solid) and in EffectiveStartPoint/
+    EffectiveEndPoint themselves, so anything reading those two properties
+    (e.g. the airflow-result overlay) sees the actual, placement-shifted
+    duct rather than its raw, unshifted centerline.
+    """
+    monkeypatch.setattr(segment_mod.DuctSegment, "resolveSourceEdge", lambda self: None)
+
+    section_params = {"Width": 200.0, "Height": 100.0}
+    direction = FreeCAD.Vector(1.0, 0.0, 0.0)
+    user_offset = FreeCAD.Vector(0.0, 0.0, 20.0)
+    expected_shift = segment_mod.hvaclib.compute_port_position(
+        base_point=FreeCAD.Vector(0.0, 0.0, 0.0),
+        direction=direction,
+        section_params=section_params,
+        attachment="TopCenter",
+        user_offset_vec=user_offset,
+        profile_x_axis=None,
+    )
+    assert expected_shift.Length > 1e-6  # sanity: TopCenter+Offset must actually shift something
+
+    obj = FakeSegmentObj()
+    obj.LibraryId = "smacna"
+    obj.TypeId = "rectangular_straight"
+    obj.StartPoint = FreeCAD.Vector(0.0, 0.0, 0.0)
+    obj.EndPoint = FreeCAD.Vector(1000.0, 0.0, 0.0)
+    obj.StartDirection = FreeCAD.Vector(direction)
+    obj.EndDirection = FreeCAD.Vector(direction)
+    obj.Attachment = "TopCenter"
+    obj.Offset = user_offset
+    obj.Profile = "Rectangular"
+    obj.Width = section_params["Width"]
+    obj.Height = section_params["Height"]
+    obj.Label = "Segment"
+    _give_single_implicit_layer(obj)
+
+    geometry_result = {"shape": object(), "connection_lengths": [], "computed_properties": {}}
+    captured = {}
+
+    class _CapturingRegistry(_FakeExecuteRegistry):
+        def resolve_params(self, type_def, obj=None):
+            return section_params
+
+        def build_geometry(self, lib_id, type_def, context):
+            captured.update(context)
+            return super().build_geometry(lib_id, type_def, context)
+
+    _patch_registry(monkeypatch, _CapturingRegistry(_FakeTypeDef([]), geometry_result))
+
+    ds = _bare_segment(obj)
+    ds.execute(obj)
+
+    expected_start = FreeCAD.Vector(0.0, 0.0, 0.0) + expected_shift
+    expected_end = FreeCAD.Vector(1000.0, 0.0, 0.0) + expected_shift
+    assert obj.EffectiveStartPoint == expected_start
+    assert obj.EffectiveEndPoint == expected_end
+    assert captured["start_point"] == expected_start
+    assert captured["end_point"] == expected_end

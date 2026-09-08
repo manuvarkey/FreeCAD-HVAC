@@ -115,7 +115,7 @@ class DuctSegment:
                     user_offset=user_offset,
                     profile_x_axis=profile_x_axis,
                 )
-        
+
                 if routed_edge is not None:
                     path_edge = routed_edge
                     path_kind = hvaclib.EdgeKind(routed_edge)
@@ -125,7 +125,35 @@ class DuctSegment:
                     end_dir = red
                 else:
                     path_kind = hvaclib.EdgeKind(edge)
-    
+            elif start_dir is not None:
+                # No routable source edge (e.g. a segment defined directly by
+                # start/end points, no sketch geometry) -- still apply the
+                # same Attachment/Offset shift an edge-based segment gets
+                # from makeTrimmedShiftedEdge above, so a basic/straight duct
+                # honors them too instead of only ever running through its
+                # raw, unshifted centerline.
+                shift = hvaclib.compute_port_position(
+                    base_point=FreeCAD.Vector(0, 0, 0),
+                    direction=start_dir,
+                    section_params=params,
+                    attachment=attachment,
+                    user_offset_vec=FreeCAD.Vector(user_offset),
+                    profile_x_axis=profile_x_axis,
+                )
+                start_point = start_point + shift
+                end_point = end_point + shift
+
+            # EffectiveStartPoint/EffectiveEndPoint are the final, placement-
+            # inclusive points actually used to build the duct solid above --
+            # publish them back so anything reading these two properties
+            # (e.g. the airflow-result overlay in ui/Observer.py) sees the
+            # real geometry, not just the pre-shift trim points updateMetadata()
+            # first seeded them with.
+            if getattr(obj, "EffectiveStartPoint", None) != start_point:
+                obj.EffectiveStartPoint = start_point
+            if getattr(obj, "EffectiveEndPoint", None) != end_point:
+                obj.EffectiveEndPoint = end_point
+
             context = {
                 "obj": obj,
                 "start_point": start_point,
@@ -176,8 +204,8 @@ class DuctSegment:
         
         self._addProperty(obj, "App::PropertyLength", "TrimStart", "HVAC", "Trim length at start node")
         self._addProperty(obj, "App::PropertyLength", "TrimEnd", "HVAC", "Trim length at end node")
-        self._addProperty(obj, "App::PropertyVector", "EffectiveStartPoint", "HVAC", "Trimmed segment start point")
-        self._addProperty(obj, "App::PropertyVector", "EffectiveEndPoint", "HVAC", "Trimmed segment end point")
+        self._addProperty(obj, "App::PropertyVector", "EffectiveStartPoint", "HVAC", "Trimmed segment start point, including the Attachment/Offset shift")
+        self._addProperty(obj, "App::PropertyVector", "EffectiveEndPoint", "HVAC", "Trimmed segment end point, including the Attachment/Offset shift")
         self._addProperty(obj, "App::PropertyLength", "EffectiveLength", "HVAC", "Trimmed centerline length")
         self._addProperty(obj, "App::PropertyVector", "StartDirection", "HVAC", "Unit tangent direction at start")
         self._addProperty(obj, "App::PropertyVector", "EndDirection", "HVAC", "Unit tangent direction at end")
