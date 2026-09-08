@@ -175,6 +175,59 @@ def test_wildcard_variant_with_no_constraints_acts_as_in_list_fallback():
 # Ambiguous matches
 # ----------------------------------------------------------------------
 
+# ----------------------------------------------------------------------
+# Strict-missing behaviour: a loss variant whose constraint references a
+# key that's genuinely absent from context must NOT match -- unlike
+# type-def matching (context_violations()), which stays permissive about
+# missing data. See validation._check_rule()/flow_classification_violations().
+# ----------------------------------------------------------------------
+
+def test_strict_missing_flow_class_does_not_match_variant():
+    type_def = _type_def(loss_module="junction_losses", loss_function="loss_tee_generic", loss_variants=[
+        _variant({"flow_class": {"enum": ["diverging"]}}, "junction_losses", "loss_branch_diverging_run"),
+    ])
+    # context carries no "flow_class" key at all.
+    assert validation.resolve_loss_variant(type_def, {}) == ("junction_losses", "loss_tee_generic")
+
+
+def test_strict_missing_qualifier_does_not_match_variant():
+    type_def = _type_def(loss_module="", loss_function="", loss_variants=[
+        _variant(
+            {"flow_class": {"enum": ["diverging"]}, "qualifiers": {"common_leg": {"enum": ["branch"]}}},
+            "junction_losses", "loss_branch_diverging_branch",
+        ),
+    ])
+    # flow_class matches, but "qualifiers" is entirely absent from context
+    # (e.g. a wye with no geometrically identified run pair).
+    result = validation.resolve_loss_variant(type_def, {"flow_class": "diverging"})
+    assert result == ("", "")
+
+
+def test_strict_missing_derived_value_does_not_match_variant():
+    type_def = _type_def(loss_module="junction_losses", loss_function="loss_transition_generic", loss_variants=[
+        _variant({"area_ratio": {"minimum": 1.0}}, "junction_losses", "loss_transition_large_expansion"),
+    ])
+    # No "derived_values" key in context at all -- the area_ratio
+    # constraint can't be confirmed, so this must fall back, not match.
+    result = validation.resolve_loss_variant(type_def, {"flow_class": "expansion"})
+    assert result == ("junction_losses", "loss_transition_generic")
+
+
+def test_permissive_type_level_matching_still_tolerates_missing_context():
+    # Contrast case: type-def-level matching (context_violations(), via
+    # flow_classification_violations(..., strict_missing=False)) must stay
+    # permissive -- a candidate type-def is not rejected just because the
+    # caller hasn't populated flow_class/qualifiers/derived_values.
+    type_def = HVACTypeDef(
+        id="through_transition_expansion_only", label="x", category="junction", topology="through",
+        family=["through.transition"], profiles=["Circular"],
+        constraints={"flow_class": {"enum": ["expansion"]}},
+        selection=HVACSelectionDef(kind="model", priority=50),
+    )
+    context = {"connected_ports": [{"profile": "Circular"}, {"profile": "Circular"}], "topology": "through"}
+    assert validation.context_violations(type_def, context) == []
+
+
 def test_ambiguous_matching_variants_at_same_specificity_raises():
     type_def = _type_def(loss_variants=[
         _variant({"flow_class": {"enum": ["diverging"]}}, "junction_losses", "loss_a"),

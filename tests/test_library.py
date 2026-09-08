@@ -360,6 +360,150 @@ def test_load_type_def_file_defaults_construction_to_empty_list(tmp_path):
     assert type_def.construction == []
 
 
+# ----------------------------------------------------------------------
+# loss.variants JSON loading (see HVACLossVariantDef / validation.
+# resolve_loss_variant / validation.unknown_flow_constraint_keys)
+# ----------------------------------------------------------------------
+
+def _junction_type_json(id_="branch_tee_generic", loss=None, constraints=None):
+    return {
+        "id": id_, "label": id_, "category": "junction", "topology": "branch",
+        "family": ["branch.tee"], "profiles": ["Circular"],
+        "constraints": dict(constraints or {"degree": 3}),
+        "loss": dict(loss or {}),
+    }
+
+
+def test_load_type_def_file_legacy_loss_schema_has_no_variants(tmp_path):
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps(_junction_type_json(
+        loss={"module": "junction_losses", "function": "loss_tee_generic"},
+    )))
+
+    reg = HVACLibraryRegistry()
+    type_def = reg._load_type_def_file(str(type_file))
+
+    assert type_def.loss_module == "junction_losses"
+    assert type_def.loss_function == "loss_tee_generic"
+    assert type_def.loss_variants == []
+
+
+def test_load_type_def_file_parses_loss_variants(tmp_path):
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps(_junction_type_json(loss={
+        "module": "junction_losses",
+        "function": "loss_tee_generic",
+        "variants": [
+            {
+                "constraints": {
+                    "flow_class": {"enum": ["diverging"]},
+                    "qualifiers": {"common_leg": {"enum": ["run"]}},
+                },
+                "module": "junction_losses",
+                "function": "loss_branch_diverging_run",
+            },
+            {
+                "constraints": {"flow_class": {"enum": ["converging"]}},
+                "module": "junction_losses",
+                "function": "loss_branch_converging_run",
+            },
+        ],
+    })))
+
+    reg = HVACLibraryRegistry()
+    type_def = reg._load_type_def_file(str(type_file))
+
+    assert len(type_def.loss_variants) == 2
+    assert type_def.loss_variants[0].function == "loss_branch_diverging_run"
+    assert type_def.loss_variants[0].constraints["qualifiers"]["common_leg"]["enum"] == ["run"]
+    assert type_def.loss_variants[1].function == "loss_branch_converging_run"
+    # Legacy fields stay populated too, as the explicit fallback/default.
+    assert type_def.loss_module == "junction_losses"
+    assert type_def.loss_function == "loss_tee_generic"
+
+
+def test_load_type_def_file_loss_variant_missing_function_raises(tmp_path):
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps(_junction_type_json(loss={
+        "module": "junction_losses", "function": "loss_tee_generic",
+        "variants": [{"constraints": {"flow_class": {"enum": ["diverging"]}}, "module": "junction_losses"}],
+    })))
+
+    reg = HVACLibraryRegistry()
+    try:
+        reg._load_type_def_file(str(type_file))
+    except ValueError as exc:
+        assert "module/function" in str(exc)
+    else:
+        raise AssertionError("Expected a loss variant with no function to raise")
+
+
+def test_load_type_def_file_unknown_qualifier_key_raises(tmp_path):
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps(_junction_type_json(
+        constraints={"degree": 3, "qualifiers": {"alginment": {"enum": ["eccentric"]}}},
+    )))
+
+    reg = HVACLibraryRegistry()
+    try:
+        reg._load_type_def_file(str(type_file))
+    except ValueError as exc:
+        assert "alginment" in str(exc)
+    else:
+        raise AssertionError("Expected an unknown qualifier key to raise")
+
+
+def test_load_type_def_file_unknown_top_level_constraint_key_raises(tmp_path):
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps(_junction_type_json(
+        constraints={"degree": 3, "aera_ratio": {"minimum": 1.0}},
+    )))
+
+    reg = HVACLibraryRegistry()
+    try:
+        reg._load_type_def_file(str(type_file))
+    except ValueError as exc:
+        assert "aera_ratio" in str(exc)
+    else:
+        raise AssertionError("Expected an unknown top-level constraint key to raise")
+
+
+def test_load_type_def_file_unknown_key_in_loss_variant_constraints_raises(tmp_path):
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps(_junction_type_json(loss={
+        "module": "junction_losses", "function": "loss_tee_generic",
+        "variants": [{
+            "constraints": {"qualifiers": {"comon_leg": {"enum": ["run"]}}},
+            "module": "junction_losses", "function": "loss_branch_diverging_run",
+        }],
+    })))
+
+    reg = HVACLibraryRegistry()
+    try:
+        reg._load_type_def_file(str(type_file))
+    except ValueError as exc:
+        assert "comon_leg" in str(exc)
+    else:
+        raise AssertionError("Expected an unknown qualifier key in a loss variant to raise")
+
+
+def test_load_type_def_file_known_flow_constraint_keys_load_cleanly(tmp_path):
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps(_junction_type_json(
+        constraints={
+            "degree": 3,
+            "flow_class": {"enum": ["diverging"]},
+            "profile_relation": {"enum": ["same"]},
+            "qualifiers": {"common_leg": {"enum": ["run"]}, "transition_form": {"enum": ["pyramidal"]}},
+            "area_ratio": {"minimum": 1.0, "maximum": 4.0},
+        },
+    )))
+
+    reg = HVACLibraryRegistry()
+    type_def = reg._load_type_def_file(str(type_file))  # must not raise
+    assert type_def.constraints["area_ratio"]["minimum"] == 1.0
+
+
 def test_build_geometry_stamps_layer_roles_from_construction_defs():
     fake_module = types.ModuleType("fake_hvac_lib_pkg.segments")
 

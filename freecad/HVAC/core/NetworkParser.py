@@ -1519,12 +1519,16 @@ class DuctNetworkParser:
 
     @staticmethod
     def _sections_equal(port_a, port_b):
-        """True if two ports share the same profile and section extents."""
-        if str(port_a.profile or "") != str(port_b.profile or ""):
-            return False
-        ext_a = hvaclib.get_section_extents(port_a.section_params or {})
-        ext_b = hvaclib.get_section_extents(port_b.section_params or {})
-        return abs(ext_a[0] - ext_b[0]) <= 1e-6 and abs(ext_a[1] - ext_b[1]) <= 1e-6
+        """
+        True if two ports share the same profile-canonical section
+        signature -- see hvaclib.profile_signature(). Never area alone:
+        two differently-shaped sections can share an area without being
+        "the same section" for through.straight/offset vs.
+        through.transition classification purposes.
+        """
+        return hvaclib.profile_signature(port_a.profile, port_a.section_params) == hvaclib.profile_signature(
+            port_b.profile, port_b.section_params
+        )
 
     def classify_flow(self, node_analysis, topology):
         """
@@ -1603,26 +1607,27 @@ class DuctNetworkParser:
 
     def _classify_alignment(self, inlet, outlet, profile_in, profile_out, ext_in, ext_out):
         """
-        Return (alignment, extra_qualifiers, offset_ratio) for a through pair,
-        using each port's own actual profile-aware position (JunctionPort.
-        position already accounts for Attachment/Offset -- see
-        compute_port_position()) and the inlet's local profile frame.
+        Return (alignment, extra_qualifiers, offset_ratio) for a through
+        pair, using each port's own actual profile-aware position
+        (JunctionPort.position already accounts for Attachment/Offset --
+        see compute_port_position()), computed in ONE common local frame
+        so "top"/"bottom"/"left"/"right" have one consistent physical
+        meaning regardless of which port (inlet/outlet) is being looked
+        at -- through-port `direction` fields point opposite ways, so
+        interpreting each port's own direction independently would be
+        wrong. The frame's longitudinal axis is the inlet's actual FLOW
+        direction (not its `direction` field, which points upstream/away
+        from the junction) -- this is the same vector
+        compute_port_position() itself used against the inlet's own
+        ProfileXAxis (base-segment direction, see build_junction_ports()),
+        so the frame stays consistent with how ProfileXAxis was originally
+        interpreted; the transverse reference is the inlet's own
+        ProfileXAxis, per hvaclib's "X -> Left, Y -> Top" convention.
         """
         pos_in = FreeCAD.Vector(*inlet.position)
         pos_out = FreeCAD.Vector(*outlet.position)
-        z_dir = FreeCAD.Vector(*inlet.direction)
-        if z_dir.Length <= 1e-12:
-            return "", {}, None
-
-        preferred_x = FreeCAD.Vector(*inlet.profile_x_axis) if inlet.profile_x_axis else None
-        try:
-            _, x_dir, y_dir, _ = hvaclib.make_profile_frame(z_dir, preferred_x=preferred_x)
-        except ValueError:
-            return "", {}, None
 
         delta = pos_out - pos_in
-        delta_x = delta.dot(x_dir)
-        delta_y = delta.dot(y_dir)
         offset_mag = delta.Length
 
         w_in, h_in = ext_in
@@ -1630,9 +1635,35 @@ class DuctNetworkParser:
         ref_dim = ((w_in + h_in) + (w_out + h_out)) / 4.0
         offset_ratio = (offset_mag / ref_dim) if ref_dim > 1e-9 else None
 
+        flow_dir = inlet.flow_direction
+        z_dir = FreeCAD.Vector(*flow_dir) if flow_dir else FreeCAD.Vector(0, 0, 0)
+        if z_dir.Length <= 1e-12:
+            return "unknown", {}, offset_ratio
+
+        preferred_x = FreeCAD.Vector(*inlet.profile_x_axis) if inlet.profile_x_axis else None
+        try:
+            _, x_dir, y_dir, _ = hvaclib.make_profile_frame(z_dir, preferred_x=preferred_x)
+        except ValueError:
+            return "unknown", {}, offset_ratio
+
+        delta_x = delta.dot(x_dir)
+        delta_y = delta.dot(y_dir)
+
         tol = self.tol
 
-        if profile_in == "Rectangular" and profile_out == "Rectangular":
+        rectangular = profile_in == "Rectangular" and profile_out == "Rectangular"
+        round_profiles = {"Circular", "Oval"}
+        round_pair = profile_in in round_profiles and profile_out in round_profiles
+
+        if rectangular or round_pair:
+            # Same "one side flush, offset entirely to the other side"
+            # test for both: for a round/oval pair, ext_in/ext_out are
+            # (D, D) for Circular (so half_dw == half_dh -- the classic
+            # tangent-edges eccentric reducer, independent of which axis
+            # the offset lands on) or the real (Width, Height) for Oval.
+            # Only Rectangular gets aligned_side/aligned_corner and the
+            # double_eccentric (corner) case -- a round or oval section has
+            # no corners, so that case falls through to "offset" instead.
             half_dw = (w_out - w_in) / 2.0
             half_dh = (h_out - h_in) / 2.0
 
@@ -1647,51 +1678,55 @@ class DuctNetworkParser:
                 return "concentric", {}, offset_ratio
 
             if x_centered and abs(half_dh) > tol and (y_top or y_bottom):
-                return "eccentric", {"aligned_side": "top" if y_top else "bottom"}, offset_ratio
+                qualifiers = {"aligned_side": "top" if y_top else "bottom"} if rectangular else {}
+                return "eccentric", qualifiers, offset_ratio
 
             if y_centered and abs(half_dw) > tol and (x_left or x_right):
-                return "eccentric", {"aligned_side": "left" if x_left else "right"}, offset_ratio
+                qualifiers = {"aligned_side": "left" if x_left else "right"} if rectangular else {}
+                return "eccentric", qualifiers, offset_ratio
 
-            if (x_left or x_right) and (y_top or y_bottom):
+            if rectangular and (x_left or x_right) and (y_top or y_bottom):
                 corner = "{}_{}".format("top" if y_top else "bottom", "left" if x_left else "right")
                 return "double_eccentric", {"aligned_corner": corner}, offset_ratio
 
             return "offset", {}, offset_ratio
 
-        # Non-rectangular / mixed profiles: sides/corners aren't meaningful,
-        # so only a binary concentric/offset call is made.
-        if offset_mag <= tol:
-            return "concentric", {}, offset_ratio
-        return "offset", {}, offset_ratio
+        # Mixed profile families (e.g. Circular -> Rectangular): alignment
+        # isn't a well-defined concept across different section shapes.
+        return "unknown", {}, offset_ratio
 
     @staticmethod
     def _classify_transition_form(profile_in, profile_out, ext_in, ext_out):
         """
         Return a generic transition-form qualifier where reliably derivable
         from profile/extent data alone -- never a SMACNA-specific fitting id.
+        Returns "" (no qualifier at all) when there's no actual section
+        change to classify (e.g. a through.straight/offset pair that
+        happens to reach this same code path); "unknown" when a real
+        change occurred but this profile family isn't reliably
+        classifiable into the vocabulary below (Oval/Generic/custom).
         """
         if not profile_in or not profile_out:
-            return ""
+            return "unknown"
         if profile_in != profile_out:
             return "profile_change"
 
         tol = 1e-6
-        if profile_in == "Circular":
-            if abs(ext_in[0] - ext_out[0]) > tol:
-                return "conical"
+        w_changed = abs(ext_in[0] - ext_out[0]) > tol
+        h_changed = abs(ext_in[1] - ext_out[1]) > tol
+        if not w_changed and not h_changed:
             return ""
+
+        if profile_in == "Circular":
+            return "conical"
 
         if profile_in == "Rectangular":
-            w_changed = abs(ext_in[0] - ext_out[0]) > tol
-            h_changed = abs(ext_in[1] - ext_out[1]) > tol
-            if w_changed and h_changed:
-                return "pyramidal"
-            if w_changed or h_changed:
-                return "single_plane"
-            return ""
+            return "pyramidal" if (w_changed and h_changed) else "single_plane"
 
-        # Oval/Generic: not reliably derivable from width/height alone.
-        return ""
+        # Oval/Generic/custom: a real change occurred but this profile
+        # family isn't reliably classifiable into the vocabulary above --
+        # never silently mapped onto the Circular/Rectangular SMACNA forms.
+        return "unknown"
 
     def _classify_branch_flow(self, ports, node_analysis):
         qualifiers = {}

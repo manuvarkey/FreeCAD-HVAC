@@ -10,6 +10,53 @@ than a full validation library.
 import math
 
 
+# Standardized qualifier/derived_values key vocabulary (NetworkParser.
+# classify_flow -- see core/TOPOLOGY_CLASSIFICATION.md) that "constraints"
+# (a type-def's own, or a loss variant's) may reference. Kept here, next
+# to flow_classification_violations() which actually reads them, so
+# unknown_flow_constraint_keys() (used at JSON-load time by Library.py to
+# reject a typo'd key instead of letting it silently become a permanent
+# no-op constraint) can never drift out of sync with what's actually
+# checked.
+KNOWN_QUALIFIER_KEYS = frozenset({
+    "alignment", "aligned_side", "aligned_corner", "transition_form",
+    "common_leg", "profile_relation", "inlet_profile", "outlet_profile",
+})
+KNOWN_DERIVED_VALUE_KEYS = frozenset({
+    "area_ratio", "transition_angle", "aspect_ratio_in", "aspect_ratio_out", "offset_ratio",
+})
+# Top-level constraint keys flow_classification_violations()/context_violations()
+# already give dedicated handling -- never checked against
+# KNOWN_DERIVED_VALUE_KEYS as a "derived value" typo.
+_RESERVED_CONSTRAINT_KEYS = frozenset({
+    "degree", "degree_min", "degree_max",
+    "flow_class", "qualifiers", "profile_relation", "inlet_profile", "outlet_profile",
+})
+
+
+def unknown_flow_constraint_keys(constraints):
+    """
+    Return (unknown_qualifier_keys, unknown_top_level_keys) -- any key
+    under `constraints["qualifiers"]` not in KNOWN_QUALIFIER_KEYS, and any
+    other top-level `constraints` key that isn't one of the reserved
+    keys (degree/flow_class/qualifiers/profile_relation/inlet_profile/
+    outlet_profile) and isn't in KNOWN_DERIVED_VALUE_KEYS either. Both
+    lists are sorted and empty when everything's recognized. Used at
+    JSON-load time (Library.py) so a typo'd constraint key (e.g.
+    "aera_ratio") fails loudly instead of silently becoming a no-op --
+    flow_classification_violations()'s derived_values fallthrough only
+    ever checks a key that's actually present in `derived_values`.
+    """
+    constraints = dict(constraints or {})
+    unknown_qualifiers = sorted(
+        set(dict(constraints.get("qualifiers", {}) or {}).keys()) - KNOWN_QUALIFIER_KEYS
+    )
+    unknown_top_level = sorted(
+        (set(constraints.keys()) - _RESERVED_CONSTRAINT_KEYS) - KNOWN_DERIVED_VALUE_KEYS
+    )
+    return unknown_qualifiers, unknown_top_level
+
+
 _QUANTITY_TYPES = {
     "App::PropertyLength",
     "App::PropertyDistance",
@@ -114,13 +161,28 @@ def resolve_params(type_def, obj=None, supplied=None):
     return params
 
 
-def _check_rule(violations, type_def, label, value, rules):
+def _check_rule(violations, type_def, label, value, rules, strict_missing=False):
     """Validate one context value against a constraint sub-rule, appending
     a human-readable message to `violations` instead of raising -- reuses
     validate_value()'s enum/minimum/maximum/exclusive-bound operators so
     flow_class/qualifiers/derived_values constraints follow the same rules
-    as a type-def's own property validation."""
+    as a type-def's own property validation.
+
+    strict_missing=False (type-def matching): a value that's genuinely
+    absent from context is never treated as a mismatch -- a caller that
+    hasn't populated some piece of classification data shouldn't
+    accidentally break an otherwise-valid match.
+
+    strict_missing=True (loss-variant selection, see resolve_loss_variant):
+    a declared constraint whose value is absent counts as a violation --
+    picking between several mutually-exclusive variants on missing data
+    must never "accidentally" match one of them.
+    """
     if value is None:
+        if strict_missing and rules:
+            violations.append(
+                "Type '{}': '{}' has no value to satisfy constraint {!r}".format(type_def.id, label, rules)
+            )
         return
     try:
         validate_value(type_def.id, label, value, rules)
@@ -128,18 +190,20 @@ def _check_rule(violations, type_def, label, value, rules):
         violations.append(str(exc))
 
 
-def flow_classification_violations(type_def, constraints, context):
+def flow_classification_violations(type_def, constraints, context, strict_missing=False):
     """
     Return violation messages for the flow-classification constraint keys
     (`flow_class`, `qualifiers.<key>`, `profile_relation`, `inlet_profile`,
     `outlet_profile`, and any `derived_values` entry) against `constraints`
     -- the one constraint evaluator shared by context_violations() (a
     type-def's own top-level `constraints`, decides whether the physical
-    fitting TypeId is applicable) and resolve_loss_variant() (a loss-def's
-    own `loss.variants[].constraints`, decides which loss function applies
-    *after* the TypeId is already selected -- see that function). Both
-    ever pass the exact same `constraints`/`context` shape here, so a
-    library author uses one operator vocabulary everywhere.
+    fitting TypeId is applicable -- always strict_missing=False, permissive)
+    and resolve_loss_variant() (a loss-def's own `loss.variants[].constraints`,
+    decides which loss function applies *after* the TypeId is already
+    selected -- always strict_missing=True, see that function and
+    _check_rule()'s own docstring for why the two differ). Both ever pass
+    the exact same `constraints`/`context` shape here, so a library author
+    uses one operator vocabulary everywhere.
 
     `type_def` is only used for its `.id` in violation messages -- this
     never reads `type_def.constraints` itself, since the caller decides
@@ -150,17 +214,23 @@ def flow_classification_violations(type_def, constraints, context):
     constraints = dict(constraints or {})
 
     if "flow_class" in constraints:
-        _check_rule(violations, type_def, "flow_class", context.get("flow_class"), constraints["flow_class"])
+        _check_rule(
+            violations, type_def, "flow_class", context.get("flow_class"), constraints["flow_class"],
+            strict_missing=strict_missing,
+        )
 
     qualifiers = dict(context.get("qualifiers", {}) or {})
     for key in ("profile_relation", "inlet_profile", "outlet_profile"):
         if key in constraints:
             value = context.get(key, qualifiers.get(key))
-            _check_rule(violations, type_def, key, value, constraints[key])
+            _check_rule(violations, type_def, key, value, constraints[key], strict_missing=strict_missing)
 
     if "qualifiers" in constraints:
         for key, rule in dict(constraints["qualifiers"] or {}).items():
-            _check_rule(violations, type_def, "qualifiers.{}".format(key), qualifiers.get(key), rule)
+            _check_rule(
+                violations, type_def, "qualifiers.{}".format(key), qualifiers.get(key), rule,
+                strict_missing=strict_missing,
+            )
 
     # Any other declared constraint key is checked against a matching
     # derived_values entry (e.g. "area_ratio", "transition_angle") --
@@ -171,7 +241,9 @@ def flow_classification_violations(type_def, constraints, context):
         if key in handled_keys:
             continue
         if key in derived_values:
-            _check_rule(violations, type_def, key, derived_values.get(key), rule)
+            _check_rule(violations, type_def, key, derived_values.get(key), rule, strict_missing=strict_missing)
+        elif strict_missing:
+            _check_rule(violations, type_def, key, None, rule, strict_missing=True)
 
     return violations
 
@@ -222,20 +294,22 @@ def resolve_loss_variant(type_def, context):
 
     Returns (module, function) -- either may be "" if nothing applies.
 
-    Expects `context` to actually carry `flow_class`/`qualifiers`/
-    `derived_values` (possibly empty/"unknown", never simply absent) --
-    see core/_analysis_adapter.py's build_loss_evaluator(), the one real
-    caller. A key genuinely missing from `context` is never treated as a
-    mismatch (same permissive rule flow_classification_violations() uses
-    for type-def matching), so a variant whose only constraint references
-    a wholly absent key would incorrectly "match" -- give it an explicit
-    value (even "" or "unknown") instead of omitting it.
+    Uses flow_classification_violations()'s strict_missing=True mode: a
+    variant's constraint referencing a key that's genuinely absent from
+    `context` (as opposed to present with an explicit, non-matching value
+    like "" or "unknown") is treated as unsatisfied, not skipped -- unlike
+    type-def matching's permissive default, picking between several
+    mutually-exclusive loss variants on missing data must never
+    "accidentally" match one of them.
     """
     variants = list(getattr(type_def, "loss_variants", None) or [])
     if not variants:
         return type_def.loss_module, type_def.loss_function
 
-    matches = [v for v in variants if not flow_classification_violations(type_def, v.constraints, context)]
+    matches = [
+        v for v in variants
+        if not flow_classification_violations(type_def, v.constraints, context, strict_missing=True)
+    ]
 
     if not matches:
         return type_def.loss_module, type_def.loss_function

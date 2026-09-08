@@ -205,6 +205,72 @@ def test_alignment_offset_when_no_edges_line_up():
     assert "aligned_corner" not in qualifiers
 
 
+def test_alignment_eccentric_bottom():
+    parser = _parser()
+    # half_dh = -75; bottom alignment needs delta_y = half_dh = -75.
+    inlet, outlet = _rect_ports(0.0, -75.0)
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["alignment"] == "eccentric"
+    assert qualifiers["aligned_side"] == "bottom"
+
+
+def test_alignment_eccentric_left():
+    parser = _parser()
+    # half_dw = -100; left alignment needs delta_x = -half_dw = 100.
+    inlet, outlet = _rect_ports(100.0, 0.0)
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["alignment"] == "eccentric"
+    assert qualifiers["aligned_side"] == "left"
+
+
+def test_alignment_double_eccentric_top_right():
+    parser = _parser()
+    inlet, outlet = _rect_ports(-100.0, 75.0)
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["alignment"] == "double_eccentric"
+    assert qualifiers["aligned_corner"] == "top_right"
+
+
+def test_alignment_double_eccentric_bottom_left():
+    parser = _parser()
+    inlet, outlet = _rect_ports(100.0, -75.0)
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["alignment"] == "double_eccentric"
+    assert qualifiers["aligned_corner"] == "bottom_left"
+
+
+def test_alignment_double_eccentric_bottom_right():
+    parser = _parser()
+    inlet, outlet = _rect_ports(-100.0, -75.0)
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["alignment"] == "double_eccentric"
+    assert qualifiers["aligned_corner"] == "bottom_right"
+
+
+def test_alignment_uses_inlet_flow_direction_not_outward_direction():
+    # inlet.direction points opposite to inlet.flow_direction, exactly like
+    # a real inlet port (see build_junction_ports()): `direction` points
+    # away from the junction/upstream, `flow_direction` points downstream.
+    # Alignment must be computed from flow_direction (the same vector
+    # compute_port_position() used against ProfileXAxis when placing this
+    # port), not from `direction` -- using the wrong one would silently
+    # flip the local frame's Y axis and mislabel top<->bottom.
+    parser = _parser()
+    inlet = JunctionPort(
+        edge_key="A", segment_end="end", position=(0.0, 0.0, 0.0), direction=(0.0, 0.0, -1.0),
+        profile="Rectangular", section_params={"Width": 400.0, "Height": 300.0}, attachment="Center",
+        user_offset=(0.0, 0.0, 0.0), profile_x_axis=(1.0, 0.0, 0.0),
+        flow_role="inlet", flow_direction=(0.0, 0.0, 1.0), flow_into_junction=True,
+    )
+    outlet = _port(
+        "Rectangular", w=200.0, h=150.0, position=(0.0, 75.0, 0.0),
+        direction=(0.0, 0.0, -1.0), flow_role="outlet",
+    )
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["alignment"] == "eccentric"
+    assert qualifiers["aligned_side"] == "top"
+
+
 def test_transition_form_single_plane_vs_pyramidal():
     parser = _parser()
     single_plane_in, single_plane_out = _rect_ports(0.0, 0.0, w_out=200.0, h_out=300.0)
@@ -214,6 +280,141 @@ def test_transition_form_single_plane_vs_pyramidal():
     pyramidal_in, pyramidal_out = _rect_ports(0.0, 0.0, w_out=200.0, h_out=150.0)
     _, q2, _ = parser._classify_through_flow(pyramidal_in, pyramidal_out)
     assert q2["transition_form"] == "pyramidal"
+
+
+def test_transition_form_conical():
+    parser = _parser()
+    inlet = _port("Circular", d=300.0, flow_role="inlet")
+    outlet = _port("Circular", d=200.0, flow_role="outlet")
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["transition_form"] == "conical"
+
+
+def test_transition_form_profile_change():
+    parser = _parser()
+    inlet = _port("Rectangular", w=300.0, h=200.0, flow_role="inlet")
+    outlet = _port("Circular", d=250.0, flow_role="outlet")
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["transition_form"] == "profile_change"
+
+
+def test_transition_form_unknown_for_oval_size_change():
+    # A real change occurred, but Oval isn't reliably classifiable into
+    # conical/pyramidal/single_plane -- never silently forced into either.
+    parser = _parser()
+    inlet = _port("Oval", w=400.0, h=200.0, flow_role="inlet")
+    outlet = _port("Oval", w=300.0, h=150.0, flow_role="outlet")
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["transition_form"] == "unknown"
+
+
+# ----------------------------------------------------------------------
+# Circular / Oval transition alignment (concentric / eccentric only --
+# no side/corner concept for a round or oval section)
+# ----------------------------------------------------------------------
+
+def _round_ports(profile, dx, dy, dz=0.0, w_in=None, h_in=None, d_in=None, w_out=None, h_out=None, d_out=None):
+    inlet = _port(
+        profile, w=w_in, h=h_in, d=d_in, position=(0.0, 0.0, 0.0),
+        direction=(0.0, 0.0, 1.0), profile_x_axis=(1.0, 0.0, 0.0), flow_role="inlet",
+    )
+    outlet = _port(
+        profile, w=w_out, h=h_out, d=d_out, position=(dx, dy, dz),
+        direction=(0.0, 0.0, -1.0), flow_role="outlet",
+    )
+    return inlet, outlet
+
+
+def test_alignment_circular_concentric():
+    parser = _parser()
+    inlet, outlet = _round_ports("Circular", 0.0, 0.0, d_in=300.0, d_out=200.0)
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["alignment"] == "concentric"
+
+
+def test_alignment_circular_eccentric_when_edges_are_tangent():
+    # A classic round eccentric reducer: the smaller duct's edge is
+    # exactly tangent to the larger duct's edge on one side -- offset
+    # magnitude equals the radius difference (here along the local X
+    # axis, but any single axis works since a circle has no preferred
+    # side of its own).
+    parser = _parser()
+    inlet, outlet = _round_ports("Circular", 50.0, 0.0, d_in=300.0, d_out=200.0)
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["alignment"] == "eccentric"
+    assert "aligned_side" not in qualifiers
+    assert "aligned_corner" not in qualifiers
+
+
+def test_alignment_circular_offset_when_edges_are_not_tangent():
+    # Same duct sizes, but an arbitrary offset that doesn't bring the
+    # edges tangent on either local axis -- not a "sides aligned" case,
+    # so this must read "offset", not "eccentric".
+    parser = _parser()
+    inlet, outlet = _round_ports("Circular", 30.0, 0.0, d_in=300.0, d_out=200.0)
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["alignment"] == "offset"
+
+
+def test_alignment_oval_concentric():
+    parser = _parser()
+    inlet, outlet = _round_ports("Oval", 0.0, 0.0, w_in=400.0, h_in=200.0, w_out=300.0, h_out=150.0)
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["alignment"] == "concentric"
+
+
+def test_alignment_oval_eccentric_when_a_side_is_aligned():
+    parser = _parser()
+    # half_dh = (150-200)/2 = -25 -- top alignment needs delta_y = -half_dh = 25.
+    inlet, outlet = _round_ports("Oval", 0.0, 25.0, w_in=400.0, h_in=200.0, w_out=300.0, h_out=150.0)
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["alignment"] == "eccentric"
+    assert "aligned_side" not in qualifiers
+    assert "aligned_corner" not in qualifiers
+
+
+def test_alignment_oval_offset_when_no_side_is_aligned():
+    parser = _parser()
+    inlet, outlet = _round_ports("Oval", 10.0, 10.0, w_in=400.0, h_in=200.0, w_out=300.0, h_out=150.0)
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["alignment"] == "offset"
+
+
+def test_alignment_unknown_for_mixed_profile_family():
+    # Rectangular <-> Circular: alignment isn't well-defined across
+    # different section-shape families.
+    parser = _parser()
+    inlet = _port("Rectangular", w=300.0, h=200.0, flow_role="inlet")
+    outlet = _port("Circular", d=250.0, flow_role="outlet")
+    _, qualifiers, _ = parser._classify_through_flow(inlet, outlet)
+    assert qualifiers["alignment"] == "unknown"
+
+
+# ----------------------------------------------------------------------
+# expansion/contraction flips with base-segment orientation, never with
+# argument order (requirement: base-segment orientation is authoritative,
+# resolved purely from flow_role)
+# ----------------------------------------------------------------------
+
+def test_flow_class_independent_of_port_argument_order():
+    parser = _parser()
+    small = _port("Circular", d=200.0, flow_role="inlet")
+    large = _port("Circular", d=300.0, flow_role="outlet")
+    assert parser._classify_through_flow(small, large)[0] == "expansion"
+    assert parser._classify_through_flow(large, small)[0] == "expansion"
+
+
+def test_flow_class_reverses_with_base_segment_orientation():
+    parser = _parser()
+    forward_in = _port("Circular", d=200.0, flow_role="inlet")
+    forward_out = _port("Circular", d=300.0, flow_role="outlet")
+    assert parser._classify_through_flow(forward_in, forward_out)[0] == "expansion"
+
+    # Same two duct sizes, but base-segment orientation (flow_role) is
+    # reversed -- flow_class must flip to contraction accordingly.
+    reversed_in = _port("Circular", d=300.0, flow_role="inlet")
+    reversed_out = _port("Circular", d=200.0, flow_role="outlet")
+    assert parser._classify_through_flow(reversed_in, reversed_out)[0] == "contraction"
 
 
 # ----------------------------------------------------------------------

@@ -117,6 +117,12 @@ purely by (category, topology, family, profile) for the automatic-selection
 lookup, and this extra data only filters candidates *after* that lookup,
 exactly like the existing `degree`/topology/profile checks.
 
+Every `qualifiers.<key>` and every other top-level key (an implied
+`derived_values` entry) is checked against a fixed, known vocabulary at
+load time -- see `validation.KNOWN_QUALIFIER_KEYS`/
+`KNOWN_DERIVED_VALUE_KEYS` -- so a typo'd key (`"aera_ratio"`) raises a
+clear error instead of silently becoming a permanent no-op constraint.
+
 ### Flow-dependent loss variants
 
 One physical fitting (one TypeId, one geometry generator) can carry
@@ -171,6 +177,14 @@ which callable to actually invoke via `validation.resolve_loss_variant()`:
   applicable loss model," the same clean signal a type with no loss
   function wired up at all already gives its caller (`AirflowSolver`
   then applies its own generic `K_DEFAULT`).
+
+Unlike the type-def-level `constraints` above (permissive about missing
+classification data, so an out-of-date caller can't accidentally break an
+otherwise-valid match), a loss variant's own `constraints` are evaluated
+*strictly*: a key genuinely absent from the current context (as opposed
+to present with a non-matching value like `""`/`"unknown"`) counts as a
+mismatch, never an accidental match -- picking between several
+mutually-exclusive loss formulas must never happen on missing data.
 
 `loss.variants[].constraints` and a type-def's own top-level
 `constraints` are deliberately independent: the type-level one decides

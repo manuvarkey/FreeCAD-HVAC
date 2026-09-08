@@ -945,6 +945,30 @@ class HVACLibraryRegistry:
                 library.add_type(type_def)
 
     @staticmethod
+    def _check_known_constraint_keys(constraints, type_id, filepath, label):
+        """
+        Raise ValueError if `constraints` (a type-def's own top-level
+        "constraints", or one loss variant's own "constraints") references
+        an unrecognized qualifier or derived_values key -- see
+        validation.unknown_flow_constraint_keys(). Without this, a typo'd
+        key (e.g. "aera_ratio") would silently become a permanent no-op
+        constraint instead of failing at load time.
+        """
+        unknown_qualifiers, unknown_top_level = validation.unknown_flow_constraint_keys(constraints)
+        if not unknown_qualifiers and not unknown_top_level:
+            return
+        parts = []
+        if unknown_qualifiers:
+            parts.append("unknown qualifier key(s) {}".format(unknown_qualifiers))
+        if unknown_top_level:
+            parts.append("unknown constraint key(s) {}".format(unknown_top_level))
+        raise ValueError(
+            "Type '{}' in '{}' has {} in its own '{}'".format(
+                type_id, filepath, " and ".join(parts), label
+            )
+        )
+
+    @staticmethod
     def _parse_construction_layers(layers_raw):
         return [
             ConstructionLayerDef(
@@ -981,8 +1005,11 @@ class HVACLibraryRegistry:
         lengths = raw.get("connection_lengths", {}) or {}
         loss = raw.get("loss", {}) or {}
 
+        constraints = dict(raw.get("constraints", {}) or {})
+        self._check_known_constraint_keys(constraints, raw.get("id", "?"), filepath, "constraints")
+
         loss_variants = []
-        for variant_raw in loss.get("variants", []) or []:
+        for index, variant_raw in enumerate(loss.get("variants", []) or []):
             variant_module = variant_raw.get("module", "")
             variant_function = variant_raw.get("function", "")
             if not variant_module or not variant_function:
@@ -991,9 +1018,13 @@ class HVACLibraryRegistry:
                         raw.get("id", "?"), filepath
                     )
                 )
+            variant_constraints = dict(variant_raw.get("constraints", {}) or {})
+            self._check_known_constraint_keys(
+                variant_constraints, raw.get("id", "?"), filepath, "loss.variants[{}].constraints".format(index)
+            )
             loss_variants.append(
                 HVACLossVariantDef(
-                    constraints=dict(variant_raw.get("constraints", {}) or {}),
+                    constraints=variant_constraints,
                     module=variant_module,
                     function=variant_function,
                 )
@@ -1063,7 +1094,7 @@ class HVACLibraryRegistry:
             topology=raw.get("topology", "generic"),
             family=family,
             profiles=list(raw.get("profiles", []) or []),
-            constraints=dict(raw.get("constraints", {}) or {}),
+            constraints=constraints,
             properties=props,
             geometry=geometry,
             generator_module=gen.get("module", ""),

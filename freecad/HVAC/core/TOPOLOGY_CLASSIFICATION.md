@@ -111,17 +111,44 @@ solver.
   everywhere else (bends, wye, cross, multiport, ...).
 - `qualifiers` (`dict[str, str]`): degree-2 collinear pairs get
   `inlet_profile`/`outlet_profile`/`profile_relation`
-  (`"same"`/`"mixed"`), plus `alignment`
-  (`"concentric"`/`"eccentric"`/`"double_eccentric"`/`"offset"`, rectangular
-  profiles only get side/corner detail via `aligned_side`/`aligned_corner`;
-  other profile pairs only ever get `"concentric"`/`"offset"`) and
-  `transition_form` (`"conical"`/`"pyramidal"`/`"single_plane"`/
-  `"profile_change"`, only where reliably derivable from profile/extent
-  data). A degree-3 tee/lateral_tee (one geometrically identified
-  trunk/run pair) gets `common_leg` (`"run"`/`"branch"`) from which port's
-  flow role is the odd one out relative to that trunk pair -- e.g. an
-  ordinary dividing tee is `common_leg="run"`, a bullhead dividing tee is
+  (`"same"`/`"mixed"`), plus `alignment` and (where derivable)
+  `transition_form`. `alignment` is computed in one common local frame
+  (the inlet's own flow direction as the longitudinal axis, its
+  `ProfileXAxis` as the transverse reference -- never each port's own
+  outward-pointing `direction` independently, since through-port
+  directions are opposite):
+  - Same-profile **Rectangular** pair: `"concentric"` (centres aligned),
+    `"eccentric"` (exactly one corresponding side aligned, plus
+    `aligned_side` = `"top"`/`"bottom"`/`"left"`/`"right"`),
+    `"double_eccentric"` (exactly one corresponding corner aligned, plus
+    `aligned_corner` = e.g. `"top_left"`), or `"offset"` (none of the
+    above).
+  - Same-family **Circular**/**Oval** pair: the same "one side flush"
+    test as Rectangular (offset entirely along one local axis, by the
+    exact radius/half-extent difference -- the classic tangent-edges
+    eccentric reducer) gives `"concentric"` or `"eccentric"`, but never
+    `"double_eccentric"`/`aligned_side`/`aligned_corner` (no corners, and
+    a circle has no side of its own to name) -- anything else (an offset
+    that doesn't bring the edges tangent on either axis, e.g. an
+    arbitrary diagonal displacement) is `"offset"`.
+  - Mixed profile families (e.g. Circular -> Rectangular), or a
+    degenerate/unresolvable frame: `"unknown"`.
+
+  `transition_form` is `"conical"` (Circular -> Circular size change),
+  `"pyramidal"` (Rectangular -> Rectangular, both dimensions change),
+  `"single_plane"` (Rectangular -> Rectangular, one dimension changes),
+  `"profile_change"` (different profile families), `"unknown"` (a real
+  section change occurred but this profile family -- Oval/Generic/custom
+  -- isn't reliably classifiable into the vocabulary above; never
+  silently forced into the Circular/Rectangular forms), or omitted
+  entirely when there's no actual section change to classify.
+
+  A degree-3 tee/lateral_tee (one geometrically identified trunk/run
+  pair) gets `common_leg` (`"run"`/`"branch"`) from which port's flow
+  role is the odd one out relative to that trunk pair -- e.g. an ordinary
+  dividing tee is `common_leg="run"`, a bullhead dividing tee is
   `common_leg="branch"`; a wye has no trunk pair, so no `common_leg`.
+  Same-or-mixed-profile is also exposed as `profile_relation` here.
 - `derived_values` (`dict[str, float]`): `area_ratio`, `aspect_ratio_in`/
   `aspect_ratio_out`, `offset_ratio` where computable; a branch tee/
   lateral_tee also gets `area_ratio` as branch-leg area over trunk-leg area.

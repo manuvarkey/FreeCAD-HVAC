@@ -57,6 +57,9 @@ class FakeVector:
     def __mul__(self, scalar):
         return FakeVector(self.x * scalar, self.y * scalar, self.z * scalar)
 
+    def __rmul__(self, scalar):
+        return self.__mul__(scalar)
+
     def __neg__(self):
         return FakeVector(-self.x, -self.y, -self.z)
 

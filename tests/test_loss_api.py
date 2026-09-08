@@ -144,6 +144,27 @@ def test_transition_loss_same_size_is_negligible():
     assert api.transition_loss(context) == {"OUT": 0.0}
 
 
+def test_transition_loss_expansion_rectangular():
+    inlet = _port("IN", (-1, 0, 0), True, profile="Rectangular", width=200.0, height=200.0)
+    outlet = _port("OUT", (1, 0, 0), False, profile="Rectangular", width=400.0, height=400.0)
+    context = {"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 1000.0}}
+    result = api.transition_loss(context)
+    assert result is not None
+    assert result["OUT"] > 0.0
+
+
+def test_transition_loss_oval_profile_returns_none_not_a_rectangular_guess():
+    # Oval/custom profiles: geometry classification stays valid (see
+    # NetworkParser), but no validated SMACNA table exists for a
+    # straight-axis Oval area change -- must cleanly return None rather
+    # than silently reusing the rectangular table (expansion_zeta_rect is
+    # a literal SMACNA A8B rectangular-only table).
+    inlet = _port("IN", (-1, 0, 0), True, profile="Oval", width=200.0, height=100.0)
+    outlet = _port("OUT", (1, 0, 0), False, profile="Oval", width=400.0, height=200.0)
+    context = {"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 1000.0}}
+    assert api.transition_loss(context) is None
+
+
 # ----------------------------------------------------------------------------
 # branch_loss
 # ----------------------------------------------------------------------------

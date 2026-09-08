@@ -120,6 +120,16 @@ class HVACLossAPI:
             theta_deg = max(0.0, min(theta_deg, 180.0))
 
             profile = HVACLibraryAPI.port_profile(outlet)
+            if profile not in ("Circular", "Rectangular"):
+                # Oval/Generic/custom profile -- unlike branch (tee/wye)
+                # fittings, no SMACNA table or documented approximation
+                # covers this shape for a straight-axis area change
+                # (expansion_zeta_rect is a literal rectangular table, A8B;
+                # never silently reused here). A library-specific
+                # loss.variant can still supply its own formula for this
+                # case (see validation.resolve_loss_variant).
+                return None
+
             if area_out > area_in:
                 # Expanding (diverging): downstream duct is larger.
                 if profile == "Circular":
@@ -131,6 +141,8 @@ class HVACLossAPI:
                     zeta = smacna_loss.expansion_zeta_rect(theta_deg, area_ratio)
             else:
                 # Contracting (converging): downstream duct is smaller.
+                # SMACNA A9A explicitly covers both round and rectangular
+                # with the one table.
                 zeta = smacna_loss.contraction_zeta(theta_deg, area_ratio)
 
             return {outlet["edge_key"]: zeta}

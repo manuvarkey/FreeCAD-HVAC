@@ -608,6 +608,55 @@ def profile_area(profile, section_params):
 
     return None
 
+
+def _circular_profile_signature(params):
+    return (round(float(params.get("Diameter", 0.0) or 0.0), 6),)
+
+
+def _rect_oval_profile_signature(params):
+    return (
+        round(float(params.get("Width", 0.0) or 0.0), 6),
+        round(float(params.get("Height", 0.0) or 0.0), 6),
+    )
+
+
+def _generic_profile_signature(params):
+    # No fixed Width/Height/Diameter schema assumed -- every numeric
+    # section parameter, sorted by name so the result is deterministic.
+    return tuple(
+        (k, round(float(v), 6))
+        for k, v in sorted((params or {}).items())
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    )
+
+
+# Profile name -> builder(params) -> tuple of canonical, tolerance-rounded
+# dimensions. A future custom-profile implementation registers its own
+# entry here instead of falling into the generic (sorted numeric params)
+# fallback -- see profile_signature().
+PROFILE_SIGNATURE_BUILDERS = {
+    "Circular": _circular_profile_signature,
+    "Rectangular": _rect_oval_profile_signature,
+    "Oval": _rect_oval_profile_signature,
+}
+
+
+def profile_signature(profile, section_params):
+    """
+    Return a canonical, comparable signature for a duct cross-section --
+    used to decide whether two ports share "the same section" (e.g.
+    NetworkParser's through.straight/offset vs. through.transition split)
+    without relying on area equality alone, since two differently-shaped
+    sections can share an area. Always starts with the profile name, so
+    two ports of different profiles never compare equal regardless of
+    numeric coincidence.
+    """
+    profile = str(profile or "")
+    params = dict(section_params or {})
+    builder = PROFILE_SIGNATURE_BUILDERS.get(profile, _generic_profile_signature)
+    return (profile,) + tuple(builder(params))
+
+
 def translated_port_position(junction_obj, port):
     """
     A connected_ports entry's own "position" is the raw, pre-fitting
