@@ -184,11 +184,11 @@ class _UncalledRegistry:
 
 
 def test_custom_loss_evaluator_two_port_component():
-    """A 2-port inline device: only the outlet port's own K is returned, keyed by its edge_key."""
+    """A 2-port inline device: only the outlet port's own K is stored/returned, keyed by its edge_key."""
     component = SimpleNamespace(
         Name="Comp1", LossCoefficientSource="Custom",
         LocalPortsJson=json.dumps([_port("A", True), _port("B", False)]),
-        CustomLossCoefficients=[0.0, 0.42],
+        CustomLossCoefficientEdgeKeys=["B"], CustomLossCoefficients=[0.42],
     )
     evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
 
@@ -200,7 +200,7 @@ def test_custom_loss_evaluator_three_port_tee_run_and_branch_k():
     component = SimpleNamespace(
         Name="Tee1", LossCoefficientSource="Custom",
         LocalPortsJson=json.dumps([_port("run_in", True), _port("run_out", False), _port("branch", False)]),
-        CustomLossCoefficients=[0.0, 0.18, 1.05],
+        CustomLossCoefficientEdgeKeys=["run_out", "branch"], CustomLossCoefficients=[0.18, 1.05],
     )
     evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
 
@@ -217,7 +217,7 @@ def test_custom_loss_evaluator_applies_single_port_k_unconditionally():
     inlet_terminal = SimpleNamespace(
         Name="Terminal1", LossCoefficientSource="Custom",
         LocalPortsJson=json.dumps([_port("A", True)]),
-        CustomLossCoefficients=[0.6],
+        CustomLossCoefficientEdgeKeys=["A"], CustomLossCoefficients=[0.6],
     )
     evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), inlet_terminal, air=SimpleNamespace())
     assert evaluator({}) == {"A": 0.6}
@@ -225,7 +225,7 @@ def test_custom_loss_evaluator_applies_single_port_k_unconditionally():
     outlet_terminal = SimpleNamespace(
         Name="Terminal2", LossCoefficientSource="Custom",
         LocalPortsJson=json.dumps([_port("A", False)]),
-        CustomLossCoefficients=[0.6],
+        CustomLossCoefficientEdgeKeys=["A"], CustomLossCoefficients=[0.6],
     )
     evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), outlet_terminal, air=SimpleNamespace())
     assert evaluator({}) == {"A": 0.6}
@@ -243,7 +243,7 @@ def test_loss_evaluator_switches_between_library_and_custom():
         Name="Comp1", LibraryId="smacna", TypeId="through_damper_generic",
         LossCoefficientSource="Library",
         LocalPortsJson=json.dumps([_port("A", True), _port("B", False)]),
-        CustomLossCoefficients=[0.0, 0.5],
+        CustomLossCoefficientEdgeKeys=["B"], CustomLossCoefficients=[0.5],
     )
 
     library_evaluator = _analysis_adapter.build_loss_evaluator(registry, component, air)
@@ -262,7 +262,7 @@ def test_custom_loss_evaluator_accepts_zero_as_valid_explicit_k():
     component = SimpleNamespace(
         Name="Comp1", LossCoefficientSource="Custom",
         LocalPortsJson=json.dumps([_port("A", True), _port("B", False)]),
-        CustomLossCoefficients=[0.0, 0.0],
+        CustomLossCoefficientEdgeKeys=["B"], CustomLossCoefficients=[0.0],
     )
     evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
 
@@ -273,7 +273,7 @@ def test_custom_loss_evaluator_rejects_negative_k():
     component = SimpleNamespace(
         Name="Comp1", LossCoefficientSource="Custom",
         LocalPortsJson=json.dumps([_port("A", True), _port("B", False)]),
-        CustomLossCoefficients=[0.0, -0.1],
+        CustomLossCoefficientEdgeKeys=["B"], CustomLossCoefficients=[-0.1],
     )
     with pytest.raises(ValueError):
         _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
@@ -283,17 +283,32 @@ def test_custom_loss_evaluator_rejects_non_finite_k():
     component = SimpleNamespace(
         Name="Comp1", LossCoefficientSource="Custom",
         LocalPortsJson=json.dumps([_port("A", True), _port("B", False)]),
-        CustomLossCoefficients=[0.0, float("inf")],
+        CustomLossCoefficientEdgeKeys=["B"], CustomLossCoefficients=[float("inf")],
     )
     with pytest.raises(ValueError):
         _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
 
 
-def test_custom_loss_evaluator_rejects_mismatched_list_length():
+def test_custom_loss_evaluator_rejects_mismatched_edge_key_and_value_list_lengths():
     component = SimpleNamespace(
         Name="Comp1", LossCoefficientSource="Custom",
-        LocalPortsJson=json.dumps([_port("A", True), _port("B", False), _port("C", False)]),
-        CustomLossCoefficients=[0.0, 0.5],  # only 2 values for 3 ports
+        LocalPortsJson=json.dumps([_port("run_in", True), _port("run_out", False), _port("branch", False)]),
+        CustomLossCoefficientEdgeKeys=["run_out", "branch"], CustomLossCoefficients=[0.5],  # only 1 value for 2 keys
+    )
+    with pytest.raises(ValueError):
+        _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
+
+
+def test_custom_loss_evaluator_rejects_stale_edge_keys_out_of_sync_with_current_ports():
+    """
+    LocalPortsJson now has a new outlet (branch) CustomLossCoefficientEdgeKeys
+    was never resynced for -- must fail clearly rather than silently using
+    the stale mapping (e.g. dropping branch's own K entirely).
+    """
+    component = SimpleNamespace(
+        Name="Comp1", LossCoefficientSource="Custom",
+        LocalPortsJson=json.dumps([_port("run_in", True), _port("run_out", False), _port("branch", False)]),
+        CustomLossCoefficientEdgeKeys=["run_out"], CustomLossCoefficients=[0.18],  # missing "branch"
     )
     with pytest.raises(ValueError):
         _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
@@ -302,8 +317,8 @@ def test_custom_loss_evaluator_rejects_mismatched_list_length():
 def test_custom_loss_evaluator_rejects_port_missing_edge_key():
     component = SimpleNamespace(
         Name="Comp1", LossCoefficientSource="Custom",
-        LocalPortsJson=json.dumps([{"flow_into_junction": True}, _port("B", False)]),
-        CustomLossCoefficients=[0.0, 0.5],
+        LocalPortsJson=json.dumps([_port("A", True), {"flow_into_junction": False, "position": [0.0, 0.0, 0.0]}]),
+        CustomLossCoefficientEdgeKeys=[""], CustomLossCoefficients=[0.5],
     )
     with pytest.raises(ValueError):
         _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())

@@ -189,16 +189,19 @@ class DuctJunction:
             obj.FlowBoundary = ["Auto", "Fixed", "Closed"]
             obj.FlowBoundary = "Auto"
         self._addProperty(obj, "App::PropertyFloat", "DesignFlowRate", "Airflow", "User-specified design flow rate for this terminal (L/s), used when Flow Boundary is 'Fixed' -- 0 is a valid value. Ignored when Flow Boundary is 'Auto' or 'Closed'.")
-        self._addProperty(obj, "App::PropertyFloat", "CalcTotalFlowRate", "Airflow", "Computed total flow through this junction (L/s)")
+        self._addProperty(obj, "App::PropertyFloat", "CalcTotalFlowRate", "Airflow", "Computed through-flow at this junction (L/s) -- max(total inflow, total outflow) across its connected ports, not the sum of every leg's own flow (see analysis/pressure.py's Phase G)")
         self._addProperty(obj, "App::PropertyFloat", "CalcStaticPressure", "Airflow", "Computed relative static pressure (Pa), referenced to 0 Pa at this sub-network's balancing terminal")
-        self._addProperty(obj, "App::PropertyBool", "IsFlowSource", "Airflow", "True if flow physically leaves the system at this terminal (a supply/source opening)")
+        self._addProperty(obj, "App::PropertyBool", "IsFlowSource", "Airflow", "True if flow physically leaves the system at this terminal (a supply/source opening) -- meaningless off a terminal, see updateMetadata()'s own topology-based editor mode")
         self._addProperty(obj, "App::PropertyString", "CalcLossWarning", "Airflow", "Non-fatal warning from the last calculation (e.g. fallback loss coefficient used)")
 
-        for prop in ("CalcTotalFlowRate", "CalcStaticPressure", "IsFlowSource", "CalcLossWarning"):
+        for prop in ("CalcTotalFlowRate", "CalcStaticPressure", "CalcLossWarning"):
             try:
                 obj.setEditorMode(prop, 1)
             except Exception:
                 pass
+        # IsFlowSource's own editor mode is topology-gated (terminal only) --
+        # left unset here, corrected by the very next updateMetadata() call,
+        # same as FlowBoundary/DesignFlowRate just below.
 
         if not getattr(obj, "ConnectionLengthsJson", ""):
             obj.ConnectionLengthsJson = "[]"
@@ -275,11 +278,21 @@ class DuctJunction:
             changed = True
 
         try:
+            # FlowBoundary/DesignFlowRate/IsFlowSource only have meaning on a
+            # terminal ("end") node -- fully hidden (mode 2), not merely
+            # read-only, everywhere else, so a through/branch/cross/
+            # multiport junction's property editor doesn't show controls
+            # that don't apply to it at all.
             is_terminal = getattr(obj, "Topology", "") == "end"
             boundary = str(getattr(obj, "FlowBoundary", "Auto") or "Auto")
-            obj.setEditorMode("FlowBoundary", 0 if is_terminal else 1)
-            # DesignFlowRate is only meaningful (and editable) when Fixed.
-            obj.setEditorMode("DesignFlowRate", 0 if (is_terminal and boundary == "Fixed") else 1)
+            obj.setEditorMode("FlowBoundary", 0 if is_terminal else 2)
+            # DesignFlowRate is only meaningful (and editable) when Fixed;
+            # still shown read-only for Auto/Closed on a terminal.
+            if is_terminal:
+                obj.setEditorMode("DesignFlowRate", 0 if boundary == "Fixed" else 1)
+            else:
+                obj.setEditorMode("DesignFlowRate", 2)
+            obj.setEditorMode("IsFlowSource", 1 if is_terminal else 2)
         except Exception:
             pass
 

@@ -125,6 +125,50 @@ def _port(edge_key, segment_end, position, direction, profile, section_params, f
 
 
 # ----------------------------------------------------------------------
+# updateMetadata: FlowBoundary/DesignFlowRate/IsFlowSource are only
+# meaningful on a terminal ("end") node -- fully hidden (mode 2), not
+# merely read-only, everywhere else (see Component.py's own
+# _syncFlowBoundary for the mirrored Primary-component side of this, which
+# this doesn't change).
+# ----------------------------------------------------------------------
+
+@pytest.mark.parametrize("topology", ["through", "branch", "cross", "multiport", "isolated"])
+def test_update_metadata_hides_boundary_properties_for_non_terminal_topology(topology):
+    junction = FakeJunctionObj(topology=topology)
+    dj = _bare_junction(junction)
+    dj.updateMetadata(topology=topology)
+
+    assert junction._editor_modes["FlowBoundary"] == 2
+    assert junction._editor_modes["DesignFlowRate"] == 2
+    assert junction._editor_modes["IsFlowSource"] == 2
+
+
+def test_update_metadata_shows_flow_boundary_and_is_flow_source_for_terminal_topology():
+    junction = FakeJunctionObj(topology="end")
+    dj = _bare_junction(junction)
+    dj.updateMetadata(topology="end")
+
+    assert junction._editor_modes["FlowBoundary"] == 0
+    assert junction._editor_modes["IsFlowSource"] == 1  # computed, read-only
+
+
+def test_update_metadata_design_flow_rate_editable_only_when_fixed_for_terminal():
+    junction = FakeJunctionObj(topology="end")
+    junction.FlowBoundary = "Auto"
+    dj = _bare_junction(junction)
+    dj.updateMetadata(topology="end")
+    assert junction._editor_modes["DesignFlowRate"] == 1  # read-only, still visible
+
+    junction.FlowBoundary = "Fixed"
+    dj.updateMetadata(topology="end")
+    assert junction._editor_modes["DesignFlowRate"] == 0
+
+    junction.FlowBoundary = "Closed"
+    dj.updateMetadata(topology="end")
+    assert junction._editor_modes["DesignFlowRate"] == 1
+
+
+# ----------------------------------------------------------------------
 # getComponents / getPrimaryComponent / getPortChains / getInlineComponents
 # ----------------------------------------------------------------------
 

@@ -1412,12 +1412,45 @@ def _sorted_by_number(items):
     return sorted(items, key=lambda item: getattr(item.obj, "Number", "") or "")
 
 
+def _setHeaderLabelsWithTooltips(table, headers):
+    """
+    headers: [(caption, tooltip), ...] -- caption is the short column
+    header actually shown (a symbol + unit for a physical quantity, to
+    keep result tables narrow); tooltip is the full descriptive name,
+    shown on hovering the header cell so the abbreviation stays
+    unambiguous. Used by every results table in this module (Calculate
+    Airflow's segment/junction/fittings tables and Size Ducts' own table).
+    """
+    table.setHorizontalHeaderLabels([caption for caption, _ in headers])
+    for col, (_, tooltip) in enumerate(headers):
+        item = table.horizontalHeaderItem(col)
+        if item is not None:
+            item.setToolTip(tooltip)
+
+
 class TaskPanelAirflowResults:
     """Read-only report panel showing the results of an airflow/pressure-drop calculation."""
 
-    SEGMENT_HEADERS = ["Number", "Segment", "Flow (L/s)", "Velocity (m/s)", "Friction (Pa)",
-                       "Fitting (Pa)", "Total Loss (Pa)", "Static Pressure (Pa)"]
-    JUNCTION_HEADERS = ["Number", "Junction", "Total Flow (L/s)", "Static Pressure (Pa)", "Source", "Warning"]
+    # (caption, tooltip) -- caption is the compact symbol+unit actually
+    # shown in the header; tooltip is the full name, on hover (see
+    # _setHeaderLabelsWithTooltips).
+    SEGMENT_HEADERS = [
+        ("#", "Number"), ("Segment", "Segment"), ("Q (L/s)", "Flow Rate"),
+        ("V (m/s)", "Velocity"), ("ΔPf (Pa)", "Friction Loss"),
+        ("ΔPd (Pa)", "Fitting (Dynamic) Loss"), ("ΔPt (Pa)", "Total Loss"),
+        ("Ps (Pa)", "Static Pressure"),
+    ]
+    JUNCTION_HEADERS = [
+        ("#", "Number"), ("Junction", "Junction"), ("Q (L/s)", "Total Flow Rate"),
+        ("Ps (Pa)", "Static Pressure"), ("Src", "Source (flow leaves the system here)"),
+        ("⚠", "Warning"),
+    ]
+    FITTING_HEADERS = [
+        ("#", "Number"), ("Fitting", "Fitting"), ("Role", "Role (Primary / Inline)"),
+        ("Leg", "Leg / Port"), ("Q (L/s)", "Flow Rate"), ("V (m/s)", "Velocity"),
+        ("K", "Loss Coefficient (K)"), ("ΔPd (Pa)", "Fitting (Dynamic) Loss"),
+        ("Ps (Pa)", "Static Pressure"),
+    ]
 
     def __init__(self, network_obj, result):
         self.network_obj = network_obj
@@ -1578,7 +1611,7 @@ class TaskPanelAirflowResults:
 
         segments = _sorted_by_number(comp.segments)
         seg_table = QtWidgets.QTableWidget(len(segments), len(self.SEGMENT_HEADERS))
-        seg_table.setHorizontalHeaderLabels(self.SEGMENT_HEADERS)
+        _setHeaderLabelsWithTooltips(seg_table, self.SEGMENT_HEADERS)
         seg_table.verticalHeader().setVisible(False)
         seg_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         for row, seg in enumerate(segments):
@@ -1601,7 +1634,7 @@ class TaskPanelAirflowResults:
 
         junctions = _sorted_by_number(comp.junctions)
         junc_table = QtWidgets.QTableWidget(len(junctions), len(self.JUNCTION_HEADERS))
-        junc_table.setHorizontalHeaderLabels(self.JUNCTION_HEADERS)
+        _setHeaderLabelsWithTooltips(junc_table, self.JUNCTION_HEADERS)
         junc_table.verticalHeader().setVisible(False)
         junc_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         for row, junc in enumerate(junctions):
@@ -1620,6 +1653,38 @@ class TaskPanelAirflowResults:
         layout.addWidget(QtWidgets.QLabel(translate("HVAC_CalculateAirflow", "Junctions")))
         layout.addWidget(junc_table)
 
+        # One row per component leg -- a multiport fitting (tee/wye/cross)
+        # gets one row per outlet it actually has a K for, each with its own
+        # K/ΔP, rather than one misleading combined scalar per fitting (see
+        # core/AirflowSolver.ComponentPortRow / core/_component_results.py).
+        # A 1-port or 2-port component just ends up with a single row here.
+        fittings = sorted(
+            comp.component_ports,
+            key=lambda row: (getattr(row.component_obj, "Number", "") or "", row.edge_key),
+        )
+        fit_table = QtWidgets.QTableWidget(len(fittings), len(self.FITTING_HEADERS))
+        _setHeaderLabelsWithTooltips(fit_table, self.FITTING_HEADERS)
+        fit_table.verticalHeader().setVisible(False)
+        fit_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        for row, fit in enumerate(fittings):
+            values = [
+                getattr(fit.component_obj, "Number", "") or "",
+                fit.component_obj.Label,
+                fit.component_role,
+                fit.leg_label,
+                "{:.2f}".format(fit.flow_lps),
+                "{:.2f}".format(fit.velocity_ms),
+                "{:.2f}".format(fit.loss_coefficient) if fit.loss_coefficient is not None else "-",
+                "{:.2f}".format(fit.pressure_drop_pa),
+                "{:.1f}".format(fit.static_pressure_pa) if fit.static_pressure_pa is not None else "-",
+            ]
+            for col, value in enumerate(values):
+                fit_table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
+        fit_table.resizeColumnsToContents()
+        self.selection_sync.addTable(fit_table, [fit.component_obj for fit in fittings])
+        layout.addWidget(QtWidgets.QLabel(translate("HVAC_CalculateAirflow", "Fittings")))
+        layout.addWidget(fit_table)
+
         return widget
 
     def _exportToSpreadsheets(self):
@@ -1636,8 +1701,12 @@ class TaskPanelAirflowResults:
             return
 
         multi = len(self.result.components) > 1
-        segment_headers = list(self.SEGMENT_HEADERS)
-        junction_headers = list(self.JUNCTION_HEADERS)
+        # The spreadsheet has no header-hover tooltip and no column-width
+        # pressure the on-screen table has -- use each column's full name
+        # (the on-screen tooltip text) directly as its header here instead
+        # of the abbreviated symbol+unit caption.
+        segment_headers = [tooltip for _, tooltip in self.SEGMENT_HEADERS]
+        junction_headers = [tooltip for _, tooltip in self.JUNCTION_HEADERS]
         if multi:
             segment_headers = [translate("HVAC_CalculateAirflow", "Sub-network")] + segment_headers
             junction_headers = [translate("HVAC_CalculateAirflow", "Sub-network")] + junction_headers
@@ -1730,8 +1799,13 @@ class TaskPanelSizeDucts:
     would be).
     """
 
-    HEADERS = ["Number", "Segment", "Profile", "Current Size", "Proposed Size", "Velocity (m/s)",
-               "Friction Rate (Pa/m)", "Balanced"]
+    # (caption, tooltip) -- see _setHeaderLabelsWithTooltips.
+    HEADERS = [
+        ("#", "Number"), ("Segment", "Segment"), ("Profile", "Profile"),
+        ("Current", "Current Size"), ("Proposed", "Proposed Size"),
+        ("V (m/s)", "Velocity"), ("R (Pa/m)", "Friction Rate"),
+        ("Bal.", "Balanced (Static Regain)"),
+    ]
 
     SIZING_METHODS = [
         ("ConstantVelocity", "Constant Velocity"),
@@ -1958,7 +2032,7 @@ class TaskPanelSizeDucts:
 
         segments = _sorted_by_number(result.segments)
         table = QtWidgets.QTableWidget(len(segments), len(self.HEADERS))
-        table.setHorizontalHeaderLabels(self.HEADERS)
+        _setHeaderLabelsWithTooltips(table, self.HEADERS)
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         for row, sres in enumerate(segments):

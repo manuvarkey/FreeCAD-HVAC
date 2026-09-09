@@ -1174,7 +1174,7 @@ def _buildLegendBarCoinNode(label, min_value, max_value, row_index=0, steps=24):
     caption_mat.diffuseColor.setValue(0, 0, 0)
     caption.addChild(caption_mat)
     caption_font = coin.SoFont()
-    caption_font.size.setValue(28.0)
+    caption_font.size.setValue(16.0)
     caption.addChild(caption_font)
     caption_text = coin.SoText2()
     caption_text.string.setValue(str(label))
@@ -1218,7 +1218,7 @@ def _buildLegendBarCoinNode(label, min_value, max_value, row_index=0, steps=24):
         value_mat.diffuseColor.setValue(0, 0, 0)
         value_sep.addChild(value_mat)
         value_font = coin.SoFont()
-        value_font.size.setValue(26.0)
+        value_font.size.setValue(16.0)
         value_sep.addChild(value_font)
         value_text = coin.SoText2()
         value_text.string.setValue("{:.1f}".format(value))
@@ -1241,7 +1241,12 @@ class AirflowResultObserver:
     Friction Drop/Pressure Loss) via valueToHeatColor(), auto-ranged over
     every value currently in view. Text values (all of a node's own
     result numbers) are always shown, regardless of which one drives
-    color.
+    color. Both Flow Rate and Static Pressure are genuinely per-port: each
+    leg of a multiport fitting shows its own value, sourced from the
+    retained per-port fitting result where available (see
+    _junctionPortFlow/_junctionPortStaticPressure) -- falling back to the
+    junction's own single shared value only for a port with no such
+    result (an inlet, or a terminal with no fitting loss at all).
 
     Reuses TerminalFlowRateObserver's own Coin builder functions
     (buildPortHighlightCoinNode/buildFlowRateLabelCoinNode/
@@ -1373,31 +1378,133 @@ class AirflowResultObserver:
     def _allJunctionResults(self):
         return [junc for comp in self.result.components for junc in comp.junctions]
 
-    def _junctionValue(self, junc_res):
-        if self.junction_color_by == "static_pressure":
-            return junc_res.static_pressure_pa
+    def _segmentResultsByKey(self):
+        return {s.key: s for comp in self.result.components for s in comp.segments}
+
+    def _primaryPortResultsByEdge(self):
+        """
+        {edge_key: ComponentPortRow} for every real edge with a retained
+        Primary fitting result -- see core/AirflowSolver.ComponentPortRow /
+        core/_component_results.py. A real edge is ever an "outlet" (the
+        only role that gets a retained result) for at most one node, so
+        there's never more than one entry per edge_key here.
+        """
+        return {
+            row.edge_key: row
+            for comp in self.result.components
+            for row in comp.component_ports
+            if row.component_role == "Primary"
+        }
+
+    @staticmethod
+    def _junctionPortFlow(port, junc_res, port_row_by_edge, seg_by_key):
+        """
+        This specific port's own flow, not the junction's single lumped
+        total_flow_lps repeated at every port -- each leg of a multiport
+        fitting genuinely carries its own distinct flow (see
+        core/_component_results.py). Prefers the new per-port fitting
+        result (ComponentPortRow.flow_lps, populated for a port that
+        received a fitting-loss contribution); falls back to that port's
+        own connected segment (still per-port, just not retained as a
+        fitting result -- e.g. an inlet leg, which never receives one);
+        falls back to the junction's own total only if neither is
+        resolvable (should not normally happen for a real port).
+
+        port_row_by_edge is keyed purely by edge_key, with exactly one
+        entry per real edge (from whichever node has that edge as an
+        OUTLET -- see _primaryPortResultsByEdge). A real edge has two
+        ends/ports (one per node it connects), so this port's own
+        flow_into_junction must be checked before trusting that lookup --
+        otherwise the edge's one retained row would get reused for BOTH
+        of its ends, when it only ever describes the outlet side.
+        """
+        edge_key = port.get("edge_key")
+        if port.get("flow_into_junction") is False:
+            row = port_row_by_edge.get(edge_key)
+            if row is not None:
+                return row.flow_lps
+        seg = seg_by_key.get(edge_key)
+        if seg is not None:
+            return seg.flow_lps
         return junc_res.total_flow_lps
 
-    def _buildJunctionOverlays(self):
+    @staticmethod
+    def _junctionPortStaticPressure(port, junc_res, port_row_by_edge):
+        """
+        This specific port's own static pressure -- an outlet leg (the
+        only ports that ever get a retained fitting result) carries its
+        own distinct value, already derived by analysis/pressure.py's
+        Phase G from that same leg's own pressure_drop_pa (see
+        ComponentPortRow.static_pressure_pa's own docstring: a real
+        per-leg subtraction, not the node's value copied onto every port).
+        Falls back to the junction's own shared static_pressure_pa for a
+        port with no such entry (an inlet, or a terminal with no fitting
+        loss at all) -- that IS this port's own correct value in those
+        cases, since there is nothing to subtract away from it there.
+
+        Same edge-role check as _junctionPortFlow: port_row_by_edge's one
+        entry per edge only ever describes that edge's OUTLET side, so it
+        must never be reused for the inlet side of the very same edge
+        (that inlet port's own real value is its own node's static
+        pressure, not the far end's).
+        """
+        edge_key = port.get("edge_key")
+        if port.get("flow_into_junction") is False:
+            row = port_row_by_edge.get(edge_key)
+            if row is not None and row.static_pressure_pa is not None:
+                return row.static_pressure_pa
+        return junc_res.static_pressure_pa
+
+    def _junctionPortValue(self, port, junc_res, port_row_by_edge, seg_by_key):
+        """The value driving this port's own color/legend ranging."""
+        if self.junction_color_by == "static_pressure":
+            return self._junctionPortStaticPressure(port, junc_res, port_row_by_edge)
+        return self._junctionPortFlow(port, junc_res, port_row_by_edge, seg_by_key)
+
+    def _junctionPortEntries(self):
+        """
+        Every real port across every solved junction, each paired with its
+        own JunctionResult, plus the two lookups _junctionPortValue/
+        _junctionPortFlow need to resolve that port's own value -- shared
+        by _buildJunctionOverlays (the actual overlay colors/labels) and
+        _refreshLegend (the legend bar's own range), so the two can never
+        drift apart. Returns ([(junction, port, junc_res), ...], seg_by_key,
+        port_row_by_edge); the list is empty if nothing is solved yet.
+        """
         junction_results = self._allJunctionResults()
         if not junction_results:
-            return
-        values = [self._junctionValue(j) for j in junction_results]
-        min_value, max_value = self.junction_range_override or (min(values), max(values))
+            return [], {}, {}
+        seg_by_key = self._segmentResultsByKey()
+        port_row_by_edge = self._primaryPortResultsByEdge()
 
+        entries = []
         for junc_res in junction_results:
             junction = junc_res.obj
             try:
                 analysis = json.loads(getattr(junction, "AnalysisJson", "") or "{}")
             except Exception:
                 analysis = {}
-            ports = analysis.get("connected_ports") or []
-            color = valueToHeatColor(self._junctionValue(junc_res), min_value, max_value)
+            for port in analysis.get("connected_ports") or []:
+                entries.append((junction, port, junc_res))
+        return entries, seg_by_key, port_row_by_edge
 
-            for port in ports:
-                self._buildJunctionPortOverlay(junction, port, junc_res, color)
+    def _buildJunctionOverlays(self):
+        junction_ports, seg_by_key, port_row_by_edge = self._junctionPortEntries()
+        if not junction_ports:
+            return
 
-    def _buildJunctionPortOverlay(self, junction, port, junc_res, color):
+        values = [
+            self._junctionPortValue(port, junc_res, port_row_by_edge, seg_by_key)
+            for _, port, junc_res in junction_ports
+        ]
+        min_value, max_value = self.junction_range_override or (min(values), max(values))
+
+        for junction, port, junc_res in junction_ports:
+            value = self._junctionPortValue(port, junc_res, port_row_by_edge, seg_by_key)
+            color = valueToHeatColor(value, min_value, max_value)
+            self._buildJunctionPortOverlay(junction, port, junc_res, color, port_row_by_edge, seg_by_key)
+
+    def _buildJunctionPortOverlay(self, junction, port, junc_res, color, port_row_by_edge, seg_by_key):
         direction = port.get("direction")
         flow_into_junction = port.get("flow_into_junction")
         if not direction or flow_into_junction is None:
@@ -1446,17 +1553,26 @@ class AirflowResultObserver:
             if arrow_node is not None:
                 self._root.addChild(arrow_node)
 
+        # This port's own flow -- not the junction's single total repeated
+        # at every port (see _junctionPortFlow's own docstring). Always
+        # flow here, regardless of which field currently drives color.
+        port_flow_lps = self._junctionPortFlow(port, junc_res, port_row_by_edge, seg_by_key)
+
         # Row 0's slot (the plane's newly-extended top strip) is left
         # clear for the arrow above -- text starts at row 1.
         flow_label = buildFlowRateLabelCoinNode(
-            display_port, "{:.1f} L/s".format(junc_res.total_flow_lps), self.COLOR_TEXT,
+            display_port, "{:.1f} L/s".format(port_flow_lps), self.COLOR_TEXT,
             row_index=1, top_extend=self.JUNCTION_TOP_EXTEND,
         )
         if flow_label is not None:
             self._root.addChild(flow_label)
 
+        # This port's own static pressure -- not the junction's single
+        # shared value repeated at every port (see
+        # _junctionPortStaticPressure's own docstring).
+        port_static_pressure_pa = self._junctionPortStaticPressure(port, junc_res, port_row_by_edge)
         pressure_label = buildFlowRateLabelCoinNode(
-            display_port, "{:.1f} Pa".format(junc_res.static_pressure_pa), self.COLOR_TEXT,
+            display_port, "{:.1f} Pa".format(port_static_pressure_pa), self.COLOR_TEXT,
             row_index=2, top_extend=self.JUNCTION_TOP_EXTEND,
         )
         if pressure_label is not None:
@@ -1700,9 +1816,12 @@ class AirflowResultObserver:
 
         rows = []
         if self.junction_enabled:
-            results = self._allJunctionResults()
-            if results:
-                values = [self._junctionValue(j) for j in results]
+            junction_ports, seg_by_key, port_row_by_edge = self._junctionPortEntries()
+            if junction_ports:
+                values = [
+                    self._junctionPortValue(port, junc_res, port_row_by_edge, seg_by_key)
+                    for _, port, junc_res in junction_ports
+                ]
                 min_value, max_value = self.junction_range_override or (min(values), max(values))
                 rows.append((self.JUNCTION_COLOR_LABELS.get(self.junction_color_by, self.junction_color_by), min_value, max_value))
         if self.segment_enabled:

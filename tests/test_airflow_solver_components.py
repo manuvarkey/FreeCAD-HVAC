@@ -15,6 +15,7 @@ import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 import pytest
 
 from freecad.HVAC.analysis import physics as airflow
+from freecad.HVAC.core import _component_results
 from freecad.HVAC.core.AirflowSolver import AirflowSolver
 from freecad.HVAC.utils import hvaclib
 from network_fixtures import FakeObj, FakeParser, make_net, make_segment
@@ -300,6 +301,165 @@ def test_branch_leg_inline_component_uses_branch_flow_not_total_flow(monkeypatch
 
     assert run_damper.CalcLossCoefficient == K_RUN_DAMPER
     assert branch_damper.CalcLossCoefficient == K_BRANCH_DAMPER
+
+
+def _standalone_tee_network(k_straight, k_branch):
+    """
+    Same J1 --A--> J2(tee) --B--> J3 / --C--> J4 topology as _tee_network(),
+    but with no Inline chains at all and independently-controllable K per
+    leg on the tee itself -- isolates the Primary's own retained
+    per-port results from any Inline-chain contribution.
+    """
+    node_ports = {
+        1: [("A", "start")],
+        2: [("A", "end"), ("B", "start"), ("C", "start")],
+        3: [("B", "end")],
+        4: [("C", "end")],
+    }
+    edge_endpoints = {"A": (1, 2), "B": (2, 3), "C": (2, 4)}
+    parser = FakeParser(node_ports, edge_endpoints)
+
+    segment_map = {
+        "A": make_segment("A", 300.0, 6000.0),
+        "B": make_segment("B", 300.0, 4000.0),
+        "C": make_segment("C", 200.0, 3000.0),
+    }
+
+    tee = FakeObj(
+        Label="Tee", ComponentRole="Primary",
+        LibraryId="testlib", TypeId="fake_tee", Family="branch.tee",
+        LocalPortsJson=json.dumps([
+            _port("A", "end", 300.0, True),
+            _port("B", "start", 300.0, False),
+            _port("C", "start", 200.0, False),
+        ]),
+        CalcPortResultsJson="{}", CalcFlowRate=0.0, CalcVelocity=0.0,
+        CalcLossCoefficient=0.0, CalcPressureDrop=0.0,
+    )
+
+    junction_map = {
+        "N1": _single_component_junction("J1", "end_terminal_marker", _port("A", "start", 300.0, False)),
+        "N2": FakeObj(Label="J2", Topology="branch"),
+        "N3": _single_component_junction("J3", "end_terminal_marker", _port("B", "end", 300.0, True)),
+        "N4": _single_component_junction("J4", "end_terminal_marker", _port("C", "end", 200.0, True)),
+    }
+    junction_map["N1"].DesignFlowRate = 0.0
+    junction_map["N1"].FlowBoundary = "Auto"
+    junction_map["N3"].DesignFlowRate = 700.0
+    junction_map["N3"].FlowBoundary = "Fixed"
+    junction_map["N4"].DesignFlowRate = 300.0
+    junction_map["N4"].FlowBoundary = "Fixed"
+    junction_map["N2"].Proxy = _FakeChainJunctionProxy([tee])
+
+    net = make_net(parser, segment_map, junction_map)
+    registry = _FakeCallLossRegistry({
+        "end_terminal_marker": None,
+        "fake_tee": {"B": k_straight, "C": k_branch},
+    })
+    return net, registry, tee
+
+
+def test_multiport_tee_retains_distinct_branch_and_straight_k_and_pressure_drop(monkeypatch):
+    """
+    A 3-port tee's own scalar CalcLossCoefficient/CalcPressureDrop can't
+    represent two different legs' worth of K/pressure-drop -- they must
+    stay at 0 (Component.py's own editor-mode sync hides them from the
+    property editor) while CalcPortResultsJson -- and the new per-leg UI
+    rows built alongside it -- retain each leg's own distinct value. No
+    fitting loss is double counted: each segment's own fitting_loss_pa must
+    equal exactly its own leg's retained pressure_drop_pa.
+    """
+    K_STRAIGHT = 0.18
+    K_BRANCH = 1.05
+    net, registry, tee = _standalone_tee_network(K_STRAIGHT, K_BRANCH)
+    monkeypatch.setattr(
+        hvaclib.HVACLibraryService, "get_hvac_library_registry", staticmethod(lambda: registry),
+    )
+
+    result = AirflowSolver(net).solve()
+    assert not result.warnings
+
+    # Do NOT use max/average/sum-of-K or a maximum/total-flow substitute --
+    # left at 0 and hidden instead.
+    assert tee.CalcLossCoefficient == 0.0
+    assert tee.CalcPressureDrop == 0.0
+    assert tee.CalcFlowRate == 0.0
+    assert tee.CalcVelocity == 0.0
+
+    port_results = _component_results.deserialize_port_results(tee.CalcPortResultsJson)
+    assert set(port_results.keys()) == {"B", "C"}
+    assert port_results["B"].loss_coefficient == K_STRAIGHT
+    assert port_results["C"].loss_coefficient == K_BRANCH
+    assert port_results["B"].pressure_drop_pa != port_results["C"].pressure_drop_pa
+
+    seg_by_key = {s.key: s for comp in result.components for s in comp.segments}
+    assert seg_by_key["B"].fitting_loss_pa == pytest.approx(port_results["B"].pressure_drop_pa)
+    assert seg_by_key["C"].fitting_loss_pa == pytest.approx(port_results["C"].pressure_drop_pa)
+
+    # New per-leg UI rows: one per outlet, each with its own K -- never one
+    # collapsed scalar row for a multiport fitting.
+    rows = {row.edge_key: row for comp in result.components for row in comp.component_ports}
+    assert set(rows.keys()) == {"B", "C"}
+    assert rows["B"].loss_coefficient == K_STRAIGHT
+    assert rows["C"].loss_coefficient == K_BRANCH
+    assert rows["B"].component_obj is tee
+
+    # Each leg's own static pressure is a real, distinct derivation
+    # (node's shared value minus THAT leg's own pressure_drop_pa) -- never
+    # a blind copy of the junction's one value onto both legs.
+    junc_by_key = {j.key: j for comp in result.components for j in comp.junctions}
+    node_static = junc_by_key["N2"].static_pressure_pa
+    assert rows["B"].static_pressure_pa == pytest.approx(node_static - rows["B"].pressure_drop_pa)
+    assert rows["C"].static_pressure_pa == pytest.approx(node_static - rows["C"].pressure_drop_pa)
+    assert rows["B"].static_pressure_pa != pytest.approx(rows["C"].static_pressure_pa)
+
+
+def test_recalculation_fully_replaces_stale_calc_port_results_json(monkeypatch):
+    """A second "Run Revised Calculation" must fully replace the first
+    solve's CalcPortResultsJson, never merge stale entries into it."""
+    net, registry, tee = _standalone_tee_network(0.2, 0.2)
+    monkeypatch.setattr(
+        hvaclib.HVACLibraryService, "get_hvac_library_registry", staticmethod(lambda: registry),
+    )
+    AirflowSolver(net).solve()
+    first = _component_results.deserialize_port_results(tee.CalcPortResultsJson)
+    assert set(first.keys()) == {"B", "C"}
+
+    # A second solve with a materially different K -- the previous run's
+    # numbers must be gone, not merged with the new ones.
+    registry._results["fake_tee"] = {"B": 0.9}
+    AirflowSolver(net).solve()
+    second = _component_results.deserialize_port_results(tee.CalcPortResultsJson)
+
+    assert set(second.keys()) == {"B"}
+    assert second["B"].loss_coefficient == 0.9
+
+
+def test_failed_tree_leaves_calc_port_results_json_untouched(monkeypatch):
+    """
+    An unsized segment makes PressureSolver raise FlowSolveError for that
+    whole tree (caught internally, reported as a warning) -- that tree's
+    components must never get a partial/corrupted CalcPortResultsJson
+    write; whatever they held before this solve must be left exactly as-is.
+    """
+    net, registry, tee = _standalone_tee_network(0.2, 0.6)
+    monkeypatch.setattr(
+        hvaclib.HVACLibraryService, "get_hvac_library_registry", staticmethod(lambda: registry),
+    )
+    tee.CalcPortResultsJson = '{"stale": {"flow_lps": 1.0, "velocity_ms": 1.0, "loss_coefficient": 1.0, "pressure_drop_pa": 1.0, "static_pressure_pa": null}}'
+
+    # Segment B has no valid duct size -- makes the whole tree fail to solve.
+    net.Proxy._segment_map["B"].Diameter = 0.0
+
+    result = AirflowSolver(net).solve()
+
+    assert result.components == []
+    assert len(result.warnings) == 1
+    # Untouched -- not cleared, not partially overwritten with new data.
+    assert tee.CalcPortResultsJson == (
+        '{"stale": {"flow_lps": 1.0, "velocity_ms": 1.0, "loss_coefficient": 1.0, '
+        '"pressure_drop_pa": 1.0, "static_pressure_pa": null}}'
+    )
 
 
 def test_inline_component_on_inlet_edge_derives_velocity_from_that_edges_own_flow(monkeypatch):

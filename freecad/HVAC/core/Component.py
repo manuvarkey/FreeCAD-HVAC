@@ -42,8 +42,10 @@ from ..utils import hvaclib
 from ..library.library_api import HVACLibraryAPI
 from . import _type_schema
 from . import _construction_schema
+from . import _component_results
 from . import _geometry_apply
 from . import _component_appearance
+from . import _analysis_adapter
 from . import Construction as _construction
 
 
@@ -113,10 +115,17 @@ class DuctComponent:
         except Exception:
             return
 
-        # Keep CustomLossCoefficients sized to exactly one K per local port
+        # Keep CustomLossCoefficients holding one K per applicable port
         # every time the port list itself changes -- see the property's own
         # comment in setProperties() for why this can't wait for a user edit.
         self._syncCustomLossCoefficients(obj, ports)
+
+        # The 4 scalar Calc* properties can only show one unambiguous
+        # airflow/loss path -- hide them once this Primary has grown past 2
+        # ports (a tee/wye/cross/manifold), since the authoritative data at
+        # that point is CalcPortResultsJson instead (see
+        # core/_component_results.py's own module docstring).
+        self._syncCalcPropertiesEditorMode(obj)
 
         # A Primary component standing in for a whole non-through junction
         # (a tee, cross, multiport, or end/terminal device) carries however
@@ -311,21 +320,31 @@ class DuctComponent:
     @staticmethod
     def _syncCustomLossCoefficients(obj, ports):
         """
-        Keep CustomLossCoefficients sized to exactly one K per entry in
-        `ports` (LocalPortsJson, already parsed), preserving existing values
-        at unchanged indices, padding new ports with 0.0, and truncating
-        trailing entries for ports that no longer exist. The mapping always
-        follows LocalPortsJson's own stable order -- never current
-        inlet/outlet role, since that can flip with flow direction.
+        Keep CustomLossCoefficients holding exactly one K per port that
+        custom-loss evaluation can actually use -- see
+        _analysis_adapter.applicable_loss_ports(): a degree-1 component's
+        own single port, or every outlet port on a 2+-port component. An
+        inlet never receives a fitting-loss contribution at all, so it
+        never gets a slot here either -- unlike LocalPortsJson's own full
+        port list, this is never sized to include a port whose value could
+        never actually be applied.
+
+        Values are carried over by edge_key, not position, whenever the
+        set of applicable ports changes (e.g. a redrawn segment flips
+        which port is now the outlet) -- CustomLossCoefficientEdgeKeys is
+        the parallel list recording which edge_key each
+        CustomLossCoefficients entry belongs to.
         """
         if "CustomLossCoefficients" not in obj.PropertiesList:
             return
-        target_len = len(ports)
-        current = list(getattr(obj, "CustomLossCoefficients", None) or [])
-        if len(current) == target_len:
+        target_keys = [p.get("edge_key", "") for p in _analysis_adapter.applicable_loss_ports(ports)]
+        current_keys = list(getattr(obj, "CustomLossCoefficientEdgeKeys", None) or [])
+        if current_keys == target_keys:
             return
-        resized = current[:target_len] + [0.0] * (target_len - len(current))
-        obj.CustomLossCoefficients = resized
+
+        old_by_key = dict(zip(current_keys, getattr(obj, "CustomLossCoefficients", None) or []))
+        obj.CustomLossCoefficientEdgeKeys = target_keys
+        obj.CustomLossCoefficients = [old_by_key.get(key, 0.0) for key in target_keys]
 
     @staticmethod
     def _syncLossCoefficientEditorMode(obj):
@@ -337,6 +356,27 @@ class DuctComponent:
             obj.setEditorMode("CustomLossCoefficients", 0 if source == "Custom" else 1)
         except Exception:
             pass
+
+    @staticmethod
+    def _syncCalcPropertiesEditorMode(obj):
+        """
+        CalcFlowRate/CalcVelocity/CalcLossCoefficient/CalcPressureDrop can
+        only show one unambiguous result -- hide them (not just read-only)
+        once this is a multiport Primary (see
+        core/_component_results.is_multiport_primary), so a user is never
+        shown a single number that's silently standing in for several
+        different legs' worth of K/flow/pressure-drop. CalcPortResultsJson
+        (always hidden, internal-only) is the authoritative data at that
+        point instead.
+        """
+        multiport = _component_results.is_multiport_primary(obj)
+        for prop in ("CalcFlowRate", "CalcVelocity", "CalcLossCoefficient", "CalcPressureDrop"):
+            if prop not in obj.PropertiesList:
+                continue
+            try:
+                obj.setEditorMode(prop, 2 if multiport else 1)
+            except Exception:
+                pass
 
     def onChanged(self, obj, prop):
         if prop == "LossCoefficientSource":
@@ -461,16 +501,41 @@ class DuctComponent:
             except Exception:
                 pass
 
-        self._addProperty(obj, "App::PropertyFloat", "CalcFlowRate", "Airflow", "Computed flow rate through this component (L/s)")
-        self._addProperty(obj, "App::PropertyFloat", "CalcVelocity", "Airflow", "Computed reference velocity used for this component's pressure drop (m/s)")
-        self._addProperty(obj, "App::PropertyFloat", "CalcLossCoefficient", "Airflow", "Computed loss coefficient (K) from the last calculation")
-        self._addProperty(obj, "App::PropertyFloat", "CalcPressureDrop", "Airflow", "Computed pressure drop across this component (Pa)")
+        self._addProperty(obj, "App::PropertyFloat", "CalcFlowRate", "Airflow", "Computed flow rate through this component (L/s) -- meaningful only for a 1-port or 2-port component; see CalcPortResultsJson for a multiport Primary")
+        self._addProperty(obj, "App::PropertyFloat", "CalcVelocity", "Airflow", "Computed reference velocity used for this component's pressure drop (m/s) -- meaningful only for a 1-port or 2-port component; see CalcPortResultsJson for a multiport Primary")
+        self._addProperty(obj, "App::PropertyFloat", "CalcLossCoefficient", "Airflow", "Computed loss coefficient (K) from the last calculation -- meaningful only for a 1-port or 2-port component; see CalcPortResultsJson for a multiport Primary")
+        self._addProperty(obj, "App::PropertyFloat", "CalcPressureDrop", "Airflow", "Computed pressure drop across this component (Pa) -- meaningful only for a 1-port or 2-port component; see CalcPortResultsJson for a multiport Primary")
 
         for prop in ("CalcFlowRate", "CalcVelocity", "CalcLossCoefficient", "CalcPressureDrop"):
             try:
                 obj.setEditorMode(prop, 1)
             except Exception:
                 pass
+
+        # Internal: the authoritative per-port result data (one entry per
+        # local port that received a fitting-loss contribution), keyed by
+        # edge_key -- see core/_component_results.py for the (de)serializer
+        # and core/AirflowSolver.py for where this gets written every
+        # solve. Always hidden -- never meant for direct property-editor
+        # viewing, same as LocalPortsJson.
+        self._addProperty(
+            obj, "App::PropertyString", "CalcPortResultsJson", "Airflow",
+            "Internal: per-port calculated results (flow, velocity, K, pressure drop, static "
+            "pressure) from the last calculation, keyed by edge_key",
+        )
+        if not getattr(obj, "CalcPortResultsJson", ""):
+            obj.CalcPortResultsJson = "{}"
+        try:
+            obj.setEditorMode("CalcPortResultsJson", 2)
+        except Exception:
+            pass
+
+        # Re-derive whether the 4 scalar Calc* properties above are
+        # currently ambiguous (multiport Primary) every time setProperties()
+        # runs, not just from execute() -- covers a document restore, where
+        # LocalPortsJson is already populated but execute() may not have
+        # run yet.
+        self._syncCalcPropertiesEditorMode(obj)
 
         # Lets a user override the selected library type's own loss formula
         # with explicit per-port K values -- e.g. a manufacturer datasheet
@@ -490,18 +555,31 @@ class DuctComponent:
             obj.LossCoefficientSource = ["Library", "Custom"]
             obj.LossCoefficientSource = "Library"
 
-        # One K per local port, in LocalPortsJson's own order (index-for-
-        # index, e.g. a 3-port tee: [run-inlet K, run-outlet K, branch K]) --
-        # never re-derived from current inlet/outlet role, since flow
-        # direction (and so which ports are inlets/outlets) can change.
-        # Kept in sync with the port list by _syncCustomLossCoefficients(),
-        # called every execute() alongside LocalPortsJson itself.
+        # One K per port that can actually receive one -- a degree-1
+        # component's own single port, or every outlet port on a 2+-port
+        # component (see _analysis_adapter.applicable_loss_ports()); an
+        # inlet never receives a fitting-loss contribution at all, so it
+        # never gets a slot here. CustomLossCoefficientEdgeKeys is the
+        # parallel, explicit list of which edge_key each entry belongs to
+        # -- not positional, so a later flow-direction change (which port
+        # is now the outlet) can't silently scramble an existing value
+        # onto the wrong leg. Both kept in sync with the port list by
+        # _syncCustomLossCoefficients(), called every execute() alongside
+        # LocalPortsJson itself.
         self._addProperty(
             obj, "App::PropertyFloatList", "CustomLossCoefficients", "Airflow",
-            "Custom per-port loss coefficients (K), one entry per local port in LocalPortsJson's "
-            "own order. Used only when LossCoefficientSource is 'Custom'.",
+            "Custom loss coefficients (K), one entry per port CustomLossCoefficientEdgeKeys names "
+            "(same order). Used only when LossCoefficientSource is 'Custom'.",
             16,
         )
+        self._addProperty(
+            obj, "App::PropertyStringList", "CustomLossCoefficientEdgeKeys", "HVAC",
+            "Internal: which local port (edge_key) each CustomLossCoefficients entry belongs to",
+        )
+        try:
+            obj.setEditorMode("CustomLossCoefficientEdgeKeys", 2)
+        except Exception:
+            pass
         self._syncLossCoefficientEditorMode(obj)
 
         if not getattr(obj, "LibraryId", ""):

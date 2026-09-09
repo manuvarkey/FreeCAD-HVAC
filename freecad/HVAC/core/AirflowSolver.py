@@ -40,6 +40,7 @@ from .FlowNetwork import FlowSolveError as AirflowSolveError
 from .FlowNetwork import solve_flow_components
 from ..analysis.pressure import K_DEFAULT, PressureSolver
 from . import _analysis_adapter
+from . import _component_results
 
 
 @dataclass
@@ -68,11 +69,36 @@ class JunctionResult:
 
 
 @dataclass
+class ComponentPortRow:
+    """
+    One display-ready row for the Calculate Airflow results UI: one
+    component's own solved result at one of its local ports/edges, with its
+    real FreeCAD object and a human-readable leg label already resolved
+    (the connected segment's own Number/Label, falling back to the raw
+    edge_key for a synthetic/internal one) -- see
+    core/_component_results.ComponentPortResult for the underlying
+    persisted data this is built from. Kept here, not in ui/TaskPanel.py, so
+    no per-fitting engineering knowledge (which leg is "the branch", etc.)
+    needs to live in the UI layer.
+    """
+    component_obj: object
+    component_role: str  # "Primary" | "Inline"
+    edge_key: str
+    leg_label: str
+    flow_lps: float = 0.0
+    velocity_ms: float = 0.0
+    loss_coefficient: float = None
+    pressure_drop_pa: float = 0.0
+    static_pressure_pa: float = None
+
+
+@dataclass
 class ComponentResult:
     """Solved results for one independently-solvable tree (one balancing terminal)."""
     reference_terminal_key: str
     segments: list = field(default_factory=list)
     junctions: list = field(default_factory=list)
+    component_ports: list = field(default_factory=list)
     critical_terminal_key: str = ""
     critical_pressure_pa: float = 0.0
 
@@ -156,25 +182,38 @@ class AirflowSolver:
                 static_pressure_pa=jres.static_pressure_pa, is_source=jres.is_source, warning=warning,
             ))
 
-        # Per-Inline-component results -- written directly onto each
-        # component's own Calc* properties (a Primary's own contribution
-        # has no single "the" component to attribute it to when it has
-        # several real ports, so it's only ever reported via the segment(s)
-        # it touches above, matching how this always worked).
+        # Per-component (Primary AND Inline) port-level results -- written
+        # onto each component's own CalcPortResultsJson (always) plus its
+        # legacy scalar Calc* properties (only when unambiguous) -- see
+        # _component_results.write_port_results(). This is purely a
+        # *retained record* of the loss each component already contributed
+        # above (segment loop, junction_loss_pa/component_loss_pa) -- never
+        # a second application of it.
+        component_ports = []
         for component_id, cres in tree.components.items():
             comp_obj = component_map.get(component_id)
             if comp_obj is None:
                 continue
-            comp_obj.CalcFlowRate = cres.flow_lps
-            comp_obj.CalcVelocity = cres.velocity_ms
-            comp_obj.CalcLossCoefficient = cres.loss_coefficient
-            comp_obj.CalcPressureDrop = cres.pressure_drop_pa
+            _component_results.write_port_results(comp_obj, cres.port_results)
+
+            role = str(getattr(comp_obj, "ComponentRole", "") or "")
+            for edge_key, pr in cres.port_results.items():
+                leg_obj = segment_map.get(edge_key)
+                leg_label = (
+                    (getattr(leg_obj, "Number", "") or getattr(leg_obj, "Label", "")) if leg_obj is not None else ""
+                ) or edge_key
+                component_ports.append(ComponentPortRow(
+                    component_obj=comp_obj, component_role=role, edge_key=edge_key, leg_label=leg_label,
+                    flow_lps=pr.flow_lps, velocity_ms=pr.velocity_ms, loss_coefficient=pr.loss_coefficient,
+                    pressure_drop_pa=pr.pressure_drop_pa, static_pressure_pa=pr.static_pressure_pa,
+                ))
 
         critical = tree.critical_path
         return ComponentResult(
             reference_terminal_key=tree.reference_terminal_id,
             segments=seg_results,
             junctions=junc_results,
+            component_ports=component_ports,
             critical_terminal_key=critical.terminal_node_id if critical is not None else "",
             critical_pressure_pa=critical.path.loss.total_pa if critical is not None else 0.0,
         )

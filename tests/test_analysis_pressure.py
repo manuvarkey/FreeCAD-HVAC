@@ -112,6 +112,91 @@ def test_per_port_dict_loss_result_attributes_distinct_coefficients():
     assert tree.segments["C"].junction_loss_pa == 0.6 * physics.velocity_pressure(AIR_DENSITY, vC)
 
 
+def test_component_result_retains_distinct_per_leg_k_for_a_multiport_tee():
+    # N2's tee has 3 real ports (A inlet, B/C outlets) -- its own retained
+    # ComponentResult must carry one entry per outlet, each with its own K,
+    # never a single collapsed scalar (see analysis/pressure.py's
+    # ComponentPortResult/ComponentResult docstrings).
+    k_by_edge = {"B": 0.18, "C": 1.05}
+    net = base_tree(loss_evaluator=lambda pv: dict(k_by_edge))
+    tree, warnings = _solve(net)
+    assert warnings == []
+
+    cres = tree.components["N2_Primary"]
+    assert set(cres.port_results.keys()) == {"B", "C"}
+    assert cres.port_results["B"].loss_coefficient == 0.18
+    assert cres.port_results["C"].loss_coefficient == 1.05
+    # The inlet (A) never receives a fitting-loss contribution -- see
+    # pressure.py's own "inlet port -- fitting loss attributed at outlet
+    # ports only" convention -- so it has no entry here either.
+    assert "A" not in cres.port_results
+
+
+def test_component_port_result_static_pressure_derived_per_leg_not_copied_from_node():
+    # Each outlet leg's own static pressure = the node's single common
+    # value minus that SAME leg's own already-retained pressure_drop_pa --
+    # a real per-leg derivation, not the node's value blindly copied onto
+    # every port (which would show the same number for both legs).
+    k_by_edge = {"B": 0.2, "C": 0.6}
+    net = base_tree(loss_evaluator=lambda pv: dict(k_by_edge))
+    tree, _ = _solve(net)
+
+    node_static = tree.junctions["N2"].static_pressure_pa
+    cres = tree.components["N2_Primary"]
+    assert cres.port_results["B"].static_pressure_pa == node_static - cres.port_results["B"].pressure_drop_pa
+    assert cres.port_results["C"].static_pressure_pa == node_static - cres.port_results["C"].pressure_drop_pa
+    # Different K on each leg -> different pressure_drop_pa -> genuinely
+    # different static pressure per leg, not the same value at both.
+    assert cres.port_results["B"].static_pressure_pa != cres.port_results["C"].static_pressure_pa
+
+
+def test_component_port_result_pressure_drop_matches_segment_loss_exactly():
+    # The retained ComponentPortResult must be a record of exactly what was
+    # already added onto the segment's own junction_loss_pa -- never a
+    # second, independently-computed value (which could silently drift or
+    # double count).
+    k_by_edge = {"B": 0.2, "C": 0.6}
+    net = base_tree(loss_evaluator=lambda pv: dict(k_by_edge))
+    tree, _ = _solve(net)
+
+    cres = tree.components["N2_Primary"]
+    assert cres.port_results["B"].pressure_drop_pa == tree.segments["B"].junction_loss_pa
+    assert cres.port_results["C"].pressure_drop_pa == tree.segments["C"].junction_loss_pa
+    assert cres.port_results["B"].velocity_ms == tree.segments["B"].velocity_ms
+    assert cres.port_results["B"].flow_lps == tree.segments["B"].flow_lps
+
+
+def test_component_result_records_each_outlet_for_a_uniform_float_k():
+    # A uniform (non-dict) K is applied identically to every outlet port by
+    # the solver -- the retained ComponentResult must still carry one
+    # ComponentPortResult per outlet (not one merged value), migrating the
+    # old scalar-only Inline-component representation onto the same
+    # per-port architecture a dict result already used.
+    net = base_tree(loss_evaluator=lambda pv: FITTING_K)
+    tree, warnings = _solve(net)
+    assert warnings == []
+
+    cres = tree.components["N2_Primary"]
+    assert set(cres.port_results.keys()) == {"B", "C"}
+    assert cres.port_results["B"].loss_coefficient == FITTING_K
+    assert cres.port_results["C"].loss_coefficient == FITTING_K
+    assert cres.port_results["B"].pressure_drop_pa == tree.segments["B"].junction_loss_pa
+
+
+def test_component_result_is_always_present_but_empty_when_no_loss_applies():
+    # N1 is a degree-1 terminal with no loss_evaluator at all -- "no loss" is
+    # the expected, normal case there. Its ComponentResult must still exist
+    # (not be omitted), with an empty port_results, so a caller can always
+    # rely on every component's own result being freshly replaced each
+    # solve (see ComponentResult's own docstring on why this matters for
+    # clearing stale data).
+    net = base_tree(loss_evaluator=lambda pv: FITTING_K)
+    tree, _ = _solve(net)
+
+    assert "N1_Primary" in tree.components
+    assert tree.components["N1_Primary"].port_results == {}
+
+
 def test_missing_duct_size_is_reported_as_a_warning_not_raised():
     net = base_tree()
     net.segments["A"].section.diameter_mm = 0.0

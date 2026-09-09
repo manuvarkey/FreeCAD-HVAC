@@ -116,6 +116,7 @@ def test_setproperties_hides_internal_bookkeeping_and_json_properties(monkeypatc
     for name in (
         "OwnerNetworkName", "ParentJunctionName", "AttachedEdgeKey",
         "TypeSchemaPropertyNames", "LocalPortsJson", "ConnectionLengthsJson",
+        "CalcPortResultsJson", "CustomLossCoefficientEdgeKeys",
     ):
         assert obj._editor_modes[name] == 2, name
 
@@ -123,6 +124,7 @@ def test_setproperties_hides_internal_bookkeeping_and_json_properties(monkeypatc
         assert obj._editor_modes[name] == 1, name
 
     assert "PortSequence" not in obj._editor_modes
+    assert obj.CalcPortResultsJson == "{}"
 
 
 def _port(edge_key, segment_end, flow_into_junction):
@@ -249,6 +251,57 @@ def test_execute_builds_shape_for_a_non_two_port_primary(monkeypatch):
         dc.execute(obj)
 
         assert obj.Layer_shape_Shape is geometry_result["shape"]
+
+
+def test_execute_hides_scalar_calc_properties_for_multiport_primary(monkeypatch):
+    """
+    A multiport Primary (>2 real ports, e.g. a tee) can't show one
+    unambiguous scalar K/flow/velocity/pressure-drop -- execute() must hide
+    (mode 2) CalcFlowRate/CalcVelocity/CalcLossCoefficient/CalcPressureDrop
+    once LocalPortsJson grows past 2 ports, leaving CalcPortResultsJson as
+    the authoritative data (see core/_component_results.py).
+    """
+    obj = FakeDuctObj()
+    obj.ComponentRole = "Primary"
+    obj.LibraryId = "smacna"
+    obj.TypeId = "branch_tee_generic"
+    obj.LocalPortsJson = json.dumps(
+        [_port("A", "end", True), _port("B", "start", False), _port("C", "start", False)]
+    )
+    for prop in ("CalcFlowRate", "CalcVelocity", "CalcLossCoefficient", "CalcPressureDrop"):
+        obj.addProperty("App::PropertyFloat", prop, "Airflow", "")
+    _give_single_implicit_layer(obj)
+
+    geometry_result = {"shape": object(), "connection_lengths": [], "computed_properties": {}}
+    _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([]), geometry_result))
+
+    dc = _bare_component(obj)
+    dc.execute(obj)
+
+    for prop in ("CalcFlowRate", "CalcVelocity", "CalcLossCoefficient", "CalcPressureDrop"):
+        assert obj._editor_modes[prop] == 2, prop
+
+
+def test_execute_keeps_scalar_calc_properties_visible_for_two_port_primary(monkeypatch):
+    """A through/2-port Primary (e.g. an elbow) has exactly one unambiguous
+    loss path -- its scalar Calc* properties stay visible, read-only."""
+    obj = FakeDuctObj()
+    obj.ComponentRole = "Primary"
+    obj.LibraryId = "smacna"
+    obj.TypeId = "through_elbow_rectangular"
+    obj.LocalPortsJson = json.dumps([_port("A", "end", True), _port("B", "start", False)])
+    for prop in ("CalcFlowRate", "CalcVelocity", "CalcLossCoefficient", "CalcPressureDrop"):
+        obj.addProperty("App::PropertyFloat", prop, "Airflow", "")
+    _give_single_implicit_layer(obj)
+
+    geometry_result = {"shape": object(), "connection_lengths": [], "computed_properties": {}}
+    _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([]), geometry_result))
+
+    dc = _bare_component(obj)
+    dc.execute(obj)
+
+    for prop in ("CalcFlowRate", "CalcVelocity", "CalcLossCoefficient", "CalcPressureDrop"):
+        assert obj._editor_modes[prop] == 1, prop
 
 
 def test_execute_context_family_resolved_from_parent_for_primary_only(monkeypatch):
@@ -640,31 +693,45 @@ def test_on_changed_toggles_custom_loss_coefficients_editor_mode():
     assert obj._editor_modes["CustomLossCoefficients"] == 1
 
 
-def test_sync_custom_loss_coefficients_pads_new_ports_with_zero_and_preserves_existing():
+def test_sync_custom_loss_coefficients_only_tracks_outlet_ports_and_preserves_by_edge_key():
+    """
+    A 3-port tee has one inlet (run_in) and two outlets (run_out, branch)
+    -- CustomLossCoefficients only ever needs a slot for the two outlets,
+    never the inlet (which can't receive a fitting-loss contribution at
+    all). An existing value carries over by its own edge_key, not by
+    position.
+    """
     obj = FakeDuctObj()
     obj.addProperty("App::PropertyFloatList", "CustomLossCoefficients", "Airflow", "")
-    obj.CustomLossCoefficients = [0.0, 0.18]
+    obj.addProperty("App::PropertyStringList", "CustomLossCoefficientEdgeKeys", "HVAC", "")
+    obj.CustomLossCoefficientEdgeKeys = ["run_out"]
+    obj.CustomLossCoefficients = [0.18]
 
     dc = _bare_component(obj)
     dc._syncCustomLossCoefficients(obj, [
         _port("run_in", "end", True), _port("run_out", "start", False), _port("branch", "start", False),
     ])
 
-    assert obj.CustomLossCoefficients == [0.0, 0.18, 0.0]
+    assert obj.CustomLossCoefficientEdgeKeys == ["run_out", "branch"]
+    assert obj.CustomLossCoefficients == [0.18, 0.0]
 
 
-def test_sync_custom_loss_coefficients_truncates_obsolete_trailing_entries():
+def test_sync_custom_loss_coefficients_drops_entry_for_a_port_that_is_no_longer_an_outlet():
     obj = FakeDuctObj()
     obj.addProperty("App::PropertyFloatList", "CustomLossCoefficients", "Airflow", "")
-    obj.CustomLossCoefficients = [0.0, 0.18, 1.05]
+    obj.addProperty("App::PropertyStringList", "CustomLossCoefficientEdgeKeys", "HVAC", "")
+    obj.CustomLossCoefficientEdgeKeys = ["run_out", "branch"]
+    obj.CustomLossCoefficients = [0.18, 1.05]
 
     dc = _bare_component(obj)
+    # The branch leg is gone entirely -- now a plain 2-port through device.
     dc._syncCustomLossCoefficients(obj, [_port("A", "end", True), _port("B", "start", False)])
 
-    assert obj.CustomLossCoefficients == [0.0, 0.18]
+    assert obj.CustomLossCoefficientEdgeKeys == ["B"]
+    assert obj.CustomLossCoefficients == [0.0]
 
 
-def test_execute_syncs_custom_loss_coefficients_to_local_port_count(monkeypatch):
+def test_execute_syncs_custom_loss_coefficients_to_outlet_ports_only(monkeypatch):
     obj = FakeDuctObj()
     obj.LibraryId = "smacna"
     obj.TypeId = "branch_tee_generic"
@@ -672,7 +739,9 @@ def test_execute_syncs_custom_loss_coefficients_to_local_port_count(monkeypatch)
         _port("run_in", "end", True), _port("run_out", "start", False), _port("branch", "start", False),
     ])
     obj.addProperty("App::PropertyFloatList", "CustomLossCoefficients", "Airflow", "")
-    obj.CustomLossCoefficients = [0.0, 0.18]  # stale: only 2 entries for what is now a 3-port tee
+    obj.addProperty("App::PropertyStringList", "CustomLossCoefficientEdgeKeys", "HVAC", "")
+    obj.CustomLossCoefficientEdgeKeys = ["run_out"]  # stale: only the run leg tracked so far
+    obj.CustomLossCoefficients = [0.18]
     _give_single_implicit_layer(obj)
 
     geometry_result = {"shape": object(), "connection_lengths": [], "computed_properties": {}}
@@ -681,4 +750,5 @@ def test_execute_syncs_custom_loss_coefficients_to_local_port_count(monkeypatch)
     dc = _bare_component(obj)
     dc.execute(obj)
 
-    assert obj.CustomLossCoefficients == [0.0, 0.18, 0.0]
+    assert obj.CustomLossCoefficientEdgeKeys == ["run_out", "branch"]
+    assert obj.CustomLossCoefficients == [0.18, 0.0]

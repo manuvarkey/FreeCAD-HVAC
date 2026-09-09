@@ -361,11 +361,41 @@ def build_loss_evaluator(
     return evaluate
 
 
+def applicable_loss_ports(local_ports):
+    """
+    The local ports CustomLossCoefficients needs one value for: a degree-1
+    component's own single port (applied unconditionally, matching
+    loss_api.py's own terminal_component_loss convention -- there's only
+    ever one real duct connection to reference a loss against at all), or
+    every outlet port (flow leaving the node into that edge) on a 2+-port
+    component -- the same "fitting loss attributed at outlet ports only"
+    convention build_loss_evaluator's own uniform/dict-K paths use, and
+    the same shape loss_api.py's own branch_loss returns (an entry per
+    downstream leg, never the inlet). An inlet port never receives a
+    fitting-loss contribution at all, so it never needs (or gets) a
+    CustomLossCoefficients slot either -- storing one for it would always
+    be dead weight the solver could never actually apply. Which ports
+    count as outlets is decided by each port's own flow_into_junction,
+    already resolved for the current flow direction when LocalPortsJson
+    was last composed -- Component.py's own _syncCustomLossCoefficients()
+    re-derives this same set every sync, so it stays correct even if flow
+    direction later changes.
+    """
+    if len(local_ports) == 1:
+        return list(local_ports)
+    return [p for p in local_ports if not p.get("flow_into_junction")]
+
+
 def _build_custom_loss_evaluator(comp_obj):
     """
-    LossCoefficientSource == "Custom" path: map CustomLossCoefficients
-    (one K per LocalPortsJson entry, same order) onto each port's own
-    edge_key, entirely bypassing the library's own loss formula.
+    LossCoefficientSource == "Custom" path: map CustomLossCoefficients onto
+    each applicable port's own edge_key (see applicable_loss_ports()),
+    entirely bypassing the library's own loss formula. CustomLossCoefficients
+    and CustomLossCoefficientEdgeKeys are parallel lists -- the edge_key
+    each K value belongs to is explicit, not positional, so this never
+    depends on LocalPortsJson's own port order matching what's currently
+    stored (Component.py's own sync keeps the two in step; this still
+    validates it fresh here rather than trusting that blindly).
 
     Config is validated up front, not lazily inside the returned callable,
     so a bad Custom setup fails as soon as the network model is built --
@@ -375,65 +405,50 @@ def _build_custom_loss_evaluator(comp_obj):
     """
     local_ports = json.loads(getattr(comp_obj, "LocalPortsJson", "") or "[]")
     custom_k = list(getattr(comp_obj, "CustomLossCoefficients", None) or [])
+    stored_edge_keys = list(getattr(comp_obj, "CustomLossCoefficientEdgeKeys", None) or [])
     label = element_identifier(comp_obj)
 
-    # Step 1/2 (read): local_ports/custom_k above, straight off the object.
-    # Step 3: length must match 1:1 -- the mapping is purely positional.
-    if len(custom_k) != len(local_ports):
+    expected_edge_keys = []
+    for port in applicable_loss_ports(local_ports):
+        edge_key = port.get("edge_key")
+        if not edge_key:
+            raise ValueError(
+                "Component '{}': an applicable local port has no edge_key -- can't map its custom K.".format(label)
+            )
+        expected_edge_keys.append(edge_key)
+
+    if len(custom_k) != len(stored_edge_keys):
         raise ValueError(
-            "Component '{}': CustomLossCoefficients has {} value(s) but LocalPortsJson has {} "
-            "port(s) -- they must match 1:1.".format(label, len(custom_k), len(local_ports))
+            "Component '{}': CustomLossCoefficients has {} value(s) but CustomLossCoefficientEdgeKeys has {} "
+            "-- they must match 1:1.".format(label, len(custom_k), len(stored_edge_keys))
         )
 
-    # Step 4: every K must be a finite, non-negative number.
-    for index, raw_k in enumerate(custom_k):
+    if set(stored_edge_keys) != set(expected_edge_keys) or len(stored_edge_keys) != len(expected_edge_keys):
+        raise ValueError(
+            "Component '{}': CustomLossCoefficients is out of sync with this component's current ports "
+            "(expected K for {}, has K for {}) -- recompute the network to resync it.".format(
+                label, sorted(expected_edge_keys), sorted(stored_edge_keys)
+            )
+        )
+
+    for edge_key, raw_k in zip(stored_edge_keys, custom_k):
         try:
             k_value = float(raw_k)
         except (TypeError, ValueError):
             k_value = float("nan")
         if not math.isfinite(k_value) or k_value < 0.0:
             raise ValueError(
-                "Component '{}': custom loss coefficient at port index {} is '{}' -- K must be "
-                "finite and >= 0.".format(label, index, raw_k)
+                "Component '{}': custom loss coefficient for port '{}' is '{}' -- K must be finite "
+                "and >= 0.".format(label, edge_key, raw_k)
             )
 
-    # Every port needs a real edge_key to map its K onto -- without one
-    # there's nothing for the pressure solver to key its result dict by.
-    for index, port in enumerate(local_ports):
-        if not port.get("edge_key"):
-            raise ValueError(
-                "Component '{}': local port at index {} has no edge_key -- can't map its custom K.".format(
-                    label, index
-                )
-            )
+    result = {edge_key: float(k) for edge_key, k in zip(stored_edge_keys, custom_k)}
 
     def evaluate(port_velocities):
-        # Step 5/6: build {edge_key: K}, same contract pressure.py already
-        # consumes for a library loss result.
-        #
-        # A degree-1 component (e.g. a terminal diffuser) has only one real
-        # duct connection to reference a loss against at all, so its single
-        # K always applies, whatever its own flow_into_junction happens to
-        # be -- exactly like loss_api.py's own terminal_component_loss,
-        # which returns its one port's K unconditionally, with no
-        # inlet/outlet check.
-        if len(local_ports) == 1:
-            return {local_ports[0]["edge_key"]: float(custom_k[0])}
-
-        # A multi-port component (e.g. a tee) only gets a K applied at its
-        # outlet ports (flow leaving the node into that edge) -- the same
-        # "fitting loss attributed at outlet ports only" convention the
-        # solver's own uniform/float-K branch applies (see pressure.py's own
-        # comment on that), and the same shape loss_api.py's own branch_loss
-        # returns (an entry per downstream leg, never the inlet). Which
-        # ports are outlets is decided by each port's own flow_into_junction,
-        # already resolved for the current flow direction when
-        # LocalPortsJson was last composed, so this stays correct even if
-        # flow direction changes.
-        return {
-            port["edge_key"]: float(k)
-            for port, k in zip(local_ports, custom_k)
-            if not port.get("flow_into_junction")
-        }
+        # Build {edge_key: K}, same contract pressure.py already consumes
+        # for a library loss result -- already exactly right, no further
+        # direction-based filtering needed (that's baked into how
+        # expected_edge_keys/stored_edge_keys were derived above).
+        return dict(result)
 
     return evaluate
