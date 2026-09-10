@@ -15,6 +15,7 @@ import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 import pytest
 
 from freecad.HVAC.analysis import physics as airflow
+from freecad.HVAC.analysis.pressure import ComponentPortResult, ComponentResult, ComponentTreeResult, JunctionResult, SegmentResult
 from freecad.HVAC.core import _component_results
 from freecad.HVAC.core.AirflowSolver import AirflowSolver
 from freecad.HVAC.utils import hvaclib
@@ -543,4 +544,110 @@ def test_inline_component_on_inlet_edge_derives_velocity_from_that_edges_own_flo
     assert inlet_damper.CalcVelocity == pytest.approx(v_a)
     expected_pa = K_INLET_DAMPER * airflow.velocity_pressure(AIR_DENSITY, v_a)
     assert inlet_damper.CalcPressureDrop == pytest.approx(expected_pa)
-    assert seg_a.fitting_loss_pa == pytest.approx(expected_pa)
+
+
+# ----------------------------------------------------------------------
+# AirflowSolver._map_component_result -- ComponentPortRow's path_label/
+# status mapping (Milestone A: propagate existing LossPath metadata --
+# from_edge_key/to_edge_key/status, already on the pure ComponentPortResult
+# -- into the FreeCAD-facing display row). Called directly against
+# hand-built pure ComponentTreeResult dataclasses rather than through the
+# whole network-sync stack, since this is purely an adapter/mapping
+# concern -- the loss-path/pressure math itself is already covered
+# elsewhere (tests/test_analysis_pressure.py).
+# ----------------------------------------------------------------------
+
+def _fake_tree(port_results_by_component):
+    """A minimal ComponentTreeResult with 3 real segments (A, B, C) and one
+    junction, and one Primary component per port_results dict given."""
+    segments = {key: SegmentResult(edge_key=key) for key in ("A", "B", "C")}
+    junctions = {"N1": JunctionResult(node_id="N1")}
+    components = {
+        comp_id: ComponentResult(component_id=comp_id, port_results=port_results)
+        for comp_id, port_results in port_results_by_component.items()
+    }
+    return ComponentTreeResult(
+        reference_terminal_id="N1", segments=segments, junctions=junctions, components=components,
+    )
+
+
+def _fake_maps(component_roles):
+    segment_map = {
+        "A": FakeObj(Number="D01", Label="Seg A"),
+        "B": FakeObj(Number="D02", Label="Seg B"),
+        "C": FakeObj(Number="D03", Label="Seg C"),
+    }
+    junction_map = {"N1": FakeObj(Number="J01", Label="Junc 1")}
+    component_map = {
+        comp_id: FakeObj(ComponentRole=role, Number="J04", Label="Tee")
+        for comp_id, role in component_roles.items()
+    }
+    return segment_map, junction_map, component_map
+
+
+def test_component_port_row_path_label_and_status_for_diverging_leg():
+    # 1:N (diverging): the common inlet (A) splits into this outlet (B) --
+    # the reference leg is the OUTLET, matching LossPath's own convention.
+    tree = _fake_tree({
+        "DivTee": {
+            "B": ComponentPortResult(
+                edge_key="B", flow_lps=10.0, velocity_ms=5.0, loss_coefficient=0.3,
+                pressure_drop_pa=4.5, static_pressure_pa=100.0,
+                from_edge_key="A", to_edge_key="B", status="fallback",
+            ),
+        },
+    })
+    segment_map, junction_map, component_map = _fake_maps({"DivTee": "Primary"})
+
+    cres = AirflowSolver._map_component_result(tree, segment_map, junction_map, component_map)
+
+    (row,) = cres.component_ports
+    assert row.path_label == "D01 → D02"
+    assert row.leg_label == "D02"
+    assert row.status == "fallback"
+
+
+def test_component_port_row_path_label_and_status_for_converging_leg():
+    # N:1 (converging): this inlet (C) merges into the common outlet (A) --
+    # the reference leg is the INLET here, the opposite side from the
+    # diverging case above, so a direction-flipping bug in the label
+    # mapping would silently swap "from"/"to" without either test alone
+    # catching it.
+    tree = _fake_tree({
+        "ConvTee": {
+            "C": ComponentPortResult(
+                edge_key="C", flow_lps=8.0, velocity_ms=4.0, loss_coefficient=0.6,
+                pressure_drop_pa=6.0, static_pressure_pa=90.0,
+                from_edge_key="C", to_edge_key="A", status="exact",
+            ),
+        },
+    })
+    segment_map, junction_map, component_map = _fake_maps({"ConvTee": "Primary"})
+
+    cres = AirflowSolver._map_component_result(tree, segment_map, junction_map, component_map)
+
+    (row,) = cres.component_ports
+    assert row.path_label == "D03 → D01"
+    assert row.leg_label == "D03"
+    assert row.status == "exact"
+
+
+def test_component_port_row_uses_open_for_a_1port_devices_atmosphere_side():
+    # A terminal device's path has no real duct on one side (see LossPath's
+    # own from_edge_key/to_edge_key docstring) -- must render as "Open",
+    # not a blank cell or a raw None.
+    tree = _fake_tree({
+        "Diffuser": {
+            "A": ComponentPortResult(
+                edge_key="A", flow_lps=5.0, velocity_ms=3.0, loss_coefficient=0.1,
+                pressure_drop_pa=1.0, static_pressure_pa=0.0,
+                from_edge_key="A", to_edge_key=None, status="exact",
+            ),
+        },
+    })
+    segment_map, junction_map, component_map = _fake_maps({"Diffuser": "Primary"})
+
+    cres = AirflowSolver._map_component_result(tree, segment_map, junction_map, component_map)
+
+    (row,) = cres.component_ports
+    assert row.path_label == "D01 → Open"

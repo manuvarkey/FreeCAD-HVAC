@@ -23,6 +23,7 @@ from network_fixtures import (
 )
 
 from freecad.HVAC.analysis import physics as airflow
+from freecad.HVAC.analysis.balancing import BalancingRequirement, PressureBalanceCoordinator, PressureBalancedSizingResult
 from freecad.HVAC.core import _analysis_adapter as duct_sizer_mod
 from freecad.HVAC.core.DuctSizer import DuctSizer
 
@@ -325,7 +326,40 @@ def test_pressure_balanced_static_regain_wiring():
     # balancing_requirements (if any) must always be mirrored into warnings
     # too, so they're visible without any extra UI work.
     for req in result.balancing_requirements:
-        assert any(req.branch_port in w for w in result.warnings)
+        assert any(req.branch_key in w for w in result.warnings)
+
+
+def test_balancing_requirement_mapped_to_display_ready_row(monkeypatch):
+    """
+    DuctSizer.solve() must map each pure analysis.balancing.BalancingRequirement
+    onto a BalancingRequirementRow carrying the real junction/branch FreeCAD
+    objects (from junction_map/segment_map) alongside the exact same
+    pressure_deficit_pa/required_k -- not just mirror it into the warnings
+    text (already covered above). PressureBalanceCoordinator.size() itself
+    is stubbed out so this test is about the adapter's own mapping, not the
+    balancing algorithm (already covered by tests/test_analysis_balancing.py).
+    """
+    net, segment_map, junction_map = base_tree(
+        net_extra_props=_sizing_props(method="PressureBalancedStaticRegain", target_velocity=5.0),
+    )
+
+    fake_result = PressureBalancedSizingResult(
+        balancing_requirements=[
+            BalancingRequirement(junction_id="N2", branch_port="B", pressure_deficit_pa=37.2, required_k=2.16),
+        ],
+    )
+    monkeypatch.setattr(PressureBalanceCoordinator, "size", lambda self, *a, **k: fake_result)
+
+    result = DuctSizer(net).solve()
+
+    assert len(result.balancing_requirements) == 1
+    row = result.balancing_requirements[0]
+    assert row.junction_obj is junction_map["N2"]
+    assert row.branch_obj is segment_map["B"]
+    assert row.junction_key == "N2"
+    assert row.branch_key == "B"
+    assert row.pressure_deficit_pa == 37.2
+    assert row.required_k == 2.16
 
 
 # ----------------------------------------------------------------------------

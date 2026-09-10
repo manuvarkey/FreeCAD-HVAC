@@ -73,18 +73,33 @@ class ComponentPortRow:
     """
     One display-ready row for the Calculate Airflow results UI: one
     component's own solved result at one of its local ports/edges, with its
-    real FreeCAD object and a human-readable leg label already resolved
-    (the connected segment's own Number/Label, falling back to the raw
-    edge_key for a synthetic/internal one) -- see
+    real FreeCAD object and human-readable labels already resolved (the
+    connected segment's own Number/Label, falling back to the raw edge_key
+    for a synthetic/internal one, or "Open" for a None atmosphere/open
+    side -- see LossPath's own from_edge_key/to_edge_key semantics) -- see
     core/_component_results.ComponentPortResult for the underlying
     persisted data this is built from. Kept here, not in ui/TaskPanel.py, so
-    no per-fitting engineering knowledge (which leg is "the branch", etc.)
-    needs to live in the UI layer.
+    no per-fitting engineering knowledge (which leg is "the branch", etc.,
+    or which side of a path is upstream) needs to live in the UI layer --
+    the UI only ever sees an already-directed path_label plus a plain
+    status string, never edge keys or LossPath's from/to fields directly.
+
+    path_label reads "<from> → <to>" from the same LossPath this
+    result's own K/ΔP came from (analysis/pressure.py's
+    resolve_loss_evaluation()) -- it's the SAME reference leg edge_key is
+    already keyed by, just presented with its direction made explicit,
+    e.g. "D01 → D02" for a diverging outlet leg or "D02 → D01" for
+    a converging inlet leg. status is pr.status verbatim (an
+    analysis.loss.LossStatus value's own .value string) -- never
+    reconstructed from loss_coefficient/warnings, so a numeric fallback K
+    stays visibly distinguishable from a real library/custom coefficient.
     """
     component_obj: object
     component_role: str  # "Primary" | "Inline"
     edge_key: str
     leg_label: str
+    path_label: str
+    status: str
     flow_lps: float = 0.0
     velocity_ms: float = 0.0
     loss_coefficient: float = None
@@ -136,6 +151,22 @@ class AirflowSolver:
     # ------------------------------------------------------------------
     # Map a pure ComponentTreeResult back onto real FreeCAD objects
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _edge_label(edge_key, segment_map):
+        """
+        Human-readable label for one side of a LossPath: a real edge_key's
+        own connected segment Number/Label (falling back to the raw
+        edge_key for a synthetic/internal one segment_map has no entry
+        for), or "Open" for a None atmosphere/open side (a 1-port
+        terminal device's other "side" -- see LossPath's own
+        from_edge_key/to_edge_key docstring). Shared by leg_label and
+        path_label so both use exactly the same resolution.
+        """
+        if edge_key is None:
+            return "Open"
+        leg_obj = segment_map.get(edge_key)
+        return ((getattr(leg_obj, "Number", "") or getattr(leg_obj, "Label", "")) if leg_obj is not None else "") or edge_key
 
     @staticmethod
     def _map_component_result(tree, segment_map, junction_map, component_map):
@@ -198,12 +229,14 @@ class AirflowSolver:
 
             role = str(getattr(comp_obj, "ComponentRole", "") or "")
             for edge_key, pr in cres.port_results.items():
-                leg_obj = segment_map.get(edge_key)
-                leg_label = (
-                    (getattr(leg_obj, "Number", "") or getattr(leg_obj, "Label", "")) if leg_obj is not None else ""
-                ) or edge_key
+                leg_label = AirflowSolver._edge_label(edge_key, segment_map)
+                path_label = "{} → {}".format(
+                    AirflowSolver._edge_label(pr.from_edge_key, segment_map),
+                    AirflowSolver._edge_label(pr.to_edge_key, segment_map),
+                )
                 component_ports.append(ComponentPortRow(
                     component_obj=comp_obj, component_role=role, edge_key=edge_key, leg_label=leg_label,
+                    path_label=path_label, status=pr.status,
                     flow_lps=pr.flow_lps, velocity_ms=pr.velocity_ms, loss_coefficient=pr.loss_coefficient,
                     pressure_drop_pa=pr.pressure_drop_pa, static_pressure_pa=pr.static_pressure_pa,
                 ))

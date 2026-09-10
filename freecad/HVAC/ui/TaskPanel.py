@@ -1447,9 +1447,9 @@ class TaskPanelAirflowResults:
     ]
     FITTING_HEADERS = [
         ("#", "Number"), ("Fitting", "Fitting"), ("Role", "Role (Primary / Inline)"),
-        ("Leg", "Leg / Port"), ("Q (L/s)", "Flow Rate"), ("V (m/s)", "Velocity"),
+        ("Path", "Flow Path (from → to)"), ("Q (L/s)", "Flow Rate"), ("V (m/s)", "Velocity"),
         ("K", "Loss Coefficient (K)"), ("ΔPd (Pa)", "Fitting (Dynamic) Loss"),
-        ("Ps (Pa)", "Static Pressure"),
+        ("Ps (Pa)", "Static Pressure"), ("Status", "Loss Calculation Status"),
     ]
 
     def __init__(self, network_obj, result):
@@ -1653,11 +1653,16 @@ class TaskPanelAirflowResults:
         layout.addWidget(QtWidgets.QLabel(translate("HVAC_CalculateAirflow", "Junctions")))
         layout.addWidget(junc_table)
 
-        # One row per component leg -- a multiport fitting (tee/wye/cross)
-        # gets one row per outlet it actually has a K for, each with its own
-        # K/ΔP, rather than one misleading combined scalar per fitting (see
+        # One row per applicable directed loss path/reference leg -- a
+        # multiport fitting (tee/wye/cross) gets one row per path it
+        # actually has a K for, each with its own K/ΔP, rather than one
+        # misleading combined scalar per fitting (see
         # core/AirflowSolver.ComponentPortRow / core/_component_results.py).
-        # A 1-port or 2-port component just ends up with a single row here.
+        # This is the same generic path-based shape for a diverging
+        # fitting (paths run common-inlet -> each outlet), a converging
+        # one (paths run each inlet -> common-outlet), and a plain 1-port
+        # or 2-port component (a single row) -- no per-family branching
+        # needed here to tell them apart.
         fittings = sorted(
             comp.component_ports,
             key=lambda row: (getattr(row.component_obj, "Number", "") or "", row.edge_key),
@@ -1671,12 +1676,13 @@ class TaskPanelAirflowResults:
                 getattr(fit.component_obj, "Number", "") or "",
                 fit.component_obj.Label,
                 fit.component_role,
-                fit.leg_label,
+                fit.path_label,
                 "{:.2f}".format(fit.flow_lps),
                 "{:.2f}".format(fit.velocity_ms),
                 "{:.2f}".format(fit.loss_coefficient) if fit.loss_coefficient is not None else "-",
                 "{:.2f}".format(fit.pressure_drop_pa),
                 "{:.1f}".format(fit.static_pressure_pa) if fit.static_pressure_pa is not None else "-",
+                fit.status.capitalize() if fit.status else "-",
             ]
             for col, value in enumerate(values):
                 fit_table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
@@ -1805,6 +1811,11 @@ class TaskPanelSizeDucts:
         ("Current", "Current Size"), ("Proposed", "Proposed Size"),
         ("V (m/s)", "Velocity"), ("R (Pa/m)", "Friction Rate"),
         ("Bal.", "Balanced (Static Regain)"),
+    ]
+    BALANCING_HEADERS = [
+        ("Junction", "Junction"), ("Branch", "Branch"),
+        ("Required ΔP (Pa)", "Additional pressure drop still required after sizing"),
+        ("Required K", "Loss coefficient a balancing device here would need"),
     ]
 
     SIZING_METHODS = [
@@ -2055,6 +2066,44 @@ class TaskPanelSizeDucts:
         table.resizeColumnsToContents()
         self.selection_sync.addTable(table, [sres.obj for sres in segments])
         self.results_layout.addWidget(table)
+
+        # Only ever non-empty for PressureBalancedStaticRegain, when some
+        # branch's pressure deficit couldn't be closed by sizing alone --
+        # reporting only (see core.DuctSizer.BalancingRequirementRow): this
+        # never inserts a damper, sets a custom K, or changes topology/
+        # geometry, it just shows the additional ΔP/K a real balancing
+        # device would need at that junction/branch.
+        if result.balancing_requirements:
+            self.results_layout.addWidget(
+                QtWidgets.QLabel(translate("HVAC_SizeDucts", "Balancing Requirements"))
+            )
+            bal_table = QtWidgets.QTableWidget(len(result.balancing_requirements), len(self.BALANCING_HEADERS))
+            _setHeaderLabelsWithTooltips(bal_table, self.BALANCING_HEADERS)
+            bal_table.verticalHeader().setVisible(False)
+            bal_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+            for row, req in enumerate(result.balancing_requirements):
+                values = [
+                    self._objectLabel(req.junction_obj, req.junction_key),
+                    self._objectLabel(req.branch_obj, req.branch_key),
+                    "{:.1f}".format(req.pressure_deficit_pa),
+                    "{:.2f}".format(req.required_k),
+                ]
+                for col, value in enumerate(values):
+                    bal_table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
+            bal_table.resizeColumnsToContents()
+            self.selection_sync.addTable(
+                bal_table, [req.junction_obj for req in result.balancing_requirements]
+            )
+            self.results_layout.addWidget(bal_table)
+
+    @staticmethod
+    def _objectLabel(obj, fallback_key):
+        """Number, then Label, then the raw graph key -- same resolution the segment-sizing
+        table above already uses for a real object, for whichever of junction_obj/branch_obj
+        actually resolved (see BalancingRequirementRow's own docstring on why either may be None)."""
+        if obj is None:
+            return fallback_key
+        return getattr(obj, "Number", "") or getattr(obj, "Label", "") or fallback_key
 
     def _formatSize(self, profile, diameter_mm, width_mm, height_mm):
         if profile == "Circular":

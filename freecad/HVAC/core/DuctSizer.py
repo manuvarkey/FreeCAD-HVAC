@@ -80,15 +80,38 @@ class SegmentSizeResult:
 
 
 @dataclass
+class BalancingRequirementRow:
+    """
+    Display-ready mapping of one analysis.balancing.BalancingRequirement
+    onto its real FreeCAD objects, so ui/TaskPanel.py can show a
+    "Balancing Requirements" table the same way it already shows the
+    segment-sizing table (Number/Label straight off a real object) without
+    needing to understand junction_id/branch_port graph keys itself. Either
+    *_obj may be None if the pure result's own key doesn't resolve to a
+    live object (kept alongside its own raw key so the UI still has
+    something to show in that case).
+    """
+    junction_obj: object
+    branch_obj: object
+    junction_key: str
+    branch_key: str
+    pressure_deficit_pa: float
+    required_k: float
+
+
+@dataclass
 class DuctSizingResult:
     """Whole-network sizing result: one SegmentSizeResult per segment, plus any warnings."""
     segments: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
     # Only ever populated when SizingMethod is PressureBalancedStaticRegain
     # and some branch's pressure deficit couldn't be closed by sizing alone
-    # -- see analysis.balancing.BalancingRequirement. Each one is also
-    # mirrored into `warnings` as a human-readable line, so it's visible in
-    # the existing Size Ducts warnings box without any further UI work.
+    # -- see analysis.balancing.BalancingRequirement, mapped onto
+    # BalancingRequirementRow above. Each one is also mirrored into
+    # `warnings` as a human-readable line (explaining WHY the path isn't
+    # balanced), so it's visible in the existing Size Ducts warnings box
+    # even without reading the structured table ui/TaskPanel.py builds
+    # from this list.
     balancing_requirements: list = field(default_factory=list)
 
 
@@ -126,13 +149,19 @@ class DuctSizer:
 
         requirements = getattr(pure_result, "balancing_requirements", [])
         if requirements:
-            result.balancing_requirements = list(requirements)
             for req in requirements:
+                junction_obj = junction_map.get(req.junction_id)
+                branch_obj = segment_map.get(req.branch_port)
+                result.balancing_requirements.append(BalancingRequirementRow(
+                    junction_obj=junction_obj, branch_obj=branch_obj,
+                    junction_key=req.junction_id, branch_key=req.branch_port,
+                    pressure_deficit_pa=req.pressure_deficit_pa, required_k=req.required_k,
+                ))
                 result.warnings.append(
                     "Pressure balancing: node '{}' branch '{}' has an unresolved deficit of {:.1f} Pa "
                     "-- consider a balancing damper here (required loss coefficient K ≈ {:.2f}).".format(
-                        _analysis_adapter.element_identifier(junction_map.get(req.junction_id)) or req.junction_id,
-                        _analysis_adapter.element_identifier(segment_map.get(req.branch_port)) or req.branch_port,
+                        _analysis_adapter.element_identifier(junction_obj) or req.junction_id,
+                        _analysis_adapter.element_identifier(branch_obj) or req.branch_port,
                         req.pressure_deficit_pa, req.required_k
                     )
                 )
