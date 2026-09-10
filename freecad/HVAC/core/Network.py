@@ -22,25 +22,19 @@
 ################################################################################
 
 """This module implements HVAC duct description classes."""
-import math
 import json
 import traceback
 from dataclasses import asdict
 import FreeCAD
-import FreeCADGui as Gui
-from pivy import coin
-from PySide import QtWidgets, QtCore
-from PySide.QtCore import QT_TRANSLATE_NOOP
-translate = FreeCAD.Qt.translate
 
 from ..utils import hvaclib
 from ..utils import materials as hvac_materials
-from ..ui import TaskPanel
 from ..core.NetworkParser import DuctNetworkParser
 from ..core.Segment import DuctSegment
 from ..core.Junction import DuctJunction, DuctJunctionVirtual
 from ..core.Component import DuctComponent
 from ..core import _construction_schema
+from ..core import _custom_loss
 from ..library.construction import (
     ALL_LAYER_ROLES, ROLE_FLOW_SURFACE, ROLE_STRUCTURAL_SHELL,
     ROLE_THERMAL_INSULATION, ROLE_ACOUSTIC_ABSORBER, ROLE_ACOUSTIC_LINER,
@@ -74,55 +68,12 @@ class DuctManagedFolder:
 
     @staticmethod
     def create(doc, name, owner, role):
+        from ..ui.NetworkViewProvider import DuctManagedFolderViewProvider
+
         folder = doc.addObject("App::DocumentObjectGroupPython", name)
         DuctManagedFolder(folder, owner=owner, role=role)
         DuctManagedFolderViewProvider(folder.ViewObject)
         return folder
-
-
-class DuctManagedFolderViewProvider:
-    def __init__(self, vobj):
-        vobj.Proxy = self
-
-    def attach(self, vobj):
-        self.Object = vobj.Object
-
-    def dumps(self):
-        return None
-
-    def loads(self, state):
-        pass
-
-    def getIcon(self):
-        return hvaclib.get_icon_path("DuctsIcon.svg")
-
-    def onDelete(self, vobj, subelements):
-        obj = vobj.Object
-        owner = DuctNetwork.getOwnerNetwork(obj)
-        # Allow deletion only when the owner network itself is being deleted
-        if owner and getattr(owner.Proxy, "_allow_internal_delete", False):
-            return True
-        FreeCAD.Console.PrintWarning(
-            "HVAC - Internal folder '{}' cannot be deleted directly.\n".format(obj.Label)
-        )
-        return False
-
-    def claimChildren(self):
-        try:
-            # DuctComponent objects live in this folder's OutList (so
-            # collectComponentObjects can find them), but they're claimed
-            # by their parent DuctJunction for tree display (see
-            # DuctJunctionViewProvider.claimChildren) -- filter them out
-            # here or they'd show up twice.
-            return [o for o in self.Object.OutList if not hvaclib.isDuctComponent(o)]
-        except Exception:
-            return []
-
-    def canDropObjects(self):
-        return False
-
-    def canDragObjects(self):
-        return False
 
 
 class DuctNetwork:
@@ -785,6 +736,8 @@ class DuctNetwork:
     
     @staticmethod
     def createObject(name):
+        from ..ui.NetworkViewProvider import DuctNetworkViewProvider
+
         net = FreeCAD.ActiveDocument.addObject('App::DocumentObjectGroupPython', name)
         DuctNetwork(net)
         DuctNetworkViewProvider(net.ViewObject)
@@ -937,12 +890,16 @@ class DuctNetwork:
     
     def setActive(self):
         """Set this DuctNetwork as the active container in the 3D view."""
+        import FreeCADGui as Gui
+
         Gui.ActiveDocument.ActiveView.setActiveObject(DuctNetwork.CONTEXT_KEY, self.Object)
 
     @staticmethod
     def _setGeometryVisibilityDeferred(obj, visible):
         if not FreeCAD.GuiUp:
             return
+
+        from PySide import QtCore
 
         def apply():
             try:
@@ -956,11 +913,13 @@ class DuctNetwork:
                 pass
 
         QtCore.QTimer.singleShot(0, apply)
-        
+
     def _selectGeometry(self, predicate):
         """Clear the current selection, then select every Geometry-folder
         child for which predicate(child) is True. Shared by
         selectAllGeometry/selectAllSegments/selectAllComponents below."""
+        import FreeCADGui as Gui
+
         net = self.Object
         Gui.Selection.clearSelection()
 
@@ -1497,6 +1456,13 @@ class DuctNetwork:
         this an Inline component's AttachedEdgeKey (snapshotted under the
         old tag) would never match the new tag and would be wrongly
         dropped on the very first sync after every file reopen.
+
+        The Primary and every Inline component's own CustomLossCoefficientEdgeKeys
+        (LossCoefficientSource == "Custom" storage -- see core/_custom_loss.py)
+        gets the exact same old-tag -> new-tag carry forward, for the same
+        reason: without it, a reload would make every stored custom K look
+        unmatched and get silently reset to 0.0 by Component.py's own
+        _syncCustomLossCoefficients.
         """
         net = self.Object
         doc = net.Document
@@ -1538,6 +1504,22 @@ class DuctNetwork:
             new_key = edge_key_remap.get(old_key)
             if new_key is not None and new_key != old_key:
                 comp.AttachedEdgeKey = new_key
+                changed = True
+
+        # CustomLossCoefficientEdgeKeys is persisted by edge_key too, so it
+        # needs the exact same old-tag -> new-tag carry forward as
+        # AttachedEdgeKey above -- otherwise Component.py's own
+        # _syncCustomLossCoefficients would see every stored key as
+        # "unmatched" on the very first sync after a document reload and
+        # silently reset every custom K back to 0.0. Applies to both the
+        # Primary (if it already exists) and every Inline component.
+        for comp in ([primary] if primary is not None else []) + inline_components:
+            if "CustomLossCoefficientEdgeKeys" not in comp.PropertiesList:
+                continue
+            stored_keys = list(getattr(comp, "CustomLossCoefficientEdgeKeys", None) or [])
+            new_keys, keys_changed = _custom_loss.remap_persisted_edge_keys(stored_keys, edge_key_remap)
+            if keys_changed:
+                comp.CustomLossCoefficientEdgeKeys = new_keys
                 changed = True
 
         keep, drop = [], []
@@ -1648,15 +1630,17 @@ class DuctNetwork:
             FreeCAD.Console.PrintError("Error refreshing base direction overlay.\n")
     
     def requestSync(self, initial_sync=None, force_recompute=False):
+        from PySide import QtCore
+
         if initial_sync is not None:
-            self._initial_sync = bool(initial_sync)            
-        
+            self._initial_sync = bool(initial_sync)
+
         if self._sync_suspended:
             return
-        
+
         if self._sync_scheduled:
             return
-        
+
         self._sync_scheduled = True
         if initial_sync:
             FreeCAD.Console.PrintMessage("HVAC - Sync requested (Initial sync).\n")
@@ -2121,240 +2105,6 @@ class DuctNetwork:
         ts = max(0.0, float(trim_entry.get("start", 0.0) or 0.0))
         te = max(0.0, float(trim_entry.get("end", 0.0) or 0.0))
         return ts, te
-        
-
-class DuctNetworkViewProvider:
-    """A View Provider for the HVAC duct network object"""
-
-    def __init__(self, vobj):
-        vobj.Proxy = self
-
-    def attach(self, vobj):
-        self.Object = vobj.Object
-
-        self._baseDirectionRoot = coin.SoSeparator()
-        self._baseDirectionRoot.setName("HVAC_BaseDirectionArrows")
-        vobj.RootNode.addChild(self._baseDirectionRoot)
-
-        self.ensureDirectionArrowProperties(vobj)
-
-        try:
-            vobj.addDisplayMode(self._baseDirectionRoot, "Direction Arrows")
-            vobj.DisplayMode = "Direction Arrows"
-        except Exception:
-            pass
-
-        self.refreshBaseDirectionArrows()
-
-    def dumps(self):
-        return None
-
-    def loads(self, state):
-        pass
-
-    def getIcon(self):
-        return hvaclib.get_icon_path("DuctsIcon.svg")
-
-    def setEdit(self, vobj, mode):
-        
-        def callback_add_base_object(net, obj):
-            net.Proxy.addBaseObject(obj)
-        
-        def callback_remove_base_object(net, obj):
-            net.Proxy.removeBaseObject(obj)
-            
-        panel = TaskPanel.TaskPanelEditDuctNetwork(vobj.Object,
-            callback_add_base_object = callback_add_base_object,
-            callback_remove_base_object = callback_remove_base_object
-        )
-        Gui.Control.showDialog(panel)
-        return True
-
-    def unsetEdit(self, vobj, mode):
-        Gui.Control.closeDialog()
-        return True
-
-    def doubleClicked(self, vobj):
-        obj = vobj.Object
-        # Make it the active network
-        activate_duct_network(obj, set_edit=False)
-        obj.Proxy.selectAllGeometry()
-        return True
-
-    def claimChildren(self):
-        obj = self.Object
-        kids = []
-        try:
-            if obj.Base: kids.append(obj.Base)
-            if obj.Geometry: kids.append(obj.Geometry)
-            if obj.Topology: kids.append(obj.Topology)
-        except Exception:
-            pass
-        return kids
-
-    def canDropObjects(self):
-        # Returning False prevents users from dragging items into this group via the Tree View
-        return False
-
-    def canDragObjects(self):
-        # Prevents users from dragging the managed folders OUT of the group
-        return False
-        
-    def onDelete(self, vobj, subelements):
-        net = vobj.Object
-        delete_duct_networks([net], remove_internal_only=True)
-        return True
-        
-    def onChanged(self, vobj, prop):
-        if prop in ("ShowBaseDirectionArrows", "BaseDirectionArrowSize"):
-            self.refreshBaseDirectionArrows()
-        
-    # Functions for managing base direction arrows
-        
-    def ensureDirectionArrowProperties(self, vobj):
-        try:
-            if "ShowBaseDirectionArrows" not in vobj.PropertiesList:
-                vobj.addProperty(
-                    "App::PropertyBool",
-                    "ShowBaseDirectionArrows",
-                    "HVAC",
-                    "Show direction arrows for base geometry"
-                )
-                vobj.ShowBaseDirectionArrows = False
-        except Exception:
-            pass
-
-        try:
-            if "BaseDirectionArrowSize" not in vobj.PropertiesList:
-                vobj.addProperty(
-                    "App::PropertyFloat",
-                    "BaseDirectionArrowSize",
-                    "HVAC",
-                    "Size multiplier for base direction arrows"
-                )
-                vobj.BaseDirectionArrowSize = 1.0
-        except Exception:
-            pass
-    
-    def _buildArrowCoinNode(self, lines, size_scale=1.0):
-        """
-        Build one Coin3D node containing all direction arrows as 3D cones.
-        lines: [(sp, ep, tag, edge_no), ...]
-        """
-        root = coin.SoSeparator()
-        
-        # Draw filled faces with one color
-        mat = coin.SoMaterial()
-        mat.diffuseColor.setValue(1.0, 0.15, 0.0)
-        mat.specularColor.setValue(0.4, 0.4, 0.4)
-        mat.shininess.setValue(0.6)
-        root.addChild(mat)
-    
-        for sp, ep, _tag, _edge_no in lines:
-            p0 = FreeCAD.Vector(*sp) if not hasattr(sp, 'x') else FreeCAD.Vector(sp)
-            p1 = FreeCAD.Vector(*ep) if not hasattr(ep, 'x') else FreeCAD.Vector(ep)
-        
-            direction = p1 - p0
-            length = direction.Length
-            if length < 1e-9:
-                continue
-            direction.normalize()
-        
-            # sizing
-            arrow_len   = max(5.0, min(length * 0.25, 80.0)) * max(0.05, float(size_scale))
-            arrow_len   = min(arrow_len, length * 0.8)
-            head_len    = arrow_len * 0.5
-            head_radius = head_len * 0.4
-            shaft_len   = arrow_len - head_len
-            shaft_radius = head_radius * 0.5
-        
-            # geometry: chain from tip backwards
-            tip         = p0 + direction * (length * 0.6)
-            cone_center = tip  - direction * (head_len * 0.5)
-            cone_base   = tip  - direction * (head_len)
-            shaft_center = cone_base - direction * (shaft_len * 0.5)
-        
-            # rotation: Coin SoCone/SoCylinder align to +Y, rotate Y → direction
-            y_axis    = FreeCAD.Vector(0, 1, 0)
-            rot_axis  = y_axis.cross(direction)
-            dot       = max(-1.0, min(1.0, y_axis.dot(direction)))
-            if rot_axis.Length > 1e-9:
-                rot_axis.normalize()
-                rot_angle = math.acos(dot)
-            else:
-                # direction is parallel to Y axis
-                if dot > 0:
-                    # already +Y, identity — no rotation needed
-                    rot_axis  = FreeCAD.Vector(1, 0, 0)
-                    rot_angle = 0.0
-                else:
-                    # exactly -Y, flip 180° around X (or Z, either works)
-                    rot_axis  = FreeCAD.Vector(1, 0, 0)
-                    rot_angle = math.pi
-        
-            def make_transform(center, rot_ax, angle):
-                xf = coin.SoTransform()
-                xf.translation.setValue(center.x, center.y, center.z)
-                xf.rotation.setValue(coin.SbVec3f(rot_ax.x, rot_ax.y, rot_ax.z), angle)
-                return xf
-        
-            # cone head
-            cone_sep = coin.SoSeparator()
-            cone_sep.addChild(make_transform(cone_center, rot_axis, rot_angle))
-            cone = coin.SoCone()
-            cone.bottomRadius.setValue(head_radius)
-            cone.height.setValue(head_len)
-            cone_sep.addChild(cone)
-            root.addChild(cone_sep)
-        
-            # cylinder shaft — anchored to cone base, never recomputed independently
-            shaft_sep = coin.SoSeparator()
-            shaft_sep.addChild(make_transform(shaft_center, rot_axis, rot_angle))
-            cyl = coin.SoCylinder()
-            cyl.radius.setValue(shaft_radius)
-            cyl.height.setValue(shaft_len)
-            shaft_sep.addChild(cyl)
-            root.addChild(shaft_sep)
-    
-        return root
-        
-    def refreshBaseDirectionArrows(self, parser=None):
-        """
-        Rebuild base direction arrows.
-
-        Uses DuctNetworkParser.all_lines, not separate Draft/Sketch parsing.
-        """
-        root = getattr(self, "_baseDirectionRoot", None)
-        net = self.Object
-        
-        if root is None or net is None:
-            return
-
-        root.removeAllChildren()
-        
-        if net.ViewObject.ShowBaseDirectionArrows is False:
-            return
-
-        try:
-            if parser is None:
-                parser = DuctNetworkParser()
-                parser.compile_lines_from_objects(list(net.Base.OutList))
-
-            lines = list(getattr(parser, "all_lines", []) or [])
-
-            try:
-                size_scale = float(net.ViewObject.BaseDirectionArrowSize)
-            except Exception:
-                size_scale = 1.0
-
-            arrow_node = self._buildArrowCoinNode(lines, size_scale=size_scale)
-            root.addChild(arrow_node)
-
-        except Exception as e:
-            FreeCAD.Console.PrintError(
-                "HVAC - Failed to refresh base direction arrows.\n"
-            )
-            FreeCAD.Console.PrintError(str(e))
 
 
 #=================================================
@@ -2376,6 +2126,8 @@ def activate_duct_network(net, set_edit=False):
         net.Proxy.setActive()
         # Set network to edit mode
         if set_edit:
+            import FreeCADGui as Gui
+
             Gui.ActiveDocument.setEdit(net.Name)
         else:
             pass

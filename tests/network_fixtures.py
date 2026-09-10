@@ -11,6 +11,7 @@ from dataclasses import asdict
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 
+from freecad.HVAC.analysis.loss import LossEvaluation, LossPath, LossStatus
 from freecad.HVAC.core.NetworkParser import EdgeRef, JunctionAnalysis, JunctionPort
 from freecad.HVAC.utils.hvaclib import nx
 
@@ -18,6 +19,42 @@ from freecad.HVAC.utils.hvaclib import nx
 AIR_DENSITY = 1.204
 AIR_VISCOSITY = 1.51e-5
 DEFAULT_ROUGHNESS_MM = 0.09
+
+
+def legacy_loss_result(raw, context):
+    """
+    Converts a pre-LossEvaluation-refactor-style call_loss() return value
+    (dict{edge_key: K} / a single float K applied to every outlet port /
+    None) into a real LossEvaluation, using context["connected_ports"]'s
+    own flow_into_junction to resolve each path's direction -- lets a test
+    registry stub's own call_loss() keep returning the same simple
+    dict/float/None shape it always has (these fixtures are testing solver
+    wiring, not the loss contract itself -- see tests/test_loss_api.py for
+    that).
+    """
+    if raw is None:
+        return LossEvaluation(paths=[], status=LossStatus.UNSUPPORTED)
+
+    ports = context.get("connected_ports") or []
+    outlets = [p for p in ports if p.get("flow_into_junction") is False]
+    inlets = [p for p in ports if p.get("flow_into_junction") is True]
+    common_edge_key = None
+    if len(inlets) == 1:
+        common_edge_key = inlets[0]["edge_key"]
+    elif len(outlets) == 1:
+        common_edge_key = outlets[0]["edge_key"]
+
+    if isinstance(raw, dict):
+        paths = [
+            LossPath(common_edge_key, edge_key, edge_key, float(k), source="test")
+            for edge_key, k in raw.items() if k is not None
+        ]
+    else:
+        paths = [
+            LossPath(common_edge_key, p["edge_key"], p["edge_key"], float(raw), source="test")
+            for p in outlets
+        ]
+    return LossEvaluation(paths=paths, status=LossStatus.EXACT)
 
 
 class FakeObj:

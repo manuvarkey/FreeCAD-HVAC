@@ -39,6 +39,23 @@ This module takes it from there, per segment/node:
   3. Add the losses up (kept separate as friction/junction/component so
      paths.py can report them separately) and propagate static pressure
      outward from the balancing terminal (fixed at 0 Pa as the reference).
+
+Pressure-reference convention (Phase F/G below): static pressure decreases
+in the flow direction. static_pressure[node] is the node's own fitting
+body reference point -- taken BEFORE any of its legs' own turning/
+branching loss is subtracted (Phase F derives each node's own static
+pressure by subtracting/adding the FULL edge loss, itself already
+including that leg's own pressure_drop_pa, one step further out). A
+LossPath's Pa contribution is always attributed onto its own
+reference_edge_key's segment (see resolve_loss_evaluation() below) -- this
+is already direction-agnostic-correct at the node/JunctionResult level for
+both a diverging fitting (loss on its outlet legs) and a converging one
+(loss on its inlet legs). What does depend on direction is a single port's
+OWN static pressure (ComponentPortResult.static_pressure_pa, Phase G): a
+port that is its own path's to_edge_key is downstream/outlet (pressure
+drops crossing the fitting toward it, so subtract), while a port that is
+its own path's from_edge_key is upstream/inlet (pressure is higher there,
+before the fitting absorbs the loss, so add).
 """
 
 from dataclasses import dataclass, field
@@ -47,6 +64,7 @@ from typing import Dict, List, Optional
 from . import paths as paths_mod
 from . import physics
 from .flow import FlowComponent, FlowSolveError
+from .loss import LossPath, LossStatus
 from .model import NetworkModel, PortModel
 
 K_DEFAULT = 0.3
@@ -88,17 +106,25 @@ class ComponentPortResult:
     contribution, never a second application of it -- see the "+=" comment
     below on why a fitting loss is never double counted).
 
+    from_edge_key/to_edge_key are copied from the LossPath this result was
+    built from (see resolve_loss_evaluation()) -- either may be None for a
+    1-port device's open-atmosphere side. `status` is that LossPath's own
+    LossEvaluation.status (an analysis.loss.LossStatus value's .value
+    string, e.g. "exact"/"custom"/"fallback").
+
     static_pressure_pa is the pressure right where this specific port exits
-    (or enters) the fitting body -- for an outlet leg (the only ports that
-    ever have an entry here at all), Phase G derives it by subtracting this
-    same port_result's own pressure_drop_pa from the node's single common
-    static pressure (JunctionResult.static_pressure_pa), which itself is
+    (or enters) the fitting body. Phase G derives it from the node's single
+    common static pressure (JunctionResult.static_pressure_pa) -- itself
     the fitting's reference point taken BEFORE any leg's own turning/
-    branching loss is subtracted. That's a real per-leg value recovered
-    from two numbers this module already computes independently -- not a
-    fabrication (never a blind copy of the shared node value onto every
-    port, which would misrepresent a multiport fitting's several legs as
-    if they all sat at literally the same point). The whole-node model
+    branching loss is subtracted -- by subtracting this port's own
+    pressure_drop_pa if it's the downstream/outlet side of its own path
+    (edge_key == to_edge_key), or adding it if it's the upstream/inlet side
+    (edge_key == from_edge_key) -- see this module's own top-of-file
+    pressure-reference convention docstring. That's a real per-leg value
+    recovered from numbers this module already computes independently --
+    not a fabrication (never a blind copy of the shared node value onto
+    every port, which would misrepresent a multiport fitting's several legs
+    as if they all sat at literally the same point). The whole-node model
     itself (JunctionResult) is unchanged -- this doesn't require modeling
     each port as its own graph node.
     """
@@ -108,6 +134,9 @@ class ComponentPortResult:
     loss_coefficient: Optional[float] = None
     pressure_drop_pa: float = 0.0
     static_pressure_pa: Optional[float] = None
+    from_edge_key: Optional[str] = None
+    to_edge_key: Optional[str] = None
+    status: str = ""
 
 
 @dataclass
@@ -138,6 +167,46 @@ class ComponentTreeResult:
     warnings: List[str] = field(default_factory=list)
     paths: List["paths_mod.FlowPathResult"] = field(default_factory=list)
     critical_path: "paths_mod.CriticalPathResult" = None
+
+
+def resolve_loss_evaluation(evaluation, ports, degree, label, tree_warnings, global_warnings):
+    """
+    Normalize a raw LossEvaluation (or None) into (paths, status, warning).
+
+    A missing evaluator (None) or one that found no formula for the
+    current flow topology (LossStatus.UNSUPPORTED) both get the same
+    generic-K FALLBACK treatment -- synthesized explicitly here instead of
+    silently using K_DEFAULT, applied to every outlet port (ports where
+    flow_into_node is False) -- except at a 1-port node/component, where
+    "no loss" stays the normal, silent case: most open ends are placeholder
+    markers with no real device modeled, so there's nothing to fall back
+    to. Any warning (either this function's own synthesized one, or one
+    already carried on a resolved LossEvaluation) is appended onto both
+    `tree_warnings` (this solve's own per-tree list) and `global_warnings`
+    (the whole-solve list).
+
+    Shared by PressureSolver's own Phase E (below) and
+    analysis/sizing.py's LocalStaticRegainSizer, which needs the exact same
+    normalization to estimate a node's fitting loss during sizing -- a
+    module-level function (not a PressureSolver method) so sizing.py can
+    import and reuse it without a PressureSolver instance.
+    """
+    if evaluation is None or evaluation.status == LossStatus.UNSUPPORTED:
+        if degree <= 1:
+            return [], LossStatus.UNSUPPORTED, None
+        warning = "No fitting-loss data for {}; using generic default K={}.".format(label, K_DEFAULT)
+        tree_warnings.append(warning)
+        global_warnings.append(warning)
+        fallback_paths = [
+            LossPath(None, p.edge_key, p.edge_key, K_DEFAULT, source="fallback")
+            for p in ports if p.flow_into_node is False
+        ]
+        return fallback_paths, LossStatus.FALLBACK, warning
+
+    if evaluation.warning:
+        tree_warnings.append(evaluation.warning)
+        global_warnings.append(evaluation.warning)
+    return list(evaluation.paths), evaluation.status, evaluation.warning
 
 
 class PressureSolver:
@@ -190,53 +259,28 @@ class PressureSolver:
             if primary is None:
                 continue
 
-            warning = ""
             port_velocities = self._port_velocities(primary.ports, seg_results, 0.0, air)
-            k_result = primary.loss_evaluator(port_velocities) if primary.loss_evaluator else None
+            evaluation = primary.loss_evaluator(port_velocities) if primary.loss_evaluator else None
+            paths, status, warning = resolve_loss_evaluation(
+                evaluation, primary.ports, degree, "node '{}'".format(node_id),
+                component_tree_warnings, global_warnings,
+            )
+            warning = warning or ""
+
             primary_port_results = {}
-
-            if isinstance(k_result, dict):
-                for edge_key, k in k_result.items():
-                    if k is None:
-                        continue
-                    sres = seg_results.get(edge_key)
-                    if sres is None:
-                        continue
-                    pv = port_velocities.get(edge_key, {})
-                    v_ref = pv.get("velocity_ms", sres.velocity_ms)
-                    dp_pa = float(k) * physics.velocity_pressure(air.density_kg_m3, v_ref)
-                    sres.junction_loss_pa += dp_pa
-                    primary_port_results[edge_key] = ComponentPortResult(
-                        edge_key=edge_key, flow_lps=pv.get("flow_lps", sres.flow_lps),
-                        velocity_ms=v_ref, loss_coefficient=float(k), pressure_drop_pa=dp_pa,
-                    )
-            elif k_result is None and degree == 1:
-                # Most open ends are placeholder markers with no real device
-                # modeled -- "no loss" is the expected, normal case here.
-                pass
-            else:
-                if k_result is None:
-                    k_uniform = K_DEFAULT
-                    warning = "No fitting-loss data for node '{}'; using generic default K={}.".format(node_id, K_DEFAULT)
-                    global_warnings.append(warning)
-                    component_tree_warnings.append(warning)
-                else:
-                    k_uniform = float(k_result)
-
-                for port in primary.ports:
-                    if port.flow_into_node:
-                        continue  # inlet port -- fitting loss attributed at outlet ports only
-                    sres = seg_results.get(port.edge_key)
-                    if sres is None:
-                        continue
-                    pv = port_velocities.get(port.edge_key, {})
-                    v_ref = pv.get("velocity_ms", 0.0)
-                    dp_pa = k_uniform * physics.velocity_pressure(air.density_kg_m3, v_ref)
-                    sres.junction_loss_pa += dp_pa
-                    primary_port_results[port.edge_key] = ComponentPortResult(
-                        edge_key=port.edge_key, flow_lps=pv.get("flow_lps", 0.0),
-                        velocity_ms=v_ref, loss_coefficient=k_uniform, pressure_drop_pa=dp_pa,
-                    )
+            for path in paths:
+                sres = seg_results.get(path.reference_edge_key)
+                if sres is None:
+                    continue
+                pv = port_velocities.get(path.reference_edge_key, {})
+                v_ref = pv.get("velocity_ms", sres.velocity_ms)
+                dp_pa = path.loss_coefficient * physics.velocity_pressure(air.density_kg_m3, v_ref)
+                sres.junction_loss_pa += dp_pa
+                primary_port_results[path.reference_edge_key] = ComponentPortResult(
+                    edge_key=path.reference_edge_key, flow_lps=pv.get("flow_lps", sres.flow_lps),
+                    velocity_ms=v_ref, loss_coefficient=path.loss_coefficient, pressure_drop_pa=dp_pa,
+                    from_edge_key=path.from_edge_key, to_edge_key=path.to_edge_key, status=status.value,
+                )
 
             # Retained (not a second application -- Phase E above already
             # added every one of these Pa values onto seg_results exactly
@@ -262,48 +306,29 @@ class PressureSolver:
 
                 for comp_model in chain:
                     c_port_velocities = self._port_velocities(comp_model.ports, seg_results, chain_flow_lps, air)
-                    c_k_result = comp_model.loss_evaluator(c_port_velocities) if comp_model.loss_evaluator else None
-
-                    # Normalize this component's own result to one (K,
-                    # reference velocity) pair -- a 2-port fitting's dict
-                    # result always has exactly one entry, keyed to its own
-                    # outlet.
-                    outlet_port = next((p for p in comp_model.ports if p.flow_into_node is False), None)
-                    v_ref = (
-                        c_port_velocities.get(outlet_port.edge_key, {}).get("velocity_ms", 0.0)
-                        if outlet_port is not None else 0.0
+                    c_evaluation = comp_model.loss_evaluator(c_port_velocities) if comp_model.loss_evaluator else None
+                    # A 2-port Inline device's own paths are resolved the
+                    # exact same way a multiport Primary's several legs are
+                    # (see resolve_loss_evaluation) -- just against this
+                    # component's own 2 local ports and this edge's own
+                    # flow, independently of the Primary.
+                    c_paths, c_status, c_warning = resolve_loss_evaluation(
+                        c_evaluation, comp_model.ports, degree, "component '{}'".format(comp_model.component_id),
+                        component_tree_warnings, global_warnings,
                     )
+                    if c_warning:
+                        chain_warning = c_warning
 
-                    if isinstance(c_k_result, dict):
-                        k = c_k_result.get(outlet_port.edge_key) if outlet_port is not None else None
-                        k = 0.0 if k is None else float(k)
-                    elif c_k_result is not None:
-                        k = float(c_k_result)
-                    elif degree == 1:
-                        k = 0.0
-                    else:
-                        k = K_DEFAULT
-                        chain_warning = "No fitting-loss data for component '{}'; using generic default K={}.".format(
-                            comp_model.component_id, K_DEFAULT
-                        )
-                        global_warnings.append(chain_warning)
-                        component_tree_warnings.append(chain_warning)
-
-                    dp_pa = k * physics.velocity_pressure(air.density_kg_m3, v_ref)
-                    chain_total_pa += dp_pa
-                    flow_here = (
-                        c_port_velocities.get(outlet_port.edge_key, {}).get("flow_lps", 0.0)
-                        if outlet_port is not None else 0.0
-                    )
-                    # A 2-port Inline device always has exactly one loss
-                    # path -- represented the same way a multiport Primary's
-                    # several legs are, just with a single entry, so callers
-                    # never need a separate code path for the two roles.
                     inline_port_results = {}
-                    if outlet_port is not None:
-                        inline_port_results[outlet_port.edge_key] = ComponentPortResult(
-                            edge_key=outlet_port.edge_key, flow_lps=flow_here,
-                            velocity_ms=v_ref, loss_coefficient=k, pressure_drop_pa=dp_pa,
+                    for path in c_paths:
+                        pv = c_port_velocities.get(path.reference_edge_key, {})
+                        v_ref = pv.get("velocity_ms", 0.0)
+                        dp_pa = path.loss_coefficient * physics.velocity_pressure(air.density_kg_m3, v_ref)
+                        chain_total_pa += dp_pa
+                        inline_port_results[path.reference_edge_key] = ComponentPortResult(
+                            edge_key=path.reference_edge_key, flow_lps=pv.get("flow_lps", 0.0),
+                            velocity_ms=v_ref, loss_coefficient=path.loss_coefficient, pressure_drop_pa=dp_pa,
+                            from_edge_key=path.from_edge_key, to_edge_key=path.to_edge_key, status=c_status.value,
                         )
                     component_results[comp_model.component_id] = ComponentResult(
                         component_id=comp_model.component_id, port_results=inline_port_results,
@@ -382,26 +407,27 @@ class PressureSolver:
             )
 
             # Now that this node's own static pressure is known, derive
-            # each of its Primary's own outlet legs' own static pressure --
-            # the pressure right where that leg exits the fitting body,
-            # before that leg's own duct segment friction. static_pressure
-            # [node_id] is the fitting's own single common reference point,
-            # taken BEFORE any of its legs' own turning/branching loss is
-            # subtracted (see this same subtraction one step further out,
-            # in Phase F above: a node's static pressure is its parent's
-            # own value minus the edge's total_loss_pa, which already
-            # includes this same leg's own pressure_drop_pa) -- so
-            # subtracting just that leg's own already-retained
-            # pressure_drop_pa recovers a real, physically distinct
-            # pressure per leg. This is a derivation from each leg's own
-            # already-computed number, not a copy of the shared node value
-            # (see ComponentPortResult.static_pressure_pa's own docstring).
+            # each of its Primary's own legs' own static pressure -- the
+            # pressure right where that leg exits (or enters) the fitting
+            # body, before that leg's own duct segment friction. See this
+            # module's own top-of-file pressure-reference convention
+            # docstring: a leg that is its own path's to_edge_key is
+            # downstream/outlet (subtract its pressure_drop_pa from the
+            # node's shared reference), while one that is its own path's
+            # from_edge_key is upstream/inlet (add it instead -- pressure
+            # is higher there, before the fitting absorbs the loss). This
+            # is a derivation from each leg's own already-computed number,
+            # not a copy of the shared node value (see
+            # ComponentPortResult.static_pressure_pa's own docstring).
             primary = node.primary_component
             if primary is not None:
                 primary_result = component_results.get(primary.component_id)
                 if primary_result is not None:
                     for port_result in primary_result.port_results.values():
-                        port_result.static_pressure_pa = static_pressure[node_id] - port_result.pressure_drop_pa
+                        if port_result.edge_key == port_result.to_edge_key:
+                            port_result.static_pressure_pa = static_pressure[node_id] - port_result.pressure_drop_pa
+                        else:
+                            port_result.static_pressure_pa = static_pressure[node_id] + port_result.pressure_drop_pa
 
         tree_result = ComponentTreeResult(
             reference_terminal_id=comp.root_node_id,

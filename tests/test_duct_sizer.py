@@ -16,6 +16,7 @@ from network_fixtures import (
     DEFAULT_ROUGHNESS_MM,
     FakeParser,
     base_tree,
+    legacy_loss_result,
     make_junction,
     make_net,
     make_segment,
@@ -47,7 +48,7 @@ class _NoLossRegistry:
         return _NoLossTypeDef()
 
     def call_loss(self, library_id, type_def, context):
-        return 0.0
+        return legacy_loss_result(0.0, context)
 
 
 @pytest.fixture(autouse=True)
@@ -620,7 +621,7 @@ def test_static_regain_accounts_for_junction_fitting_loss_from_proposed_sizes(mo
             return _FixedKTypeDef() if type_id == "branch_tee_generic" else None
 
         def call_loss(self, library_id, type_def, context):
-            return fitting_k
+            return legacy_loss_result(fitting_k, context)
 
     monkeypatch.setattr(
         duct_sizer_mod.hvaclib.HVACLibraryService,
@@ -728,7 +729,7 @@ def test_static_regain_ignores_fitting_loss_at_inline_degree_two_node(monkeypatc
             return _BigKTypeDef()
 
         def call_loss(self, library_id, type_def, context):
-            return 5.0  # deliberately large -- would clamp/inflate sizing if it were included
+            return legacy_loss_result(5.0, context)  # deliberately large -- would clamp/inflate sizing if it were included
 
     monkeypatch.setattr(
         duct_sizer_mod.hvaclib.HVACLibraryService,

@@ -3,9 +3,10 @@ Pure tests for freecad.HVAC.analysis.pressure -- no FreeCAD/conftest
 stubbing needed, since analysis/ has no FreeCAD dependency at all.
 """
 
-from analysis_fixtures import AIR_DENSITY, AIR_VISCOSITY, DEFAULT_ROUGHNESS_MM, base_tree
+from analysis_fixtures import AIR_DENSITY, AIR_VISCOSITY, DEFAULT_ROUGHNESS_MM, base_tree, converging_tree
 
 from freecad.HVAC.analysis import flow, physics
+from freecad.HVAC.analysis.loss import LossEvaluation, LossPath, LossStatus
 from freecad.HVAC.analysis.pressure import K_DEFAULT, PressureSolver
 
 FITTING_K = 0.5
@@ -46,8 +47,11 @@ def test_flow_velocity_friction_match_independent_oracle():
     assert segB.velocity_ms == vB and segB.friction_loss_pa == frB
     assert segC.velocity_ms == vC and segC.friction_loss_pa == frC
 
-    # J2's fixed-K tee applies at its two outlet ports (B, C) only, never at
-    # its own inlet (A).
+    # This particular fixture's tee is diverging (A common inlet, B/C
+    # outlets), so its fixed K lands on the two outlet ports only -- a
+    # converging tee's own distinct K's land on its INLET legs instead
+    # (see test_converging_tee_* below), not "inlets never get a fitting
+    # loss" as a general rule.
     assert segA.junction_loss_pa == 0.0
     assert segB.junction_loss_pa == FITTING_K * physics.velocity_pressure(AIR_DENSITY, vB)
     assert segC.junction_loss_pa == FITTING_K * physics.velocity_pressure(AIR_DENSITY, vC)
@@ -126,9 +130,11 @@ def test_component_result_retains_distinct_per_leg_k_for_a_multiport_tee():
     assert set(cres.port_results.keys()) == {"B", "C"}
     assert cres.port_results["B"].loss_coefficient == 0.18
     assert cres.port_results["C"].loss_coefficient == 1.05
-    # The inlet (A) never receives a fitting-loss contribution -- see
-    # pressure.py's own "inlet port -- fitting loss attributed at outlet
-    # ports only" convention -- so it has no entry here either.
+    # This dict-of-legacy-K result only ever references B/C (this
+    # fixture's diverging tee's own two outlets) -- A has no entry because
+    # nothing referenced it, not because an inlet is structurally
+    # forbidden from receiving one (see test_converging_tee_* below, where
+    # the inlet legs are exactly the ones that get an entry).
     assert "A" not in cres.port_results
 
 
@@ -195,6 +201,108 @@ def test_component_result_is_always_present_but_empty_when_no_loss_applies():
 
     assert "N1_Primary" in tree.components
     assert tree.components["N1_Primary"].port_results == {}
+
+
+def _converging_evaluator(k_branch, k_straight, status=LossStatus.EXACT, warning=None):
+    """A LossEvaluation directly, with each inlet leg (B, C) referenced to
+    its own velocity and directed into the common outlet (A) -- exactly
+    what a real converging-tee library formula (loss_api.branch_loss)
+    returns, see LossPath's own from/to semantics."""
+    def evaluate(pv):
+        return LossEvaluation(
+            paths=[
+                LossPath(from_edge_key="B", to_edge_key="A", reference_edge_key="B", loss_coefficient=k_branch),
+                LossPath(from_edge_key="C", to_edge_key="A", reference_edge_key="C", loss_coefficient=k_straight),
+            ],
+            status=status, warning=warning,
+        )
+    return evaluate
+
+
+def test_converging_tee_attributes_distinct_k_to_each_inlet_leg():
+    # The two physically distinct coefficients of a converging (merging)
+    # tee belong to its INLET legs (B, C), not its single outlet (A) -- the
+    # exact shape the old outlet-only convention couldn't represent.
+    net = converging_tree(loss_evaluator=_converging_evaluator(0.2, 0.6))
+    tree, warnings = _solve(net)
+    assert warnings == []
+
+    vB = tree.segments["B"].velocity_ms
+    vC = tree.segments["C"].velocity_ms
+    assert tree.segments["A"].junction_loss_pa == 0.0
+    assert tree.segments["B"].junction_loss_pa == 0.2 * physics.velocity_pressure(AIR_DENSITY, vB)
+    assert tree.segments["C"].junction_loss_pa == 0.6 * physics.velocity_pressure(AIR_DENSITY, vC)
+
+    cres = tree.components["N2_Primary"]
+    assert set(cres.port_results.keys()) == {"B", "C"}
+    assert cres.port_results["B"].from_edge_key == "B" and cres.port_results["B"].to_edge_key == "A"
+    assert cres.port_results["C"].from_edge_key == "C" and cres.port_results["C"].to_edge_key == "A"
+    assert cres.port_results["B"].status == "exact"
+
+
+def test_converging_tee_static_pressure_sign_is_correct_for_inlet_legs():
+    # This is the actual bug this refactor fixes: Phase G used to do
+    # `static_pressure[node] - pressure_drop_pa` for EVERY port result,
+    # which is only correct for a downstream/outlet leg. An inlet leg's
+    # own static pressure must be HIGHER than the node's shared reference
+    # (pressure is lost crossing the fitting toward the node), so the sign
+    # must flip to `+` there instead.
+    net = converging_tree(loss_evaluator=_converging_evaluator(0.2, 0.6))
+    tree, _ = _solve(net)
+
+    node_static = tree.junctions["N2"].static_pressure_pa
+    cres = tree.components["N2_Primary"]
+    b_result = cres.port_results["B"]
+    c_result = cres.port_results["C"]
+
+    assert b_result.static_pressure_pa == node_static + b_result.pressure_drop_pa
+    assert c_result.static_pressure_pa == node_static + c_result.pressure_drop_pa
+    # Different K on each inlet leg -> different pressure_drop_pa ->
+    # genuinely different static pressure per leg.
+    assert b_result.static_pressure_pa != c_result.static_pressure_pa
+
+    # Cross-check against the independent, already-tested Phase F node
+    # walk: N3 (upstream of B) must equal N2's static pressure plus B's
+    # OWN full segment loss (friction + this same fitting loss) -- exactly
+    # what a `+` sign at the port level should be consistent with.
+    assert tree.junctions["N3"].static_pressure_pa == node_static + tree.segments["B"].total_loss_pa
+
+
+def test_unsupported_loss_topology_falls_back_with_explicit_fallback_status():
+    # UNSUPPORTED (a real LossEvaluation the library returned, e.g. for a
+    # true mixed cross) must trigger the same generic-K policy as a
+    # missing evaluator entirely -- but the per-port result must be
+    # tagged FALLBACK, never silently indistinguishable from a real
+    # library value (status == "exact"/"approximation").
+    net = converging_tree(loss_evaluator=lambda pv: LossEvaluation(paths=[], status=LossStatus.UNSUPPORTED))
+    tree, warnings = _solve(net)
+
+    assert len(warnings) == 1
+    assert "N2" in warnings[0]
+    # UNSUPPORTED has no real paths to consult for direction, so the
+    # solver's own synthesized fallback keeps applying to outlet legs
+    # (see resolve_loss_evaluation) -- here that's just A.
+    cres = tree.components["N2_Primary"]
+    assert set(cres.port_results.keys()) == {"A"}
+    assert cres.port_results["A"].status == "fallback"
+    assert cres.port_results["A"].loss_coefficient == K_DEFAULT
+
+
+def test_explicit_fallback_status_from_a_resolved_evaluation_is_preserved():
+    # A type-declared fallback (e.g. loss_cross_generic's own
+    # uniform_fallback_loss) is a RESOLVED LossEvaluation, not None/
+    # UNSUPPORTED -- resolve_loss_evaluation must pass its FALLBACK status
+    # straight through without re-synthesizing K_DEFAULT on top of it, and
+    # without raising a second "no fitting-loss data" warning (it already
+    # has real paths).
+    net = converging_tree(loss_evaluator=_converging_evaluator(0.75, 0.75, status=LossStatus.FALLBACK))
+    tree, warnings = _solve(net)
+
+    assert warnings == []
+    cres = tree.components["N2_Primary"]
+    assert cres.port_results["B"].status == "fallback"
+    assert cres.port_results["B"].loss_coefficient == 0.75
+    assert tree.junctions["N2"].warning == ""
 
 
 def test_missing_duct_size_is_reported_as_a_warning_not_raised():

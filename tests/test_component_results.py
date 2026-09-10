@@ -27,10 +27,12 @@ def test_serialize_deserialize_round_trips_all_fields():
         "B": ComponentPortResult(
             edge_key="B", flow_lps=850.0, velocity_ms=5.2, loss_coefficient=0.21,
             pressure_drop_pa=3.4, static_pressure_pa=187.2,
+            from_edge_key="A", to_edge_key="B", status="exact",
         ),
         "C": ComponentPortResult(
             edge_key="C", flow_lps=350.0, velocity_ms=4.1, loss_coefficient=1.08,
             pressure_drop_pa=10.9, static_pressure_pa=None,
+            from_edge_key="C", to_edge_key=None, status="custom",
         ),
     }
     raw = _component_results.serialize_port_results(port_results)

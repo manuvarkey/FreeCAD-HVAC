@@ -304,8 +304,9 @@ def test_bundled_smacna_call_loss_dispatches_to_bullhead_variant():
 
     result = reg.call_loss("smacna", type_def, context)
 
-    assert set(result.keys()) == {"RUN_A", "RUN_B"}
-    assert all(v > 0.0 for v in result.values())
+    paths_by_edge = {p.reference_edge_key: p.loss_coefficient for p in result.paths}
+    assert set(paths_by_edge.keys()) == {"RUN_A", "RUN_B"}
+    assert all(v > 0.0 for v in paths_by_edge.values())
 
 
 def test_bundled_smacna_call_loss_falls_back_when_flow_class_unresolved():
@@ -326,4 +327,4 @@ def test_bundled_smacna_call_loss_falls_back_when_flow_class_unresolved():
     }
 
     result = reg.call_loss("smacna", type_def, context)
-    assert set(result.keys()) == {"BRANCH", "STRAIGHT"}
+    assert {p.reference_edge_key for p in result.paths} == {"BRANCH", "STRAIGHT"}

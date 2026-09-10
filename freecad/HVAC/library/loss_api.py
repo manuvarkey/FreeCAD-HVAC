@@ -25,12 +25,17 @@
 
 Loss modules receive this class as ``context["loss_api"]``. It translates
 library context data into the pure SMACNA/ASHRAE table inputs and returns
-coefficients using the registry's established dict/float/None contract.
+an analysis.loss.LossEvaluation -- never a bare dict/float/None (see that
+module's own docstring for the LossPath/LossEvaluation/LossStatus shapes).
+Generator code never imports analysis.loss directly; it compares against
+the class-level LossStatus aliases below instead (e.g.
+``result.status == context["loss_api"].UNSUPPORTED``).
 """
 
 import math
 
 from ..analysis import physics as airflow
+from ..analysis.loss import LossEvaluation, LossPath, LossStatus
 from .library_api import HVACLibraryAPI
 from . import smacna_loss
 
@@ -40,20 +45,66 @@ class HVACLossAPI:
 
     API_VERSION = 1
 
+    # Aliases so generator code (which only ever sees context["loss_api"],
+    # never imports analysis.loss directly) can compare a result's status
+    # without a new import path.
+    EXACT = LossStatus.EXACT
+    APPROXIMATION = LossStatus.APPROXIMATION
+    CUSTOM = LossStatus.CUSTOM
+    FALLBACK = LossStatus.FALLBACK
+    UNSUPPORTED = LossStatus.UNSUPPORTED
+
+    # ------------------------------------------------------------------
+    # LossEvaluation/LossPath builders -- shared by every method below.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _leg_path(port, other_edge_key, k, source=None):
+        """
+        LossPath for `port` (has its own edge_key/flow_into_junction)
+        against `other_edge_key` (the fitting's other side -- another
+        port's edge_key, or None for a 1-port terminal's open-atmosphere
+        side). `k` is referenced to `port`'s own velocity -- the
+        convention every table in this module already uses.
+        """
+        edge_key = port["edge_key"]
+        if port.get("flow_into_junction"):
+            from_edge, to_edge = edge_key, other_edge_key
+        else:
+            from_edge, to_edge = other_edge_key, edge_key
+        return LossPath(from_edge, to_edge, edge_key, float(k), source=source)
+
+    @staticmethod
+    def _exact(paths, warning=None):
+        return LossEvaluation(paths=list(paths), status=LossStatus.EXACT, warning=warning)
+
+    @staticmethod
+    def _approximation(paths, warning=None):
+        return LossEvaluation(paths=list(paths), status=LossStatus.APPROXIMATION, warning=warning)
+
+    @staticmethod
+    def _unsupported(warning=None):
+        return LossEvaluation(paths=[], status=LossStatus.UNSUPPORTED, warning=warning)
+
     @staticmethod
     def elbow_loss(context):
         """
         90 deg elbow fitting loss. Expects exactly 2 connected_ports (one
         inlet, one outlet) and a "CenterlineRadius" entry in properties.
-        Returns {outlet_edge_key: K} or None.
+        Returns one EXACT LossPath referenced to the outlet's own
+        velocity, or UNSUPPORTED if the topology/geometry doesn't support
+        the calculation.
         """
         try:
             ports = HVACLibraryAPI.connected_ports(context)
             if len(ports) != 2:
-                return None
+                return HVACLossAPI._unsupported(
+                    "expected exactly 2 connected ports, found {}".format(len(ports))
+                )
             outlet = next((p for p in ports if p.get("flow_into_junction") is False), None)
             if outlet is None:
-                return None
+                return HVACLossAPI._unsupported("could not resolve outlet direction")
+            inlet = next((p for p in ports if p is not outlet), None)
 
             radius = float((context.get("properties") or {}).get("CenterlineRadius", 0.0) or 0.0)
             profile = HVACLibraryAPI.port_profile(outlet)
@@ -61,44 +112,50 @@ class HVACLossAPI:
             if profile == "Circular":
                 diameter = HVACLibraryAPI.port_diameter(outlet)
                 if diameter <= 0.0 or radius <= 0.0:
-                    return None
+                    return HVACLossAPI._unsupported("invalid diameter/CenterlineRadius")
                 zeta = smacna_loss.elbow_zeta_round(radius / diameter)
             elif profile in ("Rectangular", "Oval"):
                 width = HVACLibraryAPI.port_width(outlet)
                 height = HVACLibraryAPI.port_height(outlet)
                 if width <= 0.0 or height <= 0.0 or radius <= 0.0:
-                    return None
+                    return HVACLossAPI._unsupported("invalid width/height/CenterlineRadius")
                 reynolds = float(outlet.get("reynolds", 0.0) or 0.0)
                 if reynolds <= 0.0:
-                    return None
+                    return HVACLossAPI._unsupported("no Reynolds number available (zero flow?)")
                 zeta = smacna_loss.elbow_zeta_rect(height / width, radius / width, reynolds)
             else:
-                return None
+                return HVACLossAPI._unsupported("unsupported profile '{}'".format(profile))
 
-            return {outlet["edge_key"]: zeta}
-        except Exception:
-            return None
+            return HVACLossAPI._exact(
+                [HVACLossAPI._leg_path(outlet, inlet["edge_key"], zeta, source="smacna_elbow")]
+            )
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing elbow loss: {}".format(exc))
 
     @staticmethod
     def transition_loss(context):
         """
         Area-change (expansion/contraction) transition fitting loss. Expects
         exactly 2 connected_ports and a "TransitionLength" entry in
-        properties. Returns {outlet_edge_key: K} or None.
+        properties. Returns one EXACT LossPath referenced to the outlet's
+        own velocity, or UNSUPPORTED if the topology/geometry doesn't
+        support the calculation.
         """
         try:
             ports = HVACLibraryAPI.connected_ports(context)
             if len(ports) != 2:
-                return None
+                return HVACLossAPI._unsupported(
+                    "expected exactly 2 connected ports, found {}".format(len(ports))
+                )
             outlet = next((p for p in ports if p.get("flow_into_junction") is False), None)
             inlet = next((p for p in ports if p.get("flow_into_junction") is True), None)
             if outlet is None or inlet is None:
-                return None
+                return HVACLossAPI._unsupported("could not resolve inlet/outlet direction")
 
             area_out = HVACLibraryAPI.port_area(outlet)
             area_in = HVACLibraryAPI.port_area(inlet)
             if area_out <= 0.0 or area_in <= 0.0:
-                return None
+                return HVACLossAPI._unsupported("invalid inlet/outlet area")
 
             area_ratio = max(area_in, area_out) / min(area_in, area_out)
             if area_ratio <= 1.05:
@@ -106,7 +163,9 @@ class HVACLossAPI:
                 # offset) -- SMACNA's tables start at an area ratio of 2:1
                 # and don't cover this case; treat as negligible loss rather
                 # than clamping to the table's (much larger) minimum entry.
-                return {outlet["edge_key"]: 0.0}
+                return HVACLossAPI._exact(
+                    [HVACLossAPI._leg_path(outlet, inlet["edge_key"], 0.0, source="smacna_transition")]
+                )
 
             length_mm = float((context.get("properties") or {}).get("TransitionLength", 0.0) or 0.0)
             if length_mm > 0.0:
@@ -128,14 +187,16 @@ class HVACLossAPI:
                 # never silently reused here). A library-specific
                 # loss.variant can still supply its own formula for this
                 # case (see validation.resolve_loss_variant).
-                return None
+                return HVACLossAPI._unsupported(
+                    "no transition table for profile '{}'".format(profile)
+                )
 
             if area_out > area_in:
                 # Expanding (diverging): downstream duct is larger.
                 if profile == "Circular":
                     reynolds = float(inlet.get("reynolds", 0.0) or 0.0)
                     if reynolds <= 0.0:
-                        return None
+                        return HVACLossAPI._unsupported("no Reynolds number available (zero flow?)")
                     zeta = smacna_loss.expansion_zeta_round(theta_deg, area_ratio, reynolds)
                 else:
                     zeta = smacna_loss.expansion_zeta_rect(theta_deg, area_ratio)
@@ -145,9 +206,11 @@ class HVACLossAPI:
                 # with the one table.
                 zeta = smacna_loss.contraction_zeta(theta_deg, area_ratio)
 
-            return {outlet["edge_key"]: zeta}
-        except Exception:
-            return None
+            return HVACLossAPI._exact(
+                [HVACLossAPI._leg_path(outlet, inlet["edge_key"], zeta, source="smacna_transition")]
+            )
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing transition loss: {}".format(exc))
 
     @staticmethod
     def _leg_angle_deg(leg_dir, reference_dir):
@@ -195,17 +258,20 @@ class HVACLossAPI:
         port's direction is closest to anti-parallel with the common port's
         direction (the straight-through continuation of the duct run).
 
-        Returns {branch_edge_key: K_branch, straight_edge_key: K_straight},
-        each already referenced to that leg's own velocity, or None.
+        Returns two EXACT LossPaths (branch, straight), each referenced to
+        that leg's own velocity, or UNSUPPORTED for an ambiguous/degenerate
+        flow pattern or invalid geometry.
         """
         try:
             ports = HVACLibraryAPI.connected_ports(context)
             if len(ports) != 3:
-                return None
+                return HVACLossAPI._unsupported(
+                    "expected exactly 3 connected ports, found {}".format(len(ports))
+                )
 
             split = HVACLossAPI._split_single_common_port(ports)
             if split is None:
-                return None  # ambiguous/degenerate flow pattern
+                return HVACLossAPI._unsupported("ambiguous/degenerate flow pattern (no single common port)")
             primary, secondaries, diverging = split
 
             primary_dir = HVACLibraryAPI.vec(primary["direction"])
@@ -219,12 +285,15 @@ class HVACLossAPI:
 
             v_common = float(primary.get("velocity_ms", 0.0) or 0.0)
             if v_common <= 1e-9:
-                return {branch["edge_key"]: 0.0, straight["edge_key"]: 0.0}
+                return HVACLossAPI._exact([
+                    HVACLossAPI._leg_path(branch, primary["edge_key"], 0.0, source="smacna_branch"),
+                    HVACLossAPI._leg_path(straight, primary["edge_key"], 0.0, source="smacna_branch"),
+                ])
 
             a_common = HVACLibraryAPI.port_area(primary)
             a_branch = HVACLibraryAPI.port_area(branch)
             if a_common <= 0.0 or a_branch <= 0.0:
-                return None
+                return HVACLossAPI._unsupported("invalid common/branch area")
 
             branch_dir = HVACLibraryAPI.vec(branch["direction"])
             straight_dir = HVACLibraryAPI.vec(straight["direction"])
@@ -243,9 +312,13 @@ class HVACLossAPI:
                     angle_deg, ab_on_ac, vb_on_vc, vs_on_vc
                 )
 
-            return {branch["edge_key"]: zeta_branch, straight["edge_key"]: zeta_straight}
-        except Exception:
-            return None
+            source = "smacna_branch_diverging" if diverging else "smacna_branch_converging"
+            return HVACLossAPI._exact([
+                HVACLossAPI._leg_path(branch, primary["edge_key"], zeta_branch, source=source),
+                HVACLossAPI._leg_path(straight, primary["edge_key"], zeta_straight, source=source),
+            ])
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing branch loss: {}".format(exc))
 
     @staticmethod
     def _no_straight_leg_branch_zetas(common, legs, diverging):
@@ -269,12 +342,13 @@ class HVACLossAPI:
         uses, reusing each leg's own velocity ratio for both table
         arguments -- a reasonable estimate, not a validated table value.
 
-        Returns {leg_edge_key: K, ...} (each already referenced to that
-        leg's own velocity), or None.
+        Returns [LossPath, ...] (one per leg, each already referenced to
+        that leg's own velocity and to `common`'s own edge_key), or None
+        if the geometry is invalid (caller turns that into UNSUPPORTED).
         """
         v_common = float(common.get("velocity_ms", 0.0) or 0.0)
         if v_common <= 1e-9:
-            return {leg["edge_key"]: 0.0 for leg in legs}
+            return [HVACLossAPI._leg_path(leg, common["edge_key"], 0.0) for leg in legs]
 
         a_common = HVACLibraryAPI.port_area(common)
         if a_common <= 0.0:
@@ -283,7 +357,7 @@ class HVACLossAPI:
         common_dir = HVACLibraryAPI.vec(common["direction"])
         zeta_fn = smacna_loss.diverging_branch_zetas if diverging else smacna_loss.converging_branch_zetas
 
-        result = {}
+        paths = []
         for leg in legs:
             a_leg = HVACLibraryAPI.port_area(leg)
             if a_leg <= 0.0:
@@ -299,9 +373,9 @@ class HVACLossAPI:
             # is undefined -- reuse this leg's own ratio for both table
             # arguments.
             zeta_leg, _ = zeta_fn(angle_deg, a_on_ac, v_on_vc, v_on_vc)
-            result[leg["edge_key"]] = zeta_leg
+            paths.append(HVACLossAPI._leg_path(leg, common["edge_key"], zeta_leg))
 
-        return result
+        return paths
 
     @staticmethod
     def branch_loss_bullhead(context):
@@ -313,26 +387,32 @@ class HVACLossAPI:
         common_leg == "run" case branch_loss() above already handles
         correctly). Expects exactly 3 connected_ports.
 
-        This is a generic approximation (see _no_straight_leg_branch_zetas),
+        This is a generic APPROXIMATION (see _no_straight_leg_branch_zetas),
         not a validated SMACNA table entry for a bullhead arrangement --
-        never presented to a caller as an exact table result.
+        never presented to a caller as an EXACT table result.
 
-        Returns {run_leg_edge_key: K, ...} (one entry per run leg, each
-        already referenced to that leg's own velocity), or None.
+        Returns one LossPath per run leg, each already referenced to that
+        leg's own velocity, or UNSUPPORTED for an ambiguous/degenerate flow
+        pattern or invalid geometry.
         """
         try:
             ports = HVACLibraryAPI.connected_ports(context)
             if len(ports) != 3:
-                return None
+                return HVACLossAPI._unsupported(
+                    "expected exactly 3 connected ports, found {}".format(len(ports))
+                )
 
             split = HVACLossAPI._split_single_common_port(ports)
             if split is None:
-                return None  # ambiguous/degenerate flow pattern
+                return HVACLossAPI._unsupported("ambiguous/degenerate flow pattern (no single common port)")
             common, run_legs, diverging = split
 
-            return HVACLossAPI._no_straight_leg_branch_zetas(common, run_legs, diverging)
-        except Exception:
-            return None
+            paths = HVACLossAPI._no_straight_leg_branch_zetas(common, run_legs, diverging)
+            if paths is None:
+                return HVACLossAPI._unsupported("invalid port geometry (zero/invalid duct area)")
+            return HVACLossAPI._approximation(paths)
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing bullhead branch loss: {}".format(exc))
 
     @staticmethod
     def wye_loss(context):
@@ -350,27 +430,33 @@ class HVACLossAPI:
         calculation a bullhead tee/wye needs (see
         _no_straight_leg_branch_zetas): each non-common leg is evaluated
         independently against the common leg with the diverging/converging
-        branch-zeta tables. This is a reasonable engineering estimate, not
-        a dedicated SMACNA Wye table result (SMACNA's own branch tables are
-        keyed by one branch's angle against a straight run, not by two
-        symmetric legs) -- never presented as an exact table value.
+        branch-zeta tables. This is a reasonable engineering APPROXIMATION,
+        not a dedicated SMACNA Wye table result (SMACNA's own branch tables
+        are keyed by one branch's angle against a straight run, not by two
+        symmetric legs) -- never presented as an EXACT table value.
 
-        Expects exactly 3 connected_ports. Returns {leg_edge_key: K, ...}
-        (each already referenced to that leg's own velocity), or None.
+        Expects exactly 3 connected_ports. Returns one LossPath per leg,
+        each already referenced to that leg's own velocity, or UNSUPPORTED
+        for an ambiguous/degenerate flow pattern or invalid geometry.
         """
         try:
             ports = HVACLibraryAPI.connected_ports(context)
             if len(ports) != 3:
-                return None
+                return HVACLossAPI._unsupported(
+                    "expected exactly 3 connected ports, found {}".format(len(ports))
+                )
 
             split = HVACLossAPI._split_single_common_port(ports)
             if split is None:
-                return None  # ambiguous/degenerate flow pattern
+                return HVACLossAPI._unsupported("ambiguous/degenerate flow pattern (no single common port)")
             common, legs, diverging = split
 
-            return HVACLossAPI._no_straight_leg_branch_zetas(common, legs, diverging)
-        except Exception:
-            return None
+            paths = HVACLossAPI._no_straight_leg_branch_zetas(common, legs, diverging)
+            if paths is None:
+                return HVACLossAPI._unsupported("invalid port geometry (zero/invalid duct area)")
+            return HVACLossAPI._approximation(paths)
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing wye loss: {}".format(exc))
 
     @staticmethod
     def manifold_loss(context):
@@ -391,38 +477,47 @@ class HVACLossAPI:
         direction (and, for the branch-angle lookup, the straightest
         secondary's direction) as a stand-in for the intermediate duct
         geometry this addon doesn't actually model between successive
-        virtual merges/splits -- an approximation, not a literal per-leg
+        virtual merges/splits -- an APPROXIMATION, not a literal per-leg
         geometry readout. With exactly 2 secondaries this reduces to
         exactly the same numbers as branch_loss's 3-port calculation.
 
-        Returns {edge_key: K, ...} covering every secondary port (each
-        already referenced to that leg's own velocity), or None for a mixed
-        multi-inlet/multi-outlet ("true cross") flow pattern -- which has no
-        single trunk to decompose against -- or on any missing/invalid
-        geometry.
+        Returns one LossPath per secondary port (each already referenced to
+        that leg's own velocity and to the primary port's own edge_key), or
+        UNSUPPORTED for a mixed multi-inlet/multi-outlet ("true cross") flow
+        pattern -- which has no single trunk to decompose against -- or on
+        any missing/invalid geometry.
         """
         try:
             ports = HVACLibraryAPI.connected_ports(context)
             if len(ports) < 3:
-                return None
+                return HVACLossAPI._unsupported(
+                    "expected at least 3 connected ports, found {}".format(len(ports))
+                )
 
             split = HVACLossAPI._split_single_common_port(ports)
             if split is None:
-                return None  # mixed multi-in/multi-out: no single trunk to decompose
+                return HVACLossAPI._unsupported(
+                    "mixed multi-inlet/multi-outlet flow arrangement has no single trunk to decompose"
+                )
             primary, secondaries, diverging = split
 
             if len(secondaries) < 2:
-                return None
+                return HVACLossAPI._unsupported("expected at least 2 secondary ports")
 
             a_ref = HVACLibraryAPI.port_area(primary)
             v_primary = float(primary.get("velocity_ms", 0.0) or 0.0)
             if a_ref <= 0.0:
-                return None
+                return HVACLossAPI._unsupported("invalid primary port area")
+            port_by_edge = {p["edge_key"]: p for p in secondaries}
             if v_primary <= 1e-9:
-                return {p["edge_key"]: 0.0 for p in secondaries}
+                paths = [
+                    HVACLossAPI._leg_path(p, primary["edge_key"], 0.0, source="smacna_manifold")
+                    for p in secondaries
+                ]
+                return HVACLossAPI._approximation(paths)
             for p in secondaries:
                 if HVACLibraryAPI.port_area(p) <= 0.0:
-                    return None
+                    return HVACLossAPI._unsupported("invalid secondary port area")
 
             primary_dir = HVACLibraryAPI.vec(primary["direction"])
             # Least-straight (most branch-like) first, straightest (closest
@@ -529,9 +624,13 @@ class HVACLossAPI:
 
                     accumulated_flow_lps = accumulated_after_lps
 
-            return result
-        except Exception:
-            return None
+            paths = [
+                HVACLossAPI._leg_path(port_by_edge[edge_key], primary["edge_key"], k, source="smacna_manifold")
+                for edge_key, k in result.items()
+            ]
+            return HVACLossAPI._approximation(paths)
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing manifold loss: {}".format(exc))
 
     @staticmethod
     def terminal_component_loss(context):
@@ -547,55 +646,94 @@ class HVACLossAPI:
         existing K * velocity_pressure(duct) convention used for every other
         fitting -- no special-casing needed downstream.
 
-        Expects exactly 1 connected port (a terminal). Returns
-        {edge_key: K_effective} or None if NeckSize/LossCoefficient aren't
-        set (nothing to compute) or the port geometry is invalid.
+        Expects exactly 1 connected port (a terminal). Returns one EXACT
+        LossPath (the port's open-atmosphere side is None), or UNSUPPORTED
+        if NeckSize/LossCoefficient aren't set (nothing to compute) or the
+        port geometry is invalid.
         """
         try:
             ports = HVACLibraryAPI.connected_ports(context)
             if len(ports) != 1:
-                return None
+                return HVACLossAPI._unsupported(
+                    "expected exactly 1 connected port, found {}".format(len(ports))
+                )
             port = ports[0]
 
             properties = context.get("properties") or {}
             neck_size_mm = float(properties.get("NeckSize", 0.0) or 0.0)
             k = float(properties.get("LossCoefficient", 0.0) or 0.0)
             if neck_size_mm <= 0.0 or k <= 0.0:
-                return None
+                return HVACLossAPI._unsupported("NeckSize/LossCoefficient not set")
 
             duct_velocity = float(port.get("velocity_ms", 0.0) or 0.0)
             flow_lps = float(port.get("flow_rate_lps", 0.0) or 0.0)
             if flow_lps <= 0.0 or duct_velocity <= 1e-9:
-                return {port["edge_key"]: 0.0}
+                return HVACLossAPI._exact([HVACLossAPI._leg_path(port, None, 0.0, source="terminal_device")])
 
             neck_area_m2 = airflow.circular_area(airflow.mm_to_m(neck_size_mm))
             neck_velocity_ms = airflow.velocity_from_flow(airflow.lps_to_m3s(flow_lps), neck_area_m2)
 
             k_effective = k * (neck_velocity_ms / duct_velocity) ** 2
-            return {port["edge_key"]: k_effective}
-        except Exception:
-            return None
+            return HVACLossAPI._exact(
+                [HVACLossAPI._leg_path(port, None, k_effective, source="terminal_device")]
+            )
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing terminal device loss: {}".format(exc))
 
     @staticmethod
     def inline_device_loss(context):
         """
         Generic inline device (damper, VAV box, ...) loss: a single
         dimensionless coefficient K taken directly from
-        properties["LossCoefficient"], applied uniformly by the solver to
-        the connecting duct's own velocity pressure. No neck-size
-        conversion is needed here (unlike terminal_component_loss) since
-        these devices carry the same duct through both ports rather than
-        stepping down to a separate neck size.
+        properties["LossCoefficient"], applied to the connecting duct's own
+        velocity pressure at the device's outlet. No neck-size conversion is
+        needed here (unlike terminal_component_loss) since these devices
+        carry the same duct through both ports rather than stepping down to
+        a separate neck size.
 
-        Returns a float K, or None if LossCoefficient isn't set (nothing
-        to compute -- falls back to the solver's generic default).
+        Expects exactly 2 connected_ports (one inlet, one outlet). Returns
+        one EXACT LossPath referenced to the outlet's own velocity
+        (matching the inline-chain convention analysis/pressure.py already
+        uses), or UNSUPPORTED if LossCoefficient isn't set (nothing to
+        compute) or the topology can't be resolved.
         """
         try:
+            ports = HVACLibraryAPI.connected_ports(context)
+            if len(ports) != 2:
+                return HVACLossAPI._unsupported(
+                    "expected exactly 2 connected ports, found {}".format(len(ports))
+                )
+            outlet = next((p for p in ports if p.get("flow_into_junction") is False), None)
+            inlet = next((p for p in ports if p is not outlet), None)
+            if outlet is None:
+                return HVACLossAPI._unsupported("could not resolve outlet direction")
+
             properties = context.get("properties") or {}
             k = float(properties.get("LossCoefficient", 0.0) or 0.0)
             if k <= 0.0:
-                return None
-            return k
-        except Exception:
-            return None
+                return HVACLossAPI._unsupported("LossCoefficient not set")
 
+            return HVACLossAPI._exact(
+                [HVACLossAPI._leg_path(outlet, inlet["edge_key"], k, source="inline_device")]
+            )
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing inline device loss: {}".format(exc))
+
+    @staticmethod
+    def uniform_fallback_loss(context, k, warning=None):
+        """
+        Explicit generic-K policy for a fitting shape with no dedicated
+        formula (e.g. a true multi-in/multi-out cross): applies `k`
+        uniformly to every outlet port, same as the old "return a bare
+        float" convention used to mean -- but now an explicit FALLBACK
+        result instead of a silently-applied default.
+        """
+        try:
+            ports = HVACLibraryAPI.connected_ports(context)
+        except Exception:
+            ports = []
+        outlets = [p for p in ports if p.get("flow_into_junction") is False]
+        paths = [
+            HVACLossAPI._leg_path(p, None, k, source="type-declared fallback") for p in outlets
+        ]
+        return LossEvaluation(paths=paths, status=LossStatus.FALLBACK, warning=warning)

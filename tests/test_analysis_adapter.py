@@ -6,7 +6,16 @@ from types import SimpleNamespace
 import conftest  # noqa: F401 -- installs FreeCAD/Materials stubs
 import pytest
 
+from freecad.HVAC.analysis.loss import LossStatus
 from freecad.HVAC.core import _analysis_adapter
+
+
+def _paths_by_edge(evaluation):
+    return {p.reference_edge_key: p.loss_coefficient for p in evaluation.paths}
+
+
+def _path_for(evaluation, edge_key):
+    return next(p for p in evaluation.paths if p.reference_edge_key == edge_key)
 
 
 def test_humanize_diagnostics_prefers_number_then_label():
@@ -192,11 +201,16 @@ def test_custom_loss_evaluator_two_port_component():
     )
     evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
 
-    assert evaluator({}) == {"B": 0.42}
+    result = evaluator({})
+    assert result.status == LossStatus.CUSTOM
+    assert _paths_by_edge(result) == {"B": 0.42}
+    path = _path_for(result, "B")
+    assert path.from_edge_key == "A"
+    assert path.to_edge_key == "B"
 
 
-def test_custom_loss_evaluator_three_port_tee_run_and_branch_k():
-    """A 3-port tee (run inlet, run outlet, branch outlet): both outlets get their own distinct K."""
+def test_custom_loss_evaluator_diverging_tee_uses_outlet_legs():
+    """A 3-port diverging tee (run inlet, run outlet, branch outlet): both outlets get their own distinct K."""
     component = SimpleNamespace(
         Name="Tee1", LossCoefficientSource="Custom",
         LocalPortsJson=json.dumps([_port("run_in", True), _port("run_out", False), _port("branch", False)]),
@@ -204,7 +218,37 @@ def test_custom_loss_evaluator_three_port_tee_run_and_branch_k():
     )
     evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
 
-    assert evaluator({}) == {"run_out": 0.18, "branch": 1.05}
+    result = evaluator({})
+    assert result.status == LossStatus.CUSTOM
+    assert _paths_by_edge(result) == {"run_out": 0.18, "branch": 1.05}
+    for edge_key in ("run_out", "branch"):
+        path = _path_for(result, edge_key)
+        assert path.from_edge_key == "run_in"
+        assert path.to_edge_key == edge_key
+
+
+def test_custom_loss_evaluator_converging_tee_uses_inlet_legs():
+    """
+    A 3-port converging tee (two inlets merging into one outlet): the old
+    outlet-only convention couldn't represent this fitting's custom K at
+    all (both physically distinct coefficients belong to the INLET legs).
+    custom_loss_applicable_ports now returns the two inlets instead of the
+    single outlet, so both get their own LossPath into the common outlet.
+    """
+    component = SimpleNamespace(
+        Name="Tee1", LossCoefficientSource="Custom",
+        LocalPortsJson=json.dumps([_port("branch_in", True), _port("run_in", True), _port("run_out", False)]),
+        CustomLossCoefficientEdgeKeys=["branch_in", "run_in"], CustomLossCoefficients=[1.05, 0.18],
+    )
+    evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
+
+    result = evaluator({})
+    assert result.status == LossStatus.CUSTOM
+    assert _paths_by_edge(result) == {"branch_in": 1.05, "run_in": 0.18}
+    for edge_key in ("branch_in", "run_in"):
+        path = _path_for(result, edge_key)
+        assert path.from_edge_key == edge_key
+        assert path.to_edge_key == "run_out"
 
 
 def test_custom_loss_evaluator_applies_single_port_k_unconditionally():
@@ -220,7 +264,11 @@ def test_custom_loss_evaluator_applies_single_port_k_unconditionally():
         CustomLossCoefficientEdgeKeys=["A"], CustomLossCoefficients=[0.6],
     )
     evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), inlet_terminal, air=SimpleNamespace())
-    assert evaluator({}) == {"A": 0.6}
+    result = evaluator({})
+    assert result.status == LossStatus.CUSTOM
+    assert _paths_by_edge(result) == {"A": 0.6}
+    assert _path_for(result, "A").from_edge_key == "A"
+    assert _path_for(result, "A").to_edge_key is None
 
     outlet_terminal = SimpleNamespace(
         Name="Terminal2", LossCoefficientSource="Custom",
@@ -228,7 +276,11 @@ def test_custom_loss_evaluator_applies_single_port_k_unconditionally():
         CustomLossCoefficientEdgeKeys=["A"], CustomLossCoefficients=[0.6],
     )
     evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), outlet_terminal, air=SimpleNamespace())
-    assert evaluator({}) == {"A": 0.6}
+    result = evaluator({})
+    assert result.status == LossStatus.CUSTOM
+    assert _paths_by_edge(result) == {"A": 0.6}
+    assert _path_for(result, "A").from_edge_key is None
+    assert _path_for(result, "A").to_edge_key == "A"
 
 
 def test_loss_evaluator_switches_between_library_and_custom():
@@ -251,7 +303,9 @@ def test_loss_evaluator_switches_between_library_and_custom():
 
     component.LossCoefficientSource = "Custom"
     custom_evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air)
-    assert custom_evaluator({}) == {"B": 0.5}
+    result = custom_evaluator({})
+    assert result.status == LossStatus.CUSTOM
+    assert _paths_by_edge(result) == {"B": 0.5}
 
     component.LossCoefficientSource = "Library"
     library_evaluator_again = _analysis_adapter.build_loss_evaluator(registry, component, air)
@@ -266,7 +320,9 @@ def test_custom_loss_evaluator_accepts_zero_as_valid_explicit_k():
     )
     evaluator = _analysis_adapter.build_loss_evaluator(_UncalledRegistry(), component, air=SimpleNamespace())
 
-    assert evaluator({}) == {"B": 0.0}
+    result = evaluator({})
+    assert result.status == LossStatus.CUSTOM
+    assert _paths_by_edge(result) == {"B": 0.0}
 
 
 def test_custom_loss_evaluator_rejects_negative_k():

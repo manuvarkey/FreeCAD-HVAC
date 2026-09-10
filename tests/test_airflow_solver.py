@@ -29,6 +29,7 @@ from network_fixtures import (
     FakeParser,
     FakeProxy,
     base_tree as _base_tree,
+    legacy_loss_result,
     make_junction as _make_junction,
     make_net as _make_net,
     make_segment as _make_segment,
@@ -54,7 +55,7 @@ class _FakeRegistry:
         return None
 
     def call_loss(self, library_id, type_def, context):
-        return FITTING_K
+        return legacy_loss_result(FITTING_K, context)
 
 
 @pytest.fixture(autouse=True)
@@ -148,10 +149,10 @@ def test_per_port_dict_loss_contract_attributes_distinct_coefficients(monkeypatc
             return _FakeTypeDef() if type_id == "branch_tee_generic" else None
 
         def call_loss(self, library_id, type_def, context):
-            # Distinct per-edge coefficients -- exercises the new dict contract,
-            # which Phase E must NOT collapse into a single uniform K like the
-            # legacy float/None contract does.
-            return {"B": 0.9, "C": 0.1}
+            # Distinct per-edge coefficients -- exercises the dict-of-paths
+            # contract, which Phase E must NOT collapse into a single
+            # uniform K like the legacy float/None contract does.
+            return legacy_loss_result({"B": 0.9, "C": 0.1}, context)
 
     monkeypatch.setattr(
         solver_mod.hvaclib.HVACLibraryService,
@@ -288,8 +289,8 @@ def test_terminal_component_loss_wired_contributes_to_connecting_segment(monkeyp
 
         def call_loss(self, library_id, type_def, context):
             if context["type_id"] == "end_diffuser_generic":
-                return {"B": 0.8}
-            return tee_k
+                return legacy_loss_result({"B": 0.8}, context)
+            return legacy_loss_result(tee_k, context)
 
     monkeypatch.setattr(
         solver_mod.hvaclib.HVACLibraryService,

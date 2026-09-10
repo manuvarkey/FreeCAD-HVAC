@@ -295,6 +295,58 @@ def test_inline_attached_edge_key_survives_document_reload_tag_regeneration(monk
     assert inline.AttachedEdgeKey == "B"
 
 
+def test_custom_loss_coefficient_edge_keys_survive_document_reload_tag_regeneration():
+    """
+    Regression for the same "tags regenerate on every reload" problem
+    AttachedEdgeKey already handles (see the test above), but for
+    LossCoefficientSource == "Custom" storage: without remapping
+    CustomLossCoefficientEdgeKeys through the exact same old-tag -> new-tag
+    _edge_key_remap, Component.py's own _syncCustomLossCoefficients would
+    see every stored key as unmatched on the very first sync after a
+    reload and silently reset the custom K back to 0.0 -- exactly the
+    "silently converting it to a valid-looking zero coefficient" outcome
+    that must never happen. Covers both the Primary and an Inline
+    component's own storage.
+    """
+    doc, net_obj, net_proxy = _make_network()
+    junction = _make_junction(doc, net_obj, topology="through", degree=2)
+    net_obj.Geometry.addObject(junction)
+    lib = _smacna_library()
+
+    net_proxy.syncJunctionComponents(
+        junction, "through", "through.straight", "Circular", _circular_ports(2),
+        existing_components=[], default_lib=lib, hide_new=None,
+    )
+    primary = next(o for o in net_obj.Geometry.OutList if hvaclib.isDuctComponent(o))
+    primary.LossCoefficientSource = "Custom"
+    primary.CustomLossCoefficientEdgeKeys = ["OLD_TAG_123"]
+    primary.CustomLossCoefficients = [0.42]
+
+    inline = DuctComponent.create(
+        doc, "{}_Comp10".format(junction.Name), parent_junction=junction,
+        role="Inline", attached_edge_key="OLD_TAG_123", port_sequence=10, owner_network=net_obj,
+    )
+    inline.LossCoefficientSource = "Custom"
+    inline.CustomLossCoefficientEdgeKeys = ["OLD_TAG_123"]
+    inline.CustomLossCoefficients = [0.77]
+    net_obj.Geometry.addObject(inline)
+
+    # Simulate what a real syncSegments(initial_sync=True) pass would have
+    # just recorded: the edge that used to be tagged OLD_TAG_123 is now
+    # tagged "B" after reload.
+    net_proxy._edge_key_remap = {"OLD_TAG_123": "B"}
+
+    net_proxy.syncJunctionComponents(
+        junction, "through", "through.straight", "Circular", _circular_ports(2),
+        existing_components=[primary, inline], default_lib=lib, hide_new=None,
+    )
+
+    assert list(primary.CustomLossCoefficientEdgeKeys) == ["B"]
+    assert list(primary.CustomLossCoefficients) == [0.42]
+    assert list(inline.CustomLossCoefficientEdgeKeys) == ["B"]
+    assert list(inline.CustomLossCoefficients) == [0.77]
+
+
 def test_inline_dropped_when_its_attached_edge_disappears(monkeypatch):
     """
     If the specific edge an Inline component is attached to disappears

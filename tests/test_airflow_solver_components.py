@@ -18,7 +18,7 @@ from freecad.HVAC.analysis import physics as airflow
 from freecad.HVAC.core import _component_results
 from freecad.HVAC.core.AirflowSolver import AirflowSolver
 from freecad.HVAC.utils import hvaclib
-from network_fixtures import FakeObj, FakeParser, make_net, make_segment
+from network_fixtures import FakeObj, FakeParser, legacy_loss_result, make_net, make_segment
 
 AIR_DENSITY = 1.204
 
@@ -76,7 +76,7 @@ class _FakeCallLossRegistry:
         return object() if type_id in self._results else None
 
     def call_loss(self, library_id, type_def, context):
-        return self._results[context["type_id"]]
+        return legacy_loss_result(self._results[context["type_id"]], context)
 
 
 def _single_component_junction(label, type_id, port):

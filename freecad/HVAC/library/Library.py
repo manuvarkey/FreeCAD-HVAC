@@ -804,17 +804,16 @@ class HVACLibraryRegistry:
 
     def call_loss(self, library_id: str, type_def: HVACTypeDef, context: dict):
         """
-        Call the type's optional fitting-loss function. Returns one of:
-          - dict {edge_key: K}: per-port dimensionless loss coefficients, each
-            already referenced to that port's own velocity. Required for
-            junctions where different legs have physically distinct
-            coefficients (e.g. a converging/merging tee, where each inlet leg
-            has its own loss).
-          - float: a single dimensionless loss coefficient applied uniformly
-            to every outlet port (simple contract, fine for junctions with
-            one meaningfully distinct downstream condition).
-          - None: the type has no loss function wired up (caller should apply
-            a fallback coefficient).
+        Call the type's optional fitting-loss function. Returns an
+        analysis.loss.LossEvaluation: a list of LossPath entries (each a
+        directed from_edge_key -> to_edge_key flow path, referenced to
+        `reference_edge_key`'s own velocity) plus an overall LossStatus
+        (EXACT/APPROXIMATION/CUSTOM/FALLBACK/UNSUPPORTED) and an optional
+        warning. UNSUPPORTED (empty paths) means the type's loss function
+        found no formula for the current flow topology (caller should apply
+        a fallback coefficient) -- see library/loss_api.py's own docstring
+        for the full shape and library/junction_losses.py generator files
+        for how a type's own loss function builds one.
 
         When the type-def declares `loss.variants` (flow-dependent loss
         formulas for one physical fitting -- see HVACLossVariantDef), the

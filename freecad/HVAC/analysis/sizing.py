@@ -63,7 +63,7 @@ from typing import Dict, List
 
 from . import physics
 from .model import NetworkModel, SectionModel, SizingSettings
-from .pressure import K_DEFAULT
+from .pressure import resolve_loss_evaluation
 
 # Fixed-point iteration cap for LocalStaticRegainSizer's fitting-loss
 # estimate -- sizes normally settle in 2-3 passes; this is a safety bound,
@@ -376,9 +376,10 @@ class LocalStaticRegainSizer:
     def _junction_fitting_loss_pa(self, network, comp, seg_results):
         """
         Estimate every node's fitting/dynamic loss (Pa), the same way
-        pressure.py's Phase E does -- calling each node's own
-        loss_evaluator (or the generic K_DEFAULT fallback) -- but from THIS
-        PASS'S PROPOSED sizes (seg_results) instead of each segment's
+        pressure.py's Phase E does (see its own resolve_loss_evaluation(),
+        shared by both modules) -- calling each node's own loss_evaluator
+        (or the generic K_DEFAULT fallback) -- but from THIS PASS'S
+        PROPOSED sizes (seg_results) instead of each segment's
         already-solved velocity, since the real size hasn't been decided
         yet during sizing.
 
@@ -389,12 +390,19 @@ class LocalStaticRegainSizer:
           inline degree-2 fitting (an elbow, a transition, ...) has no
           sibling to balance against, so its own loss is left out of the
           regain target -- only its own straight-duct friction counts there.
-        - Only a branch node's own outlet/takeoff legs. A downstream
-          terminal device's own loss is excluded too: regain balances
-          pressure between successive duct sections, not against a dead-end
-          device with nothing further downstream to balance.
+        - Only the legs a LossPath actually attributes a coefficient to
+          (each path's own reference_edge_key) -- a diverging fitting's
+          outlet/takeoff legs, or a converging one's inlet legs. A
+          downstream terminal device's own loss is excluded too: regain
+          balances pressure between successive duct sections, not against a
+          dead-end device with nothing further downstream to balance.
         """
         fitting_loss_by_edge = {}
+        # resolve_loss_evaluation's own synthesized-fallback warning isn't
+        # repeated per sizing pass -- pressure.py already reports it once
+        # the applied sizes are later calculated -- so both warning lists
+        # it wants to append to are just discarded here.
+        discarded_warnings = []
 
         def provisional_velocity(edge_key):
             sres = seg_results.get(edge_key)
@@ -402,7 +410,8 @@ class LocalStaticRegainSizer:
 
         for node_id in comp.node_ids:
             node = network.nodes[node_id]
-            if len(node.ports) < 3:
+            degree = len(node.ports)
+            if degree < 3:
                 continue
 
             primary = node.primary_component
@@ -414,33 +423,20 @@ class LocalStaticRegainSizer:
                     "flow_lps": sres.flow_lps if sres is not None else 0.0,
                     "reynolds": sres.reynolds if sres is not None else 0.0,
                 }
-            k_result = (
+            evaluation = (
                 primary.loss_evaluator(port_velocities)
                 if primary is not None and primary.loss_evaluator is not None else None
             )
+            paths, _status, _warning = resolve_loss_evaluation(
+                evaluation, node.ports, degree, "node '{}'".format(node_id),
+                discarded_warnings, discarded_warnings,
+            )
 
-            if isinstance(k_result, dict):
-                for edge_key, k in k_result.items():
-                    if k is None:
-                        continue
-                    v = provisional_velocity(edge_key)
-                    fitting_loss_by_edge[edge_key] = (
-                        fitting_loss_by_edge.get(edge_key, 0.0) + float(k) * physics.velocity_pressure(network.air.density_kg_m3, v)
-                    )
-                continue
-
-            # A real fitting (degree >= 2) always has some physical loss --
-            # K_DEFAULT fills in when the type has no loss formula of its
-            # own (a per-node warning isn't repeated here; pressure.py
-            # already reports it when the applied sizes are later calculated).
-            k_uniform = K_DEFAULT if k_result is None else float(k_result)
-
-            for port in node.ports:
-                if port.flow_into_node:
-                    continue  # inlet port -- fitting loss is attributed at outlet ports only
-                v = provisional_velocity(port.edge_key)
-                fitting_loss_by_edge[port.edge_key] = (
-                    fitting_loss_by_edge.get(port.edge_key, 0.0) + k_uniform * physics.velocity_pressure(network.air.density_kg_m3, v)
+            for path in paths:
+                v = provisional_velocity(path.reference_edge_key)
+                fitting_loss_by_edge[path.reference_edge_key] = (
+                    fitting_loss_by_edge.get(path.reference_edge_key, 0.0)
+                    + path.loss_coefficient * physics.velocity_pressure(network.air.density_kg_m3, v)
                 )
 
         return fitting_loss_by_edge

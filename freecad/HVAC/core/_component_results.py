@@ -48,6 +48,9 @@ def serialize_port_results(port_results):
             "loss_coefficient": pr.loss_coefficient,
             "pressure_drop_pa": pr.pressure_drop_pa,
             "static_pressure_pa": pr.static_pressure_pa,
+            "from_edge_key": pr.from_edge_key,
+            "to_edge_key": pr.to_edge_key,
+            "status": pr.status,
         }
         for edge_key, pr in port_results.items()
     })
@@ -73,6 +76,9 @@ def deserialize_port_results(raw_json):
             static_pressure_pa=(
                 float(entry["static_pressure_pa"]) if entry.get("static_pressure_pa") is not None else None
             ),
+            from_edge_key=entry.get("from_edge_key"),
+            to_edge_key=entry.get("to_edge_key"),
+            status=str(entry.get("status", "") or ""),
         )
         for edge_key, entry in (data or {}).items()
     }

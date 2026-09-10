@@ -45,7 +45,7 @@ from . import _construction_schema
 from . import _component_results
 from . import _geometry_apply
 from . import _component_appearance
-from . import _analysis_adapter
+from . import _custom_loss
 from . import Construction as _construction
 
 
@@ -322,12 +322,15 @@ class DuctComponent:
         """
         Keep CustomLossCoefficients holding exactly one K per port that
         custom-loss evaluation can actually use -- see
-        _analysis_adapter.applicable_loss_ports(): a degree-1 component's
-        own single port, or every outlet port on a 2+-port component. An
-        inlet never receives a fitting-loss contribution at all, so it
-        never gets a slot here either -- unlike LocalPortsJson's own full
-        port list, this is never sized to include a port whose value could
-        never actually be applied.
+        _custom_loss.custom_loss_applicable_ports(): a degree-1 component's
+        own single port, or every port on whichever flow side is the
+        "many" side of a fitting with a single common port on the other
+        side (every outlet of a diverging tee, but every INLET of a
+        converging tee -- unlike the old outlet-only convention, this
+        supports both). A mixed multi-in/multi-out cross has no single
+        common side, so it gets no slots at all -- unlike LocalPortsJson's
+        own full port list, this is never sized to include a port whose
+        value could never actually be applied.
 
         Values are carried over by edge_key, not position, whenever the
         set of applicable ports changes (e.g. a redrawn segment flips
@@ -337,7 +340,7 @@ class DuctComponent:
         """
         if "CustomLossCoefficients" not in obj.PropertiesList:
             return
-        target_keys = [p.get("edge_key", "") for p in _analysis_adapter.applicable_loss_ports(ports)]
+        target_keys = [p.get("edge_key", "") for p in _custom_loss.custom_loss_applicable_ports(ports)]
         current_keys = list(getattr(obj, "CustomLossCoefficientEdgeKeys", None) or [])
         if current_keys == target_keys:
             return
@@ -556,10 +559,11 @@ class DuctComponent:
             obj.LossCoefficientSource = "Library"
 
         # One K per port that can actually receive one -- a degree-1
-        # component's own single port, or every outlet port on a 2+-port
-        # component (see _analysis_adapter.applicable_loss_ports()); an
-        # inlet never receives a fitting-loss contribution at all, so it
-        # never gets a slot here. CustomLossCoefficientEdgeKeys is the
+        # component's own single port, or every port on a 2+-port
+        # component's "many" flow side (see
+        # _custom_loss.custom_loss_applicable_ports()); a mixed
+        # multi-in/multi-out cross has no single common side, so it gets
+        # no slots at all. CustomLossCoefficientEdgeKeys is the
         # parallel, explicit list of which edge_key each entry belongs to
         # -- not positional, so a later flow-direction change (which port
         # is now the outlet) can't silently scramble an existing value

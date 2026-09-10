@@ -28,12 +28,13 @@ Each function receives the same context dict as the shape generators in
 junctions.py (see Junction.execute), augmented by the airflow solver with a
 "flow_rate_lps"/"velocity_ms"/"reynolds" set of keys on every entry of
 "connected_ports", plus "air_density"/"air_kinematic_viscosity". It returns
-either a dict {edge_key: K} of per-port coefficients (each already referenced
-to that port's own velocity -- required for converging/merging junctions
-where each inlet leg has a physically distinct loss), a single float K
-applied uniformly to every outlet port, or None to fall back to the solver's
-generic default coefficient. Whatever is returned, these functions must not
-do any pressure-unit arithmetic themselves -- that's the solver's job.
+an analysis.loss.LossEvaluation (never a bare dict/float/None) -- see
+library/loss_api.py's own docstring for the LossPath/LossEvaluation/
+LossStatus shapes, and compare a result's own status against
+context["loss_api"]'s EXACT/APPROXIMATION/CUSTOM/FALLBACK/UNSUPPORTED
+aliases rather than importing analysis.loss directly. Whatever is returned,
+these functions must not do any pressure-unit arithmetic themselves --
+that's the solver's job.
 
 Elbow/transition/tee losses are computed from real SMACNA/ASHRAE duct
 fitting tables via HVACLossAPI.elbow_loss/transition_loss/branch_loss (see
@@ -58,7 +59,7 @@ def loss_through_generic(context):
     # transition (area-change) reading.
     api = context["loss_api"]
     result = api.elbow_loss(context)
-    if result is not None:
+    if result.status != api.UNSUPPORTED:
         return result
     return api.transition_loss(context)
 
@@ -117,13 +118,19 @@ def loss_branch_converging_branch(context):
 
 
 def loss_cross_generic(context):
-    result = context["loss_api"].manifold_loss(context)
-    return result if result is not None else 0.75
+    api = context["loss_api"]
+    result = api.manifold_loss(context)
+    if result.status != api.UNSUPPORTED:
+        return result
+    return api.uniform_fallback_loss(context, 0.75)
 
 
 def loss_multiport_generic(context):
-    result = context["loss_api"].manifold_loss(context)
-    return result if result is not None else 1.0
+    api = context["loss_api"]
+    result = api.manifold_loss(context)
+    if result.status != api.UNSUPPORTED:
+        return result
+    return api.uniform_fallback_loss(context, 1.0)
 
 
 def loss_diffuser_generic(context):

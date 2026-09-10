@@ -31,6 +31,17 @@ def _port(edge_key, direction, flow_into_junction, profile="Circular", diameter=
     }
 
 
+def _paths_by_edge(evaluation):
+    """{reference_edge_key: loss_coefficient} view of a LossEvaluation's own
+    paths -- lets most tests keep comparing against the same {edge_key: K}
+    shape the old dict/float contract used, on top of also checking status."""
+    return {p.reference_edge_key: p.loss_coefficient for p in evaluation.paths}
+
+
+def _path_for(evaluation, edge_key):
+    return next(p for p in evaluation.paths if p.reference_edge_key == edge_key)
+
+
 # ----------------------------------------------------------------------------
 # port_area
 # ----------------------------------------------------------------------------
@@ -64,7 +75,11 @@ def test_elbow_loss_round():
         "properties": {"CenterlineRadius": 200.0},  # r_on_d = 1.0
     }
     result = api.elbow_loss(context)
-    assert result == pytest.approx({"OUT": smacna_loss.elbow_zeta_round(1.0)})
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == pytest.approx({"OUT": smacna_loss.elbow_zeta_round(1.0)})
+    path = _path_for(result, "OUT")
+    assert path.from_edge_key == "IN"
+    assert path.to_edge_key == "OUT"
 
 
 def test_elbow_loss_rectangular():
@@ -77,20 +92,25 @@ def test_elbow_loss_rectangular():
     }
     result = api.elbow_loss(context)
     expected = smacna_loss.elbow_zeta_rect(h_on_w=1.0, r_on_w=1.0, reynolds=1e6)
-    assert result == pytest.approx({"OUT": expected})
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == pytest.approx({"OUT": expected})
 
 
-def test_elbow_loss_missing_radius_returns_none():
+def test_elbow_loss_missing_radius_returns_unsupported():
     inlet = _port("IN", (-1, 0, 0), True, profile="Circular", diameter=200.0)
     outlet = _port("OUT", (0, 1, 0), False, profile="Circular", diameter=200.0)
     context = {"connected_ports": [inlet, outlet], "properties": {}}
-    assert api.elbow_loss(context) is None
+    result = api.elbow_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
-def test_elbow_loss_wrong_port_count_returns_none():
+def test_elbow_loss_wrong_port_count_returns_unsupported():
     port = _port("A", (1, 0, 0), False, profile="Circular", diameter=200.0)
     context = {"connected_ports": [port], "properties": {"CenterlineRadius": 100.0}}
-    assert api.elbow_loss(context) is None
+    result = api.elbow_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
 # ----------------------------------------------------------------------------
@@ -114,7 +134,11 @@ def test_transition_loss_expansion_round():
     theta_deg = math.degrees(2.0 * math.atan(abs(d_eq_out - d_eq_in) / (2.0 * 1.0)))
     expected = smacna_loss.expansion_zeta_round(theta_deg, area_ratio, 3e5)
 
-    assert result == pytest.approx({"OUT": expected})
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == pytest.approx({"OUT": expected})
+    path = _path_for(result, "OUT")
+    assert path.from_edge_key == "IN"
+    assert path.to_edge_key == "OUT"
 
 
 def test_transition_loss_contraction_uses_outlet_reference():
@@ -134,14 +158,17 @@ def test_transition_loss_contraction_uses_outlet_reference():
     theta_deg = math.degrees(2.0 * math.atan(abs(d_eq_out - d_eq_in) / (2.0 * 1.0)))
     expected = smacna_loss.contraction_zeta(theta_deg, area_ratio)
 
-    assert result == pytest.approx({"OUT": expected})
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == pytest.approx({"OUT": expected})
 
 
 def test_transition_loss_same_size_is_negligible():
     inlet = _port("IN", (-1, 0, 0), True, profile="Circular", diameter=300.0)
     outlet = _port("OUT", (1, 0, 0), False, profile="Circular", diameter=300.0)
     context = {"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 300.0}}
-    assert api.transition_loss(context) == {"OUT": 0.0}
+    result = api.transition_loss(context)
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == {"OUT": 0.0}
 
 
 def test_transition_loss_expansion_rectangular():
@@ -149,20 +176,22 @@ def test_transition_loss_expansion_rectangular():
     outlet = _port("OUT", (1, 0, 0), False, profile="Rectangular", width=400.0, height=400.0)
     context = {"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 1000.0}}
     result = api.transition_loss(context)
-    assert result is not None
-    assert result["OUT"] > 0.0
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result)["OUT"] > 0.0
 
 
-def test_transition_loss_oval_profile_returns_none_not_a_rectangular_guess():
+def test_transition_loss_oval_profile_returns_unsupported_not_a_rectangular_guess():
     # Oval/custom profiles: geometry classification stays valid (see
     # NetworkParser), but no validated SMACNA table exists for a
-    # straight-axis Oval area change -- must cleanly return None rather
-    # than silently reusing the rectangular table (expansion_zeta_rect is
-    # a literal SMACNA A8B rectangular-only table).
+    # straight-axis Oval area change -- must cleanly return UNSUPPORTED
+    # rather than silently reusing the rectangular table (expansion_zeta_rect
+    # is a literal SMACNA A8B rectangular-only table).
     inlet = _port("IN", (-1, 0, 0), True, profile="Oval", width=200.0, height=100.0)
     outlet = _port("OUT", (1, 0, 0), False, profile="Oval", width=400.0, height=200.0)
     context = {"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 1000.0}}
-    assert api.transition_loss(context) is None
+    result = api.transition_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
 # ----------------------------------------------------------------------------
@@ -185,7 +214,14 @@ def test_branch_loss_diverging_tee90_identifies_branch_and_straight():
     vs_on_vc = 4.0 / 5.0
     zeta_branch, zeta_straight = smacna_loss.diverging_branch_zetas(90.0, ab_on_ac, vb_on_vc, vs_on_vc)
 
-    assert result == pytest.approx({"BRANCH": zeta_branch, "STRAIGHT": zeta_straight})
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == pytest.approx({"BRANCH": zeta_branch, "STRAIGHT": zeta_straight})
+    # A diverging tee's loss belongs to its outlet legs -- from the single
+    # common inlet (IN) to each outlet.
+    assert _path_for(result, "BRANCH").from_edge_key == "IN"
+    assert _path_for(result, "BRANCH").to_edge_key == "BRANCH"
+    assert _path_for(result, "STRAIGHT").from_edge_key == "IN"
+    assert _path_for(result, "STRAIGHT").to_edge_key == "STRAIGHT"
 
 
 def test_branch_loss_converging_wye45():
@@ -210,30 +246,44 @@ def test_branch_loss_converging_wye45():
     angle_deg = 180.0 - math.degrees(math.acos(max(-1.0, min(1.0, dot))))
     zeta_branch, zeta_straight = smacna_loss.converging_branch_zetas(angle_deg, ab_on_ac, vb_on_vc, vs_on_vc)
 
-    assert result == pytest.approx({"BRANCH": zeta_branch, "STRAIGHT": zeta_straight})
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == pytest.approx({"BRANCH": zeta_branch, "STRAIGHT": zeta_straight})
+    # A converging tee's loss belongs to its INLET legs -- this is exactly
+    # the case the old outlet-only convention couldn't represent: each path
+    # goes from its own inlet leg to the single common outlet (OUT).
+    assert _path_for(result, "BRANCH").from_edge_key == "BRANCH"
+    assert _path_for(result, "BRANCH").to_edge_key == "OUT"
+    assert _path_for(result, "STRAIGHT").from_edge_key == "STRAIGHT"
+    assert _path_for(result, "STRAIGHT").to_edge_key == "OUT"
 
 
-def test_branch_loss_zero_common_flow_returns_zero_not_none():
+def test_branch_loss_zero_common_flow_returns_zero_not_unsupported():
     primary = _port("OUT", (1, 0, 0), False, diameter=300.0, velocity_ms=0.0)
     straight = _port("STRAIGHT", (-1, 0, 0), True, diameter=300.0, velocity_ms=0.0)
     branch = _port("BRANCH", (0, 1, 0), True, diameter=150.0, velocity_ms=0.0)
     context = {"connected_ports": [primary, straight, branch], "properties": {}}
-    assert api.branch_loss(context) == {"BRANCH": 0.0, "STRAIGHT": 0.0}
+    result = api.branch_loss(context)
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == {"BRANCH": 0.0, "STRAIGHT": 0.0}
 
 
-def test_branch_loss_wrong_port_count_returns_none():
+def test_branch_loss_wrong_port_count_returns_unsupported():
     primary = _port("OUT", (1, 0, 0), False, diameter=300.0, velocity_ms=5.0)
     context = {"connected_ports": [primary], "properties": {}}
-    assert api.branch_loss(context) is None
+    result = api.branch_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
-def test_branch_loss_ambiguous_flow_pattern_returns_none():
+def test_branch_loss_ambiguous_flow_pattern_returns_unsupported():
     # 3 inlets, 0 outlets -- not a valid tee/wye flow pattern.
     p1 = _port("A", (1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
     p2 = _port("B", (0, 1, 0), True, diameter=300.0, velocity_ms=5.0)
     p3 = _port("C", (0, 0, 1), True, diameter=300.0, velocity_ms=5.0)
     context = {"connected_ports": [p1, p2, p3], "properties": {}}
-    assert api.branch_loss(context) is None
+    result = api.branch_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
 # ----------------------------------------------------------------------------
@@ -251,17 +301,20 @@ def test_branch_loss_bullhead_diverging_covers_both_run_legs():
 
     result = api.branch_loss_bullhead(context)
 
-    def _expected(leg, velocity_ms, diameter):
+    def _expected(velocity_ms, diameter):
         a_on_ac = (diameter / 300.0) ** 2
         v_on_vc = velocity_ms / 5.0
         # common points -x, leg points +-y -> perpendicular either way.
         zeta, _ = smacna_loss.diverging_branch_zetas(90.0, a_on_ac, v_on_vc, v_on_vc)
         return zeta
 
-    assert result == pytest.approx({
-        "RUN_A": _expected("RUN_A", 3.0, 200.0),
-        "RUN_B": _expected("RUN_B", 2.0, 250.0),
+    assert result.status == api.APPROXIMATION
+    assert _paths_by_edge(result) == pytest.approx({
+        "RUN_A": _expected(3.0, 200.0),
+        "RUN_B": _expected(2.0, 250.0),
     })
+    assert _path_for(result, "RUN_A").from_edge_key == "IN"
+    assert _path_for(result, "RUN_A").to_edge_key == "RUN_A"
 
 
 def test_branch_loss_bullhead_converging_covers_both_run_legs():
@@ -280,32 +333,41 @@ def test_branch_loss_bullhead_converging_covers_both_run_legs():
         zeta, _ = smacna_loss.converging_branch_zetas(90.0, a_on_ac, v_on_vc, v_on_vc)
         return zeta
 
-    assert result == pytest.approx({
+    assert result.status == api.APPROXIMATION
+    assert _paths_by_edge(result) == pytest.approx({
         "RUN_A": _expected(3.0, 200.0),
         "RUN_B": _expected(2.0, 250.0),
     })
+    assert _path_for(result, "RUN_A").from_edge_key == "RUN_A"
+    assert _path_for(result, "RUN_A").to_edge_key == "OUT"
 
 
-def test_branch_loss_bullhead_zero_common_flow_returns_zero_not_none():
+def test_branch_loss_bullhead_zero_common_flow_returns_zero_not_unsupported():
     common = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=0.0)
     run_a = _port("RUN_A", (0, 1, 0), False, diameter=200.0, velocity_ms=0.0)
     run_b = _port("RUN_B", (0, -1, 0), False, diameter=200.0, velocity_ms=0.0)
     context = {"connected_ports": [common, run_a, run_b], "properties": {}}
-    assert api.branch_loss_bullhead(context) == {"RUN_A": 0.0, "RUN_B": 0.0}
+    result = api.branch_loss_bullhead(context)
+    assert result.status == api.APPROXIMATION
+    assert _paths_by_edge(result) == {"RUN_A": 0.0, "RUN_B": 0.0}
 
 
-def test_branch_loss_bullhead_wrong_port_count_returns_none():
+def test_branch_loss_bullhead_wrong_port_count_returns_unsupported():
     common = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
     context = {"connected_ports": [common], "properties": {}}
-    assert api.branch_loss_bullhead(context) is None
+    result = api.branch_loss_bullhead(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
-def test_branch_loss_bullhead_ambiguous_flow_pattern_returns_none():
+def test_branch_loss_bullhead_ambiguous_flow_pattern_returns_unsupported():
     p1 = _port("A", (1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
     p2 = _port("B", (0, 1, 0), True, diameter=300.0, velocity_ms=5.0)
     p3 = _port("C", (0, 0, 1), True, diameter=300.0, velocity_ms=5.0)
     context = {"connected_ports": [p1, p2, p3], "properties": {}}
-    assert api.branch_loss_bullhead(context) is None
+    result = api.branch_loss_bullhead(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
 # ----------------------------------------------------------------------------
@@ -340,7 +402,8 @@ def test_wye_loss_diverging_treats_symmetric_legs_symmetrically():
     angle_deg = 180.0 - math.degrees(math.acos(max(-1.0, min(1.0, dot))))
     zeta_leg, _ = smacna_loss.diverging_branch_zetas(angle_deg, a_on_ac, v_on_vc, v_on_vc)
 
-    assert result == pytest.approx({"LEG_A": zeta_leg, "LEG_B": zeta_leg})
+    assert result.status == api.APPROXIMATION
+    assert _paths_by_edge(result) == pytest.approx({"LEG_A": zeta_leg, "LEG_B": zeta_leg})
 
 
 def test_wye_loss_converging_treats_symmetric_legs_symmetrically():
@@ -359,29 +422,38 @@ def test_wye_loss_converging_treats_symmetric_legs_symmetrically():
     angle_deg = 180.0 - math.degrees(math.acos(max(-1.0, min(1.0, dot))))
     zeta_leg, _ = smacna_loss.converging_branch_zetas(angle_deg, a_on_ac, v_on_vc, v_on_vc)
 
-    assert result == pytest.approx({"LEG_A": zeta_leg, "LEG_B": zeta_leg})
+    assert result.status == api.APPROXIMATION
+    assert _paths_by_edge(result) == pytest.approx({"LEG_A": zeta_leg, "LEG_B": zeta_leg})
+    assert _path_for(result, "LEG_A").from_edge_key == "LEG_A"
+    assert _path_for(result, "LEG_A").to_edge_key == "OUT"
 
 
-def test_wye_loss_zero_common_flow_returns_zero_not_none():
+def test_wye_loss_zero_common_flow_returns_zero_not_unsupported():
     primary = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=0.0)
     leg_a = _port("LEG_A", (1, 1, 0), False, diameter=200.0, velocity_ms=0.0)
     leg_b = _port("LEG_B", (1, -1, 0), False, diameter=200.0, velocity_ms=0.0)
     context = {"connected_ports": [primary, leg_a, leg_b], "properties": {}}
-    assert api.wye_loss(context) == {"LEG_A": 0.0, "LEG_B": 0.0}
+    result = api.wye_loss(context)
+    assert result.status == api.APPROXIMATION
+    assert _paths_by_edge(result) == {"LEG_A": 0.0, "LEG_B": 0.0}
 
 
-def test_wye_loss_wrong_port_count_returns_none():
+def test_wye_loss_wrong_port_count_returns_unsupported():
     primary = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
     context = {"connected_ports": [primary], "properties": {}}
-    assert api.wye_loss(context) is None
+    result = api.wye_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
-def test_wye_loss_ambiguous_flow_pattern_returns_none():
+def test_wye_loss_ambiguous_flow_pattern_returns_unsupported():
     p1 = _port("A", (1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
     p2 = _port("B", (0, 1, 0), True, diameter=300.0, velocity_ms=5.0)
     p3 = _port("C", (0, 0, 1), True, diameter=300.0, velocity_ms=5.0)
     context = {"connected_ports": [p1, p2, p3], "properties": {}}
-    assert api.wye_loss(context) is None
+    result = api.wye_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
 # ----------------------------------------------------------------------------
@@ -400,7 +472,10 @@ def test_manifold_loss_diverging_matches_branch_loss_at_two_secondaries():
     branch = _port("BRANCH", (0, 1, 0), False, diameter=150.0, velocity_ms=3.0)
     context = {"connected_ports": [primary, straight, branch], "properties": {}}
 
-    assert api.manifold_loss(context) == pytest.approx(api.branch_loss(context))
+    manifold_result = api.manifold_loss(context)
+    branch_result = api.branch_loss(context)
+    assert manifold_result.status == api.APPROXIMATION
+    assert _paths_by_edge(manifold_result) == pytest.approx(_paths_by_edge(branch_result))
 
 
 def test_manifold_loss_converging_matches_branch_loss_at_two_secondaries():
@@ -409,7 +484,10 @@ def test_manifold_loss_converging_matches_branch_loss_at_two_secondaries():
     branch = _port("BRANCH", (0, 1, 0), True, diameter=150.0, velocity_ms=3.0)
     context = {"connected_ports": [primary, straight, branch], "properties": {}}
 
-    assert api.manifold_loss(context) == pytest.approx(api.branch_loss(context))
+    manifold_result = api.manifold_loss(context)
+    branch_result = api.branch_loss(context)
+    assert manifold_result.status == api.APPROXIMATION
+    assert _paths_by_edge(manifold_result) == pytest.approx(_paths_by_edge(branch_result))
 
 
 def test_manifold_loss_diverging_cross_covers_all_secondaries():
@@ -431,9 +509,15 @@ def test_manifold_loss_diverging_cross_covers_all_secondaries():
     context = {"connected_ports": [primary, straight, branch_a, branch_b], "properties": {}}
     result = api.manifold_loss(context)
 
-    assert result is not None
-    assert set(result.keys()) == {"STRAIGHT", "BRANCH_A", "BRANCH_B"}
-    assert all(isinstance(v, float) for v in result.values())
+    assert result.status == api.APPROXIMATION
+    paths = _paths_by_edge(result)
+    assert set(paths.keys()) == {"STRAIGHT", "BRANCH_A", "BRANCH_B"}
+    assert all(isinstance(v, float) for v in paths.values())
+    # A diverging cross's loss belongs to its outlet legs, from the single
+    # common inlet.
+    for edge_key in paths:
+        assert _path_for(result, edge_key).from_edge_key == "IN"
+        assert _path_for(result, edge_key).to_edge_key == edge_key
 
 
 def test_manifold_loss_converging_cross_covers_all_secondaries():
@@ -454,26 +538,36 @@ def test_manifold_loss_converging_cross_covers_all_secondaries():
     context = {"connected_ports": [primary, straight, branch_a, branch_b], "properties": {}}
     result = api.manifold_loss(context)
 
-    assert result is not None
-    assert set(result.keys()) == {"STRAIGHT", "BRANCH_A", "BRANCH_B"}
-    assert all(isinstance(v, float) for v in result.values())
+    assert result.status == api.APPROXIMATION
+    paths = _paths_by_edge(result)
+    assert set(paths.keys()) == {"STRAIGHT", "BRANCH_A", "BRANCH_B"}
+    assert all(isinstance(v, float) for v in paths.values())
+    # A converging cross's loss belongs to its INLET legs, into the single
+    # common outlet.
+    for edge_key in paths:
+        assert _path_for(result, edge_key).from_edge_key == edge_key
+        assert _path_for(result, edge_key).to_edge_key == "OUT"
 
 
-def test_manifold_loss_mixed_flow_pattern_returns_none():
+def test_manifold_loss_mixed_flow_pattern_returns_unsupported():
     # 2 inlets, 2 outlets -- a true cross with no single trunk to decompose.
     p1 = _port("IN1", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
     p2 = _port("IN2", (0, -1, 0), True, diameter=300.0, velocity_ms=5.0)
     p3 = _port("OUT1", (1, 0, 0), False, diameter=300.0, velocity_ms=5.0)
     p4 = _port("OUT2", (0, 1, 0), False, diameter=300.0, velocity_ms=5.0)
     context = {"connected_ports": [p1, p2, p3, p4], "properties": {}}
-    assert api.manifold_loss(context) is None
+    result = api.manifold_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
-def test_manifold_loss_wrong_port_count_returns_none():
+def test_manifold_loss_wrong_port_count_returns_unsupported():
     p1 = _port("A", (1, 0, 0), False, diameter=300.0, velocity_ms=5.0)
     p2 = _port("B", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
     context = {"connected_ports": [p1, p2], "properties": {}}
-    assert api.manifold_loss(context) is None
+    result = api.manifold_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
 def test_manifold_loss_zero_primary_flow_returns_zero_for_all_secondaries():
@@ -482,7 +576,9 @@ def test_manifold_loss_zero_primary_flow_returns_zero_for_all_secondaries():
     branch_a = _port("BRANCH_A", (0, 1, 0), False, diameter=150.0, velocity_ms=0.0)
     branch_b = _port("BRANCH_B", (0, 0, 1), False, diameter=150.0, velocity_ms=0.0)
     context = {"connected_ports": [primary, straight, branch_a, branch_b], "properties": {}}
-    assert api.manifold_loss(context) == {"STRAIGHT": 0.0, "BRANCH_A": 0.0, "BRANCH_B": 0.0}
+    result = api.manifold_loss(context)
+    assert result.status == api.APPROXIMATION
+    assert _paths_by_edge(result) == {"STRAIGHT": 0.0, "BRANCH_A": 0.0, "BRANCH_B": 0.0}
 
 
 # ----------------------------------------------------------------------------
@@ -498,7 +594,11 @@ def test_terminal_component_loss_neck_matches_duct_size_gives_k_unchanged():
         "properties": {"NeckSize": 200.0, "LossCoefficient": 1.5},
     }
     result = api.terminal_component_loss(context)
-    assert result == pytest.approx({"A": 1.5})
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == pytest.approx({"A": 1.5})
+    path = _path_for(result, "A")
+    assert path.from_edge_key is None
+    assert path.to_edge_key == "A"
 
 
 def test_terminal_component_loss_smaller_neck_increases_effective_k():
@@ -515,7 +615,8 @@ def test_terminal_component_loss_smaller_neck_increases_effective_k():
 
     neck_v = airflow.velocity_from_flow(airflow.lps_to_m3s(duct_flow_lps), airflow.circular_area(0.1))
     expected_k = 1.5 * (neck_v / 5.0) ** 2
-    assert result == pytest.approx({"A": expected_k})
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == pytest.approx({"A": expected_k})
     assert expected_k > 1.5
 
 
@@ -530,65 +631,132 @@ def test_terminal_component_loss_larger_neck_decreases_effective_k():
 
     neck_v = airflow.velocity_from_flow(airflow.lps_to_m3s(duct_flow_lps), airflow.circular_area(0.4))
     expected_k = 1.5 * (neck_v / 5.0) ** 2
-    assert result == pytest.approx({"A": expected_k})
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == pytest.approx({"A": expected_k})
     assert expected_k < 1.5
 
 
-def test_terminal_component_loss_missing_neck_size_returns_none():
+def test_terminal_component_loss_missing_neck_size_returns_unsupported():
     port = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=5.0)
     context = {"connected_ports": [port], "properties": {"LossCoefficient": 1.5}}
-    assert api.terminal_component_loss(context) is None
+    result = api.terminal_component_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
-def test_terminal_component_loss_missing_loss_coefficient_returns_none():
+def test_terminal_component_loss_missing_loss_coefficient_returns_unsupported():
     port = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=5.0)
     context = {"connected_ports": [port], "properties": {"NeckSize": 200.0}}
-    assert api.terminal_component_loss(context) is None
+    result = api.terminal_component_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
-def test_terminal_component_loss_wrong_port_count_returns_none():
+def test_terminal_component_loss_wrong_port_count_returns_unsupported():
     p1 = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=5.0)
     p2 = _port("B", (-1, 0, 0), True, diameter=200.0, velocity_ms=5.0)
     context = {
         "connected_ports": [p1, p2],
         "properties": {"NeckSize": 200.0, "LossCoefficient": 1.5},
     }
-    assert api.terminal_component_loss(context) is None
+    result = api.terminal_component_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
-def test_terminal_component_loss_zero_flow_returns_zero_not_none():
+def test_terminal_component_loss_zero_flow_returns_zero_not_unsupported():
     port = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=0.0, flow_rate_lps=0.0)
     context = {
         "connected_ports": [port],
         "properties": {"NeckSize": 200.0, "LossCoefficient": 1.5},
     }
-    assert api.terminal_component_loss(context) == {"A": 0.0}
+    result = api.terminal_component_loss(context)
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == {"A": 0.0}
 
 
 # ----------------------------------------------------------------------------
-# inline_device_loss
+# inline_device_loss -- resolves its 2 connected ports (inlet/outlet) itself
+# now, unlike the old bare-float contract which ignored ports entirely.
 # ----------------------------------------------------------------------------
 
-def test_inline_device_loss_returns_raw_coefficient():
-    # No neck-size conversion -- the coefficient is returned as-is, to be
-    # applied by the solver against the connecting duct's own velocity.
-    context = {"properties": {"LossCoefficient": 0.35}}
-    assert api.inline_device_loss(context) == pytest.approx(0.35)
+def _inline_ports():
+    inlet = _port("IN", (-1, 0, 0), True, diameter=200.0, velocity_ms=5.0)
+    outlet = _port("OUT", (1, 0, 0), False, diameter=200.0, velocity_ms=5.0)
+    return [inlet, outlet]
 
 
-def test_inline_device_loss_missing_coefficient_returns_none():
-    context = {"properties": {}}
-    assert api.inline_device_loss(context) is None
+def test_inline_device_loss_returns_one_exact_path_referenced_to_outlet():
+    # No neck-size conversion -- the coefficient is applied as-is against
+    # the outlet's own velocity (matches the inline-chain convention
+    # analysis/pressure.py already uses).
+    context = {"connected_ports": _inline_ports(), "properties": {"LossCoefficient": 0.35}}
+    result = api.inline_device_loss(context)
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == pytest.approx({"OUT": 0.35})
+    path = _path_for(result, "OUT")
+    assert path.from_edge_key == "IN"
+    assert path.to_edge_key == "OUT"
 
 
-def test_inline_device_loss_zero_coefficient_returns_none():
-    context = {"properties": {"LossCoefficient": 0.0}}
-    assert api.inline_device_loss(context) is None
+def test_inline_device_loss_missing_coefficient_returns_unsupported():
+    context = {"connected_ports": _inline_ports(), "properties": {}}
+    result = api.inline_device_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
 
 
-def test_inline_device_loss_negative_coefficient_returns_none():
-    context = {"properties": {"LossCoefficient": -1.0}}
-    assert api.inline_device_loss(context) is None
+def test_inline_device_loss_zero_coefficient_returns_unsupported():
+    context = {"connected_ports": _inline_ports(), "properties": {"LossCoefficient": 0.0}}
+    result = api.inline_device_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
+
+
+def test_inline_device_loss_negative_coefficient_returns_unsupported():
+    context = {"connected_ports": _inline_ports(), "properties": {"LossCoefficient": -1.0}}
+    result = api.inline_device_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
+
+
+def test_inline_device_loss_wrong_port_count_returns_unsupported():
+    context = {"connected_ports": _inline_ports()[:1], "properties": {"LossCoefficient": 0.35}}
+    result = api.inline_device_loss(context)
+    assert result.status == api.UNSUPPORTED
+    assert result.paths == []
+
+
+# ----------------------------------------------------------------------------
+# uniform_fallback_loss
+# ----------------------------------------------------------------------------
+
+def test_uniform_fallback_loss_applies_k_to_every_outlet_port():
+    primary = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
+    straight = _port("STRAIGHT", (1, 0, 0), False, diameter=300.0, velocity_ms=4.0)
+    branch = _port("BRANCH", (0, 1, 0), False, diameter=150.0, velocity_ms=3.0)
+    context = {"connected_ports": [primary, straight, branch], "properties": {}}
+
+    result = api.uniform_fallback_loss(context, 0.75)
+
+    assert result.status == api.FALLBACK
+    assert _paths_by_edge(result) == pytest.approx({"STRAIGHT": 0.75, "BRANCH": 0.75})
+    for edge_key in ("STRAIGHT", "BRANCH"):
+        path = _path_for(result, edge_key)
+        # uniform_fallback_loss has no single common "other side" to
+        # reference (it applies uniformly across however many outlets a
+        # fitting has), so from_edge_key is always None -- see its own
+        # docstring in library/loss_api.py.
+        assert path.from_edge_key is None
+        assert path.to_edge_key == edge_key
+
+
+def test_uniform_fallback_loss_carries_through_optional_warning():
+    context = {"connected_ports": [], "properties": {}}
+    result = api.uniform_fallback_loss(context, 1.0, warning="mixed cross")
+    assert result.status == api.FALLBACK
+    assert result.warning == "mixed cross"
+    assert result.paths == []
 
 
 # ----------------------------------------------------------------------------

@@ -81,11 +81,12 @@ class PortModel:
 # closes over whatever library type-def/properties it needs), so analysis/
 # never resolves a library type itself. Input: {edge_key: {"velocity_ms":
 # float, "flow_lps": float, "reynolds": float}} for this component's own
-# local ports. Output follows the same 3-shape contract
-# HVACLibraryRegistry.call_loss already has: a dict of {edge_key: K} (one
-# coefficient per port), a single float K (applied uniformly to every
-# outlet port), or None (no formula available -- caller falls back to a
-# generic default).
+# local ports. Output is an analysis.loss.LossEvaluation (see that module),
+# or None only when this component's type itself couldn't be resolved at
+# all -- distinct from a resolved type's own loss function returning an
+# UNSUPPORTED LossEvaluation for the current flow topology (see
+# analysis/pressure.py's resolve_loss_evaluation(), which normalizes both
+# into the same explicit FALLBACK policy).
 LossEvaluator = Callable[[Dict[str, Dict[str, float]]], "Optional[object]"]
 
 

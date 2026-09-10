@@ -23,12 +23,15 @@ logic upstream of where it belongs (e.g. no fitting knowledge in the
 parser) — see `CLAUDE.md` §3 "Respect the layering".
 
 A `DuctJunction` is a purely logical/connectivity node — it holds no
-`LibraryId`/`TypeId`/`Shape` of its own. Each physical fitting at that node
-is a separate `DuctComponent` child object: exactly one **Primary**
-component (the automatically/manually selected main fitting), plus zero or
-more user-added **Inline** components in series (a damper, a silencer, ...)
-for a simple through/2-port node. See "Junction component composition"
-below.
+`LibraryId`/`TypeId`/`Shape` of its own. Each `DuctJunction` has exactly one
+**Primary** `DuctComponent` (the automatically/manually selected main
+fitting for that node, whatever its topology — a through fitting, a tee, a
+cross, a multiport, or a terminal device). Independently of that, each real
+junction port/edge may separately carry zero or more user-added **Inline**
+components (a damper, a silencer, ...) in series, arranged from the Primary
+outward toward that edge's own external segment — not limited to a simple
+2-port node: a tee's branch leg and one of its run legs can each grow a
+completely independent chain. See "Junction component composition" below.
 
 | Layer | File(s) | Job |
 |---|---|---|
@@ -44,7 +47,7 @@ it's kept accurate and up to date on purpose.
 
 | Module | Concept |
 |---|---|
-| `core/Network.py` | `DuctNetwork` container + the debounced sync loop (`requestSync`/`_runDeferredSync`) that keeps `DuctSegment`/`DuctJunction` objects in step with base geometry. |
+| `core/Network.py` | `DuctNetwork` container + the debounced sync loop (`requestSync`/`_runDeferredSync`) that keeps `DuctSegment`/`DuctJunction` objects in step with base geometry. Its own two `ViewProvider` classes (`DuctManagedFolderViewProvider`/`DuctNetworkViewProvider` — Coin rendering, task-panel `setEdit`, direction-arrow overlays) live in `ui/NetworkViewProvider.py` instead, so this module has no top-level `FreeCADGui`/`pivy`/`PySide` import and stays importable headless; the few call sites that still need `Gui`/`QtCore` (selection, active-object, the sync debounce timer) import them locally, inside the one method that needs them. |
 | `core/NetworkParser.py` | `DuctNetworkParser`: builds a geometric graph from actual snapped endpoints, then an analysis graph on top (grouped "supernodes" for user-defined virtual junctions) that connectivity/degree/classification actually run on. |
 | `core/Segment.py` / `core/Component.py` | `DuctSegment`/`DuctComponent`: FreeCAD document objects. `updateMetadata()` is a pure metadata writer (no selection logic); `execute()` does an exact type lookup and builds geometry. Both use the shared `core/_type_schema.apply_type_schema()` helper for their dynamic (type-declared) properties. See "Type selection subsystem" below. |
 | `core/Junction.py` | `DuctJunction`: a logical node with no type/geometry of its own. `getComponents()`/`getPrimaryComponent()` find its `DuctComponent` children (via `ParentJunctionName`, in `Sequence` order); `composeComponents()` works out each child's local inlet/outlet ports for the current sync (a single-component junction gets the real connected ports unchanged); `aggregateConnectionLengths()` rolls each component's own trim into the external trim contract (`ConnectionLengthsJson`). See "Junction component composition" below. |
@@ -112,16 +115,89 @@ core/AirflowSolver.py / core/DuctSizer.py   map pure results back onto Calc*
 
 A component's own fitting-loss formula is never resolved by `analysis/`
 itself: `core/_analysis_adapter.build_loss_evaluator()` resolves the library
-type once and returns a plain `Callable[[port_velocities], K]` closure
-(`ComponentModel.loss_evaluator`) that `analysis/pressure.py`/`sizing.py`
-call with nothing but plain floats — the same 3-shape return contract
-(`dict`/`float`/`None`) `HVACLibraryRegistry.call_loss` has always had. Each
-component's own loss is still converted to Pa **using its own reference
-velocity before being summed** onto a segment — `SegmentModel` keeps a
-node's own Primary contribution (`junction_loss_pa`) and an edge's own
-Inline-chain contribution (`component_loss_pa`) as two separate fields
-(rather than one combined "fitting loss") specifically so `analysis/paths.py`
-can report duct/junction/component/terminal loss separately along a path.
+type once and returns a plain `Callable[[port_velocities],
+Optional[LossEvaluation]]` closure (`ComponentModel.loss_evaluator`) that
+`analysis/pressure.py`/`sizing.py` call with nothing but plain floats — see
+"Fitting-loss model" below for the `LossEvaluation`/`LossPath` shape that
+callable returns. Each component's own loss is still converted to Pa
+**using its own reference velocity before being summed** onto a segment —
+`SegmentModel` keeps a node's own Primary contribution (`junction_loss_pa`)
+and an edge's own Inline-chain contribution (`component_loss_pa`) as two
+separate fields (rather than one combined "fitting loss") specifically so
+`analysis/paths.py` can report duct/junction/component/terminal loss
+separately along a path.
+
+### Fitting-loss model
+
+`analysis/loss.py` is the pure data model a fitting's own loss formula
+(`library/loss_api.py`'s `HVACLossAPI`, called from a library's own
+`junction_losses.py`) returns, and the one every consumer
+(`analysis/pressure.py`, `analysis/sizing.py`) reads back:
+
+```
+LossPath(from_edge_key, to_edge_key, reference_edge_key, loss_coefficient, source=None)
+LossEvaluation(paths: list[LossPath], status: LossStatus, warning: str | None)
+
+LossStatus = EXACT | APPROXIMATION | CUSTOM | FALLBACK | UNSUPPORTED
+```
+
+The key invariant: **a loss coefficient belongs to a directed flow path
+through a fitting, never implicitly to "the outlet"**. `from_edge_key` is
+the path's inlet-side edge, `to_edge_key` its outlet-side edge (either may
+be `None` only for a 1-port terminal device's open-atmosphere side) —
+direction always comes from each port's own
+`flow_into_junction`/`flow_into_node`, never from key ordering.
+`reference_edge_key` (always equal to `from_edge_key` or `to_edge_key`) is
+whose own velocity `loss_coefficient` is referenced to, matching the
+convention every SMACNA/ASHRAE table already used. This is what makes a
+converging tee representable at all: its two physically distinct
+coefficients belong to its two *inlet* legs, exactly the same shape a
+diverging tee's two *outlet* legs already had — neither is a special case
+of the other, and a true multi-inlet/multi-outlet cross can express one
+`LossPath` per inlet/outlet pairing the library method actually supports.
+
+`LossStatus` separates what used to be collapsed into a single `None`:
+`UNSUPPORTED` means the library formula found no applicable formula for the
+current flow topology (e.g. a true mixed cross); `FALLBACK` means a generic
+coefficient was applied as an explicit, visible policy (either
+solver-synthesized, via `analysis/pressure.resolve_loss_evaluation()`'s own
+`K_DEFAULT`, or type-declared, via `HVACLossAPI.uniform_fallback_loss()`);
+`CUSTOM` is a user-supplied override (`core/_custom_loss.py`, `Component.py`'s
+`LossCoefficientSource == "Custom"`). `resolve_loss_evaluation()` (in
+`analysis/pressure.py`, reused by `analysis/sizing.py`'s
+`LocalStaticRegainSizer` for the same estimate during sizing) is the one
+place `UNSUPPORTED`/missing-evaluator both turn into an explicit `FALLBACK`
+result — never silently applied without a visible status/warning.
+
+**Pressure-reference convention** (`analysis/pressure.py`'s Phase F/G):
+static pressure decreases in the flow direction; a node's own
+`static_pressure_pa` is its fitting body's shared reference point, taken
+*before* any of its legs' own turning/branching loss is subtracted. A
+`LossPath`'s Pa contribution is always attributed onto its own
+`reference_edge_key`'s segment — already correct at the node level for
+both a diverging fitting (loss on outlet legs) and a converging one (loss
+on inlet legs). A single port's own static pressure
+(`ComponentPortResult.static_pressure_pa`) does depend on which side of its
+own path it's on: the `to_edge_key` side (downstream/outlet) is the node's
+reference minus that leg's own `pressure_drop_pa`; the `from_edge_key` side
+(upstream/inlet) is the node's reference *plus* that leg's own
+`pressure_drop_pa` (pressure is higher there, before the fitting absorbs
+the loss).
+
+Custom K (`LossCoefficientSource == "Custom"`) is converted to the same
+`LossPath`-based evaluation, not a separate outlet-only mechanism:
+`core/_custom_loss.custom_loss_applicable_ports()` generalizes "which local
+ports get a custom-K slot" off the same single-common-port shape every
+library formula already uses (the "many" side gets a slot — every outlet
+of a diverging tee, but every *inlet* of a converging tee). Because
+`CustomLossCoefficientEdgeKeys` persists real `edge_key` values and those
+regenerate on every document reload (`core/Network.py`'s own
+`_edge_key_remap`, built by `syncSegments(initial_sync=True)`), the same
+old-tag → new-tag carry-forward already used for `AttachedEdgeKey` is
+applied to `CustomLossCoefficientEdgeKeys` too (`core/_custom_loss.
+remap_persisted_edge_keys()`, called from `syncJunctionComponents` for both
+the Primary and every Inline component) — without it, every stored custom K
+would look unmatched after a reload and get silently reset to `0.0`.
 
 `DuctNetwork.SizingMethod` has a fourth option, `PressureBalancedStaticRegain`
 (`ui/TaskPanel.py`'s Size Ducts panel), which routes through
@@ -178,10 +254,18 @@ let the user confirm first.
 For the common case — a junction with just its Primary component — this is
 a no-op: the component simply gets the junction's real connected ports
 unchanged, identical to how a single fitting worked before `DuctComponent`
-existed. It's only interesting for a simple **through/2-port** node
-carrying one or more **Inline** components in series with the Primary
-(spec-scoped to this topology only — branch/cross/multiport/end nodes
-always have exactly one component):
+existed. It's only interesting once at least one real edge carries its own
+**Inline** chain in series with the Primary — which is independent per
+edge, not scoped to a simple 2-port node: a tee's branch leg and one of its
+run legs can each grow a completely independent chain, evaluated with that
+leg's own geometry alone. The invariant is:
+
+```
+Each DuctJunction has exactly one Primary component.
+
+Each real junction port/edge may independently have zero or more
+Inline components arranged from the Primary component outward.
+```
 
 ```
 composeComponents()
@@ -209,18 +293,25 @@ Each component's `execute()` (run via `touch()` + the next recompute) then
 calls `build_geometry` a second time with those final positions to build
 the real `Shape` — `build_geometry` runs twice per component per sync by
 design, so `execute()` stays the single source of truth for `Shape` rather
-than caching a result across the sync/recompute boundary.
+than caching a result across the sync/recompute boundary. **Follow-up TODO**:
+this "peek" call only ever needs `connection_lengths` (and other lightweight
+composition metadata), never a real `Shape` — a lighter
+`measure_connections(context)` contract that skips BREP construction
+entirely would avoid building geometry twice per component per sync, but is
+out of scope for now; not attempted here since it would touch every
+geometry backend (PartScript/static/generator) for a performance win
+unrelated to the loss-model work this document otherwise describes.
 
-`AirflowSolver`'s Phase E mirrors this: for a through/2-port chain, each
-component's own loss is evaluated against its own local ports/velocity and
-converted to Pa immediately (never summing raw K values across components
-that don't share a reference velocity), then the Pa contributions are
-summed once onto the one real segment leaving the junction. Per-component
+`AirflowSolver`'s Phase E mirrors this: each edge's own Inline chain is
+evaluated independently of the Primary and of every other edge's chain —
+each component's own loss is evaluated against its own local ports/velocity
+and converted to Pa immediately (never summing raw K values across
+components that don't share a reference velocity), then the Pa
+contributions are summed once onto that one real segment. Per-component
 results (`CalcFlowRate`/`CalcVelocity`/`CalcLossCoefficient`/
-`CalcPressureDrop`) are stored on each `DuctComponent`. Everything else
-(branch/cross/multiport/end nodes, `DuctSizer`'s static-regain branch-loss
-pass) is untouched — those always have exactly one component, so behave
-identically to before this split.
+`CalcPressureDrop`) are stored on each `DuctComponent`. A node with no
+Inline chain on any of its edges (still the common case) behaves exactly as
+if `DuctComponent` didn't exist at all.
 
 `DuctJunction` has no `Shape` and so can't be picked in the 3D view — its
 own `FlowBoundary`/`DesignFlowRate` (the terminal solve target
