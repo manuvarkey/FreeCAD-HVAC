@@ -23,8 +23,8 @@
     {
       "name": "NeckSize",
       "prop_type": "App::PropertyLength",
-      "group": "Dimensions",
-      "description": "Louver/hood neck (collar) diameter",
+      "group": "Parameters",
+      "description": "Equivalent louver/hood neck (collar) diameter used only for the pressure-loss calculation, referenced to velocity at this neck -- not a separate geometric profile; the generated body's own interface is always the connected duct port's real profile",
       "default": 200.0
     },
     {
@@ -33,11 +33,22 @@
       "group": "Parameters",
       "description": "Pressure-loss coefficient K, referenced to velocity at the neck (louvers/hoods are typically more restrictive than diffusers, e.g. bird screens/blades)",
       "default": 2.0
+    },
+    {
+      "name": "BodyLength",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Axial length of the generic terminal body",
+      "default": 150.0
     }
   ],
   "generator": {
     "module": "junctions",
-    "function": "build_diffuser_generic"
+    "function": "build_terminal_body_generic"
+  },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_terminal_body_generic"
   },
   "loss": {
     "module": "junction_losses",

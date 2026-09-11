@@ -117,15 +117,41 @@ def build_manifold_marker(context):
     return _marker(context, 240.0, 90.0)
 
 
-def build_diffuser_generic(context):
+def _terminal_body_layout(context):
+    """
+    Shared layout for a generic one-port terminal body (diffuser/grille/
+    register, AHU/fan connection, intake/exhaust louver, ...): a plain
+    extrusion of the connected port's own profile -- the interface profile
+    is always the real connected duct port, never an independent neck
+    size (a NeckSize a type-def may still declare feeds that type's own
+    loss formula only, referenced to velocity at an equivalent neck --
+    see HVACLossAPI.terminal_component_loss -- it is not a second,
+    geometrically distinct profile applied here).
+    """
     api = context["hvac_api"]
     ports = api.connected_ports(context)
-    if not ports:
-        return _marker(context, 150.0)
-    p = ports[0]
-    length = _positive(_props(context).get("Length"), 0.35 * _size(api, p))
-    shape = api.extrude(api.profile_from_port(p), api.port_direction(p) * length, solid=True)
-    return {"shape": api.refine(shape)}
+    if len(ports) != 1:
+        raise ValueError("Generic terminal requires exactly one connected port")
+    port = ports[0]
+    props = _props(context)
+    body_length = _positive(props.get("BodyLength"), 0.35 * _size(api, port))
+    return port, body_length
+
+
+def measure_terminal_body_generic(context):
+    api = context["hvac_api"]
+    port, body_length = _terminal_body_layout(context)
+    return api.build_trim_rec_from_port_lengths([(port, body_length)])
+
+
+def build_terminal_body_generic(context):
+    api = context["hvac_api"]
+    port, body_length = _terminal_body_layout(context)
+    shape = api.extrude(api.profile_from_port(port), api.port_direction(port) * body_length, solid=True)
+    return {
+        "shape": api.refine(shape),
+        "connection_lengths": api.build_trim_rec_from_port_lengths([(port, body_length)]),
+    }
 
 
 def _duct_closure_thickness(context):
@@ -380,7 +406,7 @@ def _transition_layout(context):
         raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
     p = _props(context)
     size = max(_size(api, ports[0]), _size(api, ports[1]))
-    total = _positive(p.get("Length", p.get("TransitionLength")), max(size, 100.0))
+    total = _positive(p.get("TransitionLength"), max(size, 100.0))
     trim = total / 2.0
     return ports, trim
 
@@ -408,8 +434,8 @@ def _transition_radiussed_route(context):
         raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
     p = _props(context)
     size = max(_size(api, ports[0]), _size(api, ports[1]))
-    total = _positive(p.get("Length", p.get("TransitionLength")), max(size, 100.0))
-    radius = _positive(p.get("Length", p.get("TransitionRadius")), max(size, 10.0))
+    total = _positive(p.get("TransitionLength"), max(size, 100.0))
+    radius = _positive(p.get("TransitionRadius"), max(size, 10.0))
     # A bend radius smaller than the duct's own half-width folds the swept
     # surface back on itself on the inside of the bend (same minimum
     # build_elbow enforces on CenterlineRadius).
@@ -449,7 +475,7 @@ def _transition_mitered_layout(context):
         raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
     p = _props(context)
     size = max(_size(api, ports[0]), _size(api, ports[1]))
-    total = _positive(p.get("Length", p.get("TransitionLength")), max(size, 100.0))
+    total = _positive(p.get("TransitionLength"), max(size, 100.0))
 
     # Shared axis geometry with the radiussed transition -- same end
     # points and theoretical sharp turn points, only the corner treatment
@@ -1181,7 +1207,7 @@ def _lateral_tee_layout(context):
     trim_a = min_a + _extra_trim(p.get("TrimRunA"), 0.65 * _size(api, run_a))
     trim_b = min_b + _extra_trim(p.get("TrimRunB"), 0.65 * _size(api, run_b))
 
-    branch_min = max(0.0, (run_surface - api.port_position(branch)).dot(branch_dir) * 2.0)
+    branch_min = max(0.0, (run_surface - api.port_position(branch)).dot(branch_dir))
     trim_branch = branch_min + _extra_trim(p.get("TrimBranch"), 0.65 * _size(api, branch))
 
     return {
@@ -1240,6 +1266,25 @@ def build_wye_mitered(context):
     return _star_wye(context, 0.70)
 
 
+def _wye_common_index(api, ports):
+    """
+    Which of a 3-port wye's ports is the common/main leg -- from port
+    geometry (each port's own outward direction) only, never from duct
+    size: resizing one leg must never change which physical leg is
+    common. The two branch legs are normally the pair whose outward
+    directions are closest to each other (most nearly parallel); the
+    remaining port is the common leg. Never uses flow direction -- this
+    is a purely geometric/topological identity, unrelated to which way
+    air happens to be moving.
+    """
+    if len(ports) != 3:
+        raise ValueError("Wye requires exactly three ports")
+    directions = [api.unit(api.port_direction(port)) for port in ports]
+    pairs = ((0, 1), (0, 2), (1, 2))
+    branch_pair = max(pairs, key=lambda pair: directions[pair[0]].dot(directions[pair[1]]))
+    return next(index for index in range(3) if index not in branch_pair)
+
+
 def _wye_radius_layout(context):
     """Same "needs an actual bend stub for its minimums" shape as
     _radius_tee_layout, generalized to 2 branch legs merging into one main
@@ -1253,9 +1298,11 @@ def _wye_radius_layout(context):
     names = ("TrimBranchA", "TrimBranchB", "TrimBranchC")
 
     center = api.center_from_context(context)
-    legs = sorted(((_size(api, port), names[i], i, port) for i, port in enumerate(ports)), key=lambda leg: leg[0], reverse=True)
-    main_size, main_name, main_index, main = legs[0]
-    branch_legs = legs[1:]
+    main_index = _wye_common_index(api, ports)
+    main_name, main = names[main_index], ports[main_index]
+    branch_legs = [
+        (_size(api, ports[i]), names[i], i, ports[i]) for i in range(3) if i != main_index
+    ]
 
     smallest_branch_size = min(size for size, _, _, _ in branch_legs)
     radius = _positive(p.get("BranchRadius"), 0.6 * smallest_branch_size)
