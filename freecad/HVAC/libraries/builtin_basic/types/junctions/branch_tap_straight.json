@@ -47,6 +47,10 @@
     "module": "junctions",
     "function": "build_tap_straight"
   },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_tap_straight"
+  },
   "loss": {
     "module": "junction_losses",
     "function": "loss_tee_generic"

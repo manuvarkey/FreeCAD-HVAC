@@ -517,24 +517,32 @@ class DuctJunction:
 
     def _peekConnectionLengths(self, comp_obj, local_ports, topology, family, analysis):
         """
-        Ask this component's own geometry backend how far it pushes out
-        past each of its given (coincident) ports, purely to learn its own
-        per-port trims -- the shape itself is discarded here; execute()
-        (run right after composeComponents, via touch() + recompute())
-        builds the real Shape with the exact same call using the final
-        anchor positions. Calling build_geometry twice per component per
-        sync is a deliberate, bounded cost -- see composeComponents()'s
-        docstring; it keeps execute() as the single source of truth for
-        Shape rather than caching a result across the sync/recompute
-        boundary.
+        Ask this component's own type how far it pushes out past each of
+        its given (coincident) ports, purely to learn its own per-port
+        trims -- via the type's own independently-declared
+        connection_lengths measurement function (HVACLibraryRegistry.
+        measure_connection_lengths()) when it has one, which measures
+        without building any Shape at all. execute() (run right after
+        composeComponents, via touch() + recompute()) then builds the real
+        Shape separately, using the exact same layout calculation its own
+        build_geometry() shares with that measurement function -- see
+        freecad/HVAC/libraries/README.md's "connection_lengths" section.
+
+        TODO(migration): a type with no connection_lengths function
+        declared yet falls back to the old peek-via-build_geometry() path
+        (building and discarding a full Shape, exactly as this method
+        always did) -- remove this fallback branch once every library type
+        that produces non-zero trims has migrated to an independent
+        measurement function.
 
         local_ports can be an N-port list (the Primary, given its real
         ports) or a 2-port list (an Inline component's own inner/outer
-        templates) -- both are handled identically here.
+        templates) -- both are handled identically here, and both go
+        through this one dispatch regardless.
 
         Returns {(edge_key, segment_end): trim_length}; empty if the
-        component has no type selected yet, or its geometry backend
-        fails/reports nothing.
+        component has no type selected yet, or its type's measurement/
+        geometry backend fails/reports nothing.
         """
         library_id = getattr(comp_obj, "LibraryId", "")
         type_id = getattr(comp_obj, "TypeId", "")
@@ -563,18 +571,17 @@ class DuctJunction:
                 "type_id": type_id,
                 "library_id": library_id,
             }
-            result = reg.build_geometry(library_id, type_def, context)
+            records = reg.measure_connection_lengths(library_id, type_def, context)
+            if records is None:
+                # Migration fallback (see TODO above) -- no independent
+                # measurement function declared, so build (and discard)
+                # the full geometry the same way this method always did.
+                result = reg.build_geometry(library_id, type_def, context)
+                records = reg.normalize_connection_lengths(result.connection_lengths, type_id)
         except Exception:
             return {}
 
-        out = {}
-        for item in result.connection_lengths or []:
-            key = (item.get("edge_key"), item.get("segment_end"))
-            try:
-                out[key] = max(0.0, float(item.get("length", 0.0) or 0.0))
-            except Exception:
-                out[key] = 0.0
-        return out
+        return {(item["edge_key"], item.get("segment_end")): item["length"] for item in records}
 
     def aggregateConnectionLengths(self):
         """

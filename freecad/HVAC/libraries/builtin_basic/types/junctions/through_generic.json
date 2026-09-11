@@ -32,6 +32,10 @@
     "module": "junctions",
     "function": "build_through_generic"
   },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_through_generic"
+  },
   "loss": {
     "module": "junction_losses",
     "function": "loss_through_generic"

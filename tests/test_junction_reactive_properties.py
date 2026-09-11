@@ -376,6 +376,15 @@ class _ChainFakeRegistry:
     def resolve_params(self, type_def, obj=None):
         return {}
 
+    def measure_connection_lengths(self, lib_id, type_def, context):
+        # Simulates a type-def with no independent connection_lengths
+        # function declared -- _peekConnectionLengths must fall back to
+        # its own build_geometry() below (see that method's own TODO).
+        return None
+
+    def normalize_connection_lengths(self, raw, type_id):
+        return list(raw or [])
+
     def build_geometry(self, lib_id, type_def, context):
         ports = context["connected_ports"]
         return geometry_result_mod.normalize({
@@ -511,6 +520,15 @@ class _UniformFakeRegistry:
 
     def resolve_params(self, type_def, obj=None):
         return {}
+
+    def measure_connection_lengths(self, lib_id, type_def, context):
+        # Simulates a type-def with no independent connection_lengths
+        # function declared -- _peekConnectionLengths must fall back to
+        # its own build_geometry() below (see that method's own TODO).
+        return None
+
+    def normalize_connection_lengths(self, raw, type_id):
+        return list(raw or [])
 
     def build_geometry(self, lib_id, type_def, context):
         ports = context["connected_ports"]
@@ -719,3 +737,162 @@ def test_on_changed_makes_design_flow_rate_editable_only_when_fixed(monkeypatch)
     junction.FlowBoundary = "Closed"
     dj.onChanged(junction, "FlowBoundary")
     assert junction._editor_modes["DesignFlowRate"] == 1
+
+
+# ----------------------------------------------------------------------
+# _peekConnectionLengths -- Milestone B1's connection-length measurement
+# contract: measure first (no geometry build at all) when a type declares
+# an independent measurement function; fall back to the old build-and-
+# discard-geometry path only for a type that hasn't migrated yet. None of
+# these exercise real builtin_basic/generators/junctions.py math (out of
+# scope for unit tests -- see AGENTS.md); they only prove
+# _peekConnectionLengths' own dispatch/fallback/normalization behaviour
+# against synthetic fake registries.
+# ----------------------------------------------------------------------
+
+class _MeasureOnlyRegistry:
+    """A type that HAS declared an independent connection_lengths function
+    -- build_geometry must never be called to learn its trims."""
+
+    def __init__(self, records):
+        self._records = records
+
+    def resolve_type(self, lib_id, type_id):
+        return object()
+
+    def resolve_params(self, type_def, obj=None):
+        return {}
+
+    def measure_connection_lengths(self, lib_id, type_def, context):
+        return list(self._records)
+
+    def normalize_connection_lengths(self, raw, type_id):
+        return list(raw or [])
+
+    def build_geometry(self, lib_id, type_def, context):
+        raise AssertionError(
+            "build_geometry must not be called when measure_connection_lengths already "
+            "returned a result -- see DuctJunction._peekConnectionLengths()'s own TODO."
+        )
+
+
+def test_peek_connection_lengths_does_not_build_geometry_for_a_migrated_type(monkeypatch):
+    comp = FakeComponentObj("Comp0", "Junc0", "Primary", library_id="lib", type_id="measured_type")
+    registry = _MeasureOnlyRegistry([
+        {"edge_key": "A", "segment_end": "start", "length": 25.0},
+        {"edge_key": "B", "segment_end": "end", "length": 15.0},
+    ])
+    monkeypatch.setattr(
+        junction_mod.hvaclib.HVACLibraryService, "get_hvac_library_registry", staticmethod(lambda: registry)
+    )
+
+    dj = _bare_junction(FakeJunctionObj())
+    local_ports = [
+        _port("A", "start", (0, 0, 0), (-1, 0, 0), "Circular", {"Diameter": 200.0}, True),
+        _port("B", "end", (0, 0, 0), (1, 0, 0), "Circular", {"Diameter": 200.0}, False),
+    ]
+
+    # Would raise (via _MeasureOnlyRegistry.build_geometry) if the fallback
+    # path were reached -- getting a normal return below proves it wasn't.
+    trims = dj._peekConnectionLengths(comp, local_ports, "through", "", {})
+
+    assert trims == {("A", "start"): 25.0, ("B", "end"): 15.0}
+
+
+class _UnmigratedFallbackRegistry:
+    """A type with NO independent connection_lengths function declared --
+    _peekConnectionLengths must fall back to build_geometry()."""
+
+    def __init__(self, records):
+        self._records = records
+        self.build_geometry_called = False
+
+    def resolve_type(self, lib_id, type_id):
+        return object()
+
+    def resolve_params(self, type_def, obj=None):
+        return {}
+
+    def measure_connection_lengths(self, lib_id, type_def, context):
+        return None
+
+    def normalize_connection_lengths(self, raw, type_id):
+        return list(raw or [])
+
+    def build_geometry(self, lib_id, type_def, context):
+        self.build_geometry_called = True
+        return geometry_result_mod.normalize({"shape": None, "connection_lengths": list(self._records)})
+
+
+def test_peek_connection_lengths_falls_back_to_geometry_build_for_an_unmigrated_type(monkeypatch):
+    comp = FakeComponentObj("Comp0", "Junc0", "Primary", library_id="lib", type_id="unmigrated_type")
+    registry = _UnmigratedFallbackRegistry([
+        {"edge_key": "A", "segment_end": "start", "length": 40.0},
+        {"edge_key": "B", "segment_end": "end", "length": 40.0},
+    ])
+    monkeypatch.setattr(
+        junction_mod.hvaclib.HVACLibraryService, "get_hvac_library_registry", staticmethod(lambda: registry)
+    )
+
+    dj = _bare_junction(FakeJunctionObj())
+    local_ports = [
+        _port("A", "start", (0, 0, 0), (-1, 0, 0), "Circular", {"Diameter": 200.0}, True),
+        _port("B", "end", (0, 0, 0), (1, 0, 0), "Circular", {"Diameter": 200.0}, False),
+    ]
+
+    trims = dj._peekConnectionLengths(comp, local_ports, "through", "", {})
+
+    assert registry.build_geometry_called is True
+    assert trims == {("A", "start"): 40.0, ("B", "end"): 40.0}
+
+
+class _PositionAgnosticRegistry:
+    """A synthetic measurement function that computes trim purely from
+    each port's own direction/section (never its absolute position) --
+    proves the dispatch pipeline itself (context prep, the average_point-
+    derived center_point, etc.) never leaks absolute world position into
+    the returned trims for a fitting whose own formula doesn't depend on
+    it (see composeComponents()'s own position-independence requirement).
+    """
+
+    def resolve_type(self, lib_id, type_id):
+        return object()
+
+    def resolve_params(self, type_def, obj=None):
+        return {}
+
+    def measure_connection_lengths(self, lib_id, type_def, context):
+        records = []
+        for port in context["connected_ports"]:
+            diameter = float(port["section_params"]["Diameter"])
+            records.append(
+                {"edge_key": port["edge_key"], "segment_end": port["segment_end"], "length": diameter / 2.0}
+            )
+        return records
+
+    def normalize_connection_lengths(self, raw, type_id):
+        return list(raw or [])
+
+    def build_geometry(self, lib_id, type_def, context):
+        raise AssertionError("must not be reached -- measure_connection_lengths already answered")
+
+
+def test_peek_connection_lengths_is_independent_of_absolute_anchor_position(monkeypatch):
+    registry = _PositionAgnosticRegistry()
+    monkeypatch.setattr(
+        junction_mod.hvaclib.HVACLibraryService, "get_hvac_library_registry", staticmethod(lambda: registry)
+    )
+    comp = FakeComponentObj("Comp0", "Junc0", "Inline", library_id="lib", type_id="inline_type")
+    dj = _bare_junction(FakeJunctionObj())
+
+    def ports_at(offset):
+        ox, oy, oz = offset
+        return [
+            _port("A", "start", (ox, oy, oz), (-1, 0, 0), "Circular", {"Diameter": 200.0}, True),
+            _port("B", "end", (ox, oy, oz), (1, 0, 0), "Circular", {"Diameter": 200.0}, False),
+        ]
+
+    trims_at_origin = dj._peekConnectionLengths(comp, ports_at((0.0, 0.0, 0.0)), "through", "", {})
+    trims_at_shifted = dj._peekConnectionLengths(comp, ports_at((500.0, -250.0, 100.0)), "through", "", {})
+
+    assert trims_at_origin == trims_at_shifted == {("A", "start"): 100.0, ("B", "end"): 100.0}

@@ -83,8 +83,40 @@ Common fields, both segments and junctions:
 | `construction` | optional `{"layers": [...], "features": [...]}` object (below); when omitted, inherits the library manifest's `default_construction`, or falls back to one roleless implicit layer if the manifest has no default |
 | `geometry` | `{"backend": "partscript"\|"static", "file"\|"descriptor": "..."}` |
 | `generator` | legacy alternative to `geometry`: `{"module": "...", "function": "..."}` |
-| `lengths_module` / `lengths_function` | optional, junctions: computes per-port trim lengths separately from the shape |
+| `connection_lengths` | optional: `{"module": "...", "function": "..."}` -- a lightweight, independent per-port trim *measurement* function (parsed onto `HVACTypeDef.lengths_module`/`lengths_function`; see below) |
 | `loss_module` / `loss_function` | optional: fitting-loss coefficient function for the airflow solver; its context provides `HVACLossAPI` as `context["loss_api"]`. May instead (or also) declare `loss.variants` for flow-dependent formulas -- see below |
+
+### `connection_lengths`: independent trim measurement
+
+```json
+"generator": {"module": "junctions", "function": "build_elbow"},
+"connection_lengths": {"module": "junctions", "function": "measure_elbow"}
+```
+
+`generator` (or `geometry`, for a PartScript/static backend) builds the
+type's final fitting `Shape`. `connection_lengths` is a separate, optional
+function that computes just the same fitting's per-port trim lengths (the
+standard `[{"edge_key", "segment_end", "length"}, ...]` records also
+returned as `GeometryResult.connection_lengths` -- see
+`HVACLibraryAPI.build_trim_rec_from_port_lengths`/
+`build_trim_rec_from_context_uniform`) *without* constructing any geometry
+at all -- called via `HVACLibraryRegistry.measure_connection_lengths()`,
+using the exact same context preparation/parameter resolution as
+`build_geometry()`.
+
+This exists so `DuctJunction.composeComponents()` can learn a component's
+own trims (needed to work out where a chained Inline component's anchor
+sits) without paying for a full Shape build that gets thrown away
+immediately afterward. A type with no `connection_lengths` function
+declared still works -- `_peekConnectionLengths()` falls back to building
+(and discarding) the full geometry, exactly as every type used to.
+
+Both functions must derive a port's trim from the *same* underlying
+calculation (e.g. a shared private layout helper, or a lower-level
+`HVACLibraryAPI` helper like `make_elbow_path`/`make_radiussed_path` that
+both simply call) -- never two independently-maintained copies of the same
+formula. A `connection_lengths` function must never build or return a
+`Shape`/`GeometryResult`; it returns the plain trim-record list directly.
 
 ### Flow-classification constraints
 

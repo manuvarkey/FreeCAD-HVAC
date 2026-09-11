@@ -46,6 +46,10 @@
     "module": "junctions",
     "function": "build_wye_radius"
   },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_wye_radius"
+  },
   "loss": {
     "module": "junction_losses",
     "function": "loss_wye_generic"

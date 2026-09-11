@@ -32,6 +32,10 @@
     "module": "junctions",
     "function": "build_transition_radiussed"
   },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_transition_radiussed"
+  },
   "loss": {
     "module": "junction_losses",
     "function": "loss_transition_generic"

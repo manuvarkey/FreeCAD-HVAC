@@ -25,6 +25,10 @@
     "module": "junctions",
     "function": "build_transition"
   },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_transition"
+  },
   "loss": {
     "module": "junction_losses",
     "function": "loss_transition_generic",

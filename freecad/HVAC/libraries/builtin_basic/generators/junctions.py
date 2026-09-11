@@ -1,4 +1,18 @@
-"""Common fitting recipes built only from HVACLibraryAPI geometry primitives."""
+"""Common fitting recipes built only from HVACLibraryAPI geometry primitives.
+
+Most fittings below are split into a small measurement function
+(``measure_*``) and a build function (``build_*``/an internal ``_*``
+builder), sharing whichever calculation actually determines a port's own
+trim length -- a route/axis dict from an HVACLibraryAPI helper
+(``make_elbow_path``/``make_radiussed_path``/``offset_transition_axis``), a
+plain arithmetic result, or (for a radiused/mitered branch fitting whose
+minimum body length genuinely depends on a swept bend's own extent) a
+lightweight intermediate bend-stub Shape -- so there is exactly one place
+each fitting's own dimensions/trims are computed, never two independently
+maintained copies of the same formula. See freecad/HVAC/libraries/README.md's
+"connection_lengths" section for the overall contract this supports
+(HVACLibraryRegistry.measure_connection_lengths()).
+"""
 
 import math
 
@@ -114,6 +128,18 @@ def build_diffuser_generic(context):
     return {"shape": api.refine(shape)}
 
 
+def _duct_closure_thickness(context):
+    return _positive(_props(context).get("PlateThickness"), 3.0)
+
+
+def measure_duct_closure_generic(context):
+    api = context["hvac_api"]
+    ports = api.connected_ports(context)
+    if not ports:
+        return []
+    return api.build_trim_rec_from_context_uniform(context, _duct_closure_thickness(context))
+
+
 def build_duct_closure_generic(context):
     """A thin blanking plate/cap sealing off a single terminal port."""
     api = context["hvac_api"]
@@ -121,7 +147,7 @@ def build_duct_closure_generic(context):
     if not ports:
         return _marker(context, 150.0)
     p = ports[0]
-    thickness = _positive(_props(context).get("PlateThickness"), 3.0)
+    thickness = _duct_closure_thickness(context)
     shape = api.extrude(api.profile_from_port(p), api.port_direction(p) * thickness, solid=True)
     return {
         "shape": api.refine(shape),
@@ -129,7 +155,12 @@ def build_duct_closure_generic(context):
     }
 
 
-def build_elbow(context):
+def _elbow_route(context):
+    """Shared layout for a radiused elbow: the two connected ports and the
+    tangent-arc route (HVACLibraryAPI.make_elbow_path) between them -- the
+    one calculation that determines both the swept shape's path AND each
+    port's own trim length, so measure_elbow()/build_elbow() can never
+    disagree."""
     api = context["hvac_api"]
     ports = list(api.connected_ports(context))
     if len(ports) != 2:
@@ -139,6 +170,20 @@ def build_elbow(context):
     radius = _positive(p.get("CenterlineRadius"), 0.6 * size)
     radius = max(radius, 0.5 * size)
     route = api.make_elbow_path(ports[0], ports[1], radius)
+    return ports, route
+
+
+def measure_elbow(context):
+    api = context["hvac_api"]
+    ports, route = _elbow_route(context)
+    return api.build_trim_rec_from_port_lengths(
+        [(ports[0], route["trim_lengths"][0]), (ports[1], route["trim_lengths"][1])]
+    )
+
+
+def build_elbow(context):
+    api = context["hvac_api"]
+    ports, route = _elbow_route(context)
     shape = api.sweep(
         [api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])],
         route["path"],
@@ -165,7 +210,13 @@ def _mitered_bend(api, port0, port1, radius, cuts):
     the branch "mitered shoe" builders, which mitre a branch leg into a
     synthetic port lying on a main-run axis rather than a real connected
     port. Returns ``(shape, [trim0, trim1])``, mirroring
-    ``api.make_elbow_path``'s own trim-length pairing.
+    ``api.make_elbow_path``'s own trim-length pairing -- the trims
+    themselves come from the same ``make_elbow_path`` tangent-arc route
+    used to place the gores, computed before any gore/mitre shape is built
+    (unaffected by ``cuts``), which is exactly why ``measure_elbow_mitered``/
+    ``_tee_mitered_shoe_layout`` can read the identical trims straight off
+    a plain ``api.make_elbow_path`` call without needing this function's
+    own (comparatively expensive) shape construction at all.
     """
     u0 = api.port_direction(port0)
     u1 = api.port_direction(port1)
@@ -282,16 +333,38 @@ def _mitered_bend(api, port0, port1, radius, cuts):
     return shape, [route["trim_lengths"][0], route["trim_lengths"][1]]
 
 
+def _elbow_mitered_radius(context, ports):
+    api = context["hvac_api"]
+    size = max(_profile_extent(api.profile_from_port(ports[0])), _profile_extent(api.profile_from_port(ports[1])))
+    props = _props(context)
+    radius = _positive(props.get("CenterlineRadius"), 0.6 * size)
+    return max(radius, 0.5 * size)
+
+
+def measure_elbow_mitered(context):
+    """The mitred bend's own trims come from the same tangent-arc route
+    (api.make_elbow_path) _mitered_bend() uses internally, unaffected by
+    NumberOfCuts -- so this can read them directly without paying for
+    _mitered_bend()'s own gore/mitre shape construction at all."""
+    api = context["hvac_api"]
+    ports = list(api.connected_ports(context))
+    if len(ports) != 2:
+        raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
+    radius = _elbow_mitered_radius(context, ports)
+    route = api.make_elbow_path(ports[0], ports[1], radius)
+    return api.build_trim_rec_from_port_lengths(
+        [(ports[0], route["trim_lengths"][0]), (ports[1], route["trim_lengths"][1])]
+    )
+
+
 def build_elbow_mitered(context):
     api = context["hvac_api"]
     ports = list(api.connected_ports(context))
     if len(ports) != 2:
         raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
     port0, port1 = ports
-    size = max(_profile_extent(api.profile_from_port(port0)), _profile_extent(api.profile_from_port(port1)))
+    radius = _elbow_mitered_radius(context, ports)
     props = _props(context)
-    radius = _positive(props.get("CenterlineRadius"), 0.6 * size)
-    radius = max(radius, 0.5 * size)
     cuts = max(int(props.get("NumberOfCuts", 1) or 1), 1)
     shape, trims = _mitered_bend(api, port0, port1, radius, cuts)
     return {
@@ -300,7 +373,7 @@ def build_elbow_mitered(context):
     }
 
 
-def build_transition(context):
+def _transition_layout(context):
     api = context["hvac_api"]
     ports = list(api.connected_ports(context))
     if len(ports) != 2:
@@ -309,6 +382,18 @@ def build_transition(context):
     size = max(_size(api, ports[0]), _size(api, ports[1]))
     total = _positive(p.get("Length", p.get("TransitionLength")), max(size, 100.0))
     trim = total / 2.0
+    return ports, trim
+
+
+def measure_transition(context):
+    api = context["hvac_api"]
+    ports, trim = _transition_layout(context)
+    return api.build_trim_rec_from_port_lengths([(ports[0], trim), (ports[1], trim)])
+
+
+def build_transition(context):
+    api = context["hvac_api"]
+    ports, trim = _transition_layout(context)
     a, b = _trimmed(api, ports[0], trim), _trimmed(api, ports[1], trim)
     return {
         "shape": api.refine(_loft(api, [a, b], 0.0, ruled=True)),
@@ -316,7 +401,7 @@ def build_transition(context):
     }
 
 
-def build_transition_radiussed(context):
+def _transition_radiussed_route(context):
     api = context["hvac_api"]
     ports = list(api.connected_ports(context))
     if len(ports) != 2:
@@ -330,6 +415,20 @@ def build_transition_radiussed(context):
     # build_elbow enforces on CenterlineRadius).
     radius = max(radius, 0.5 * size)
     route = api.make_radiussed_path(ports[0], ports[1], total, radius)
+    return ports, route
+
+
+def measure_transition_radiussed(context):
+    api = context["hvac_api"]
+    ports, route = _transition_radiussed_route(context)
+    return api.build_trim_rec_from_port_lengths(
+        [(ports[0], route["trim_lengths"][0]), (ports[1], route["trim_lengths"][1])]
+    )
+
+
+def build_transition_radiussed(context):
+    api = context["hvac_api"]
+    ports, route = _transition_radiussed_route(context)
     shape = api.sweep(
         [api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])],
         route["path"],
@@ -343,7 +442,7 @@ def build_transition_radiussed(context):
     }
 
 
-def build_transition_mitered(context):
+def _transition_mitered_layout(context):
     api = context["hvac_api"]
     ports = list(api.connected_ports(context))
     if len(ports) != 2:
@@ -352,10 +451,24 @@ def build_transition_mitered(context):
     size = max(_size(api, ports[0]), _size(api, ports[1]))
     total = _positive(p.get("Length", p.get("TransitionLength")), max(size, 100.0))
 
-    # Step 1: work out the generated end points and the theoretical sharp
-    # turn points shared with the radiussed transition -- same axis, only
-    # the corner treatment differs (a flat mitre cut here, an arc there).
+    # Shared axis geometry with the radiussed transition -- same end
+    # points and theoretical sharp turn points, only the corner treatment
+    # differs (a flat mitre cut here, an arc there).
     axis = api.offset_transition_axis(ports[0], ports[1], total)
+    trim0 = max(0.0, (axis["s0"] - api.port_position(ports[0])).dot(api.port_direction(ports[0])))
+    trim1 = max(0.0, (axis["s1"] - api.port_position(ports[1])).dot(api.port_direction(ports[1])))
+    return ports, size, total, axis, trim0, trim1
+
+
+def measure_transition_mitered(context):
+    api = context["hvac_api"]
+    ports, size, total, axis, trim0, trim1 = _transition_mitered_layout(context)
+    return api.build_trim_rec_from_port_lengths([(ports[0], trim0), (ports[1], trim1)])
+
+
+def build_transition_mitered(context):
+    api = context["hvac_api"]
+    ports, size, total, axis, trim0, trim1 = _transition_mitered_layout(context)
     d = axis["d"]
     s0, s1 = axis["s0"], axis["s1"]
     corner0, corner1 = axis["corner0"], axis["corner1"]
@@ -375,8 +488,8 @@ def build_transition_mitered(context):
         # plane normal, only the plane's own origin differs.
         normal = api.unit(d + diagonal)
 
-        # Step 2: extend each port's own profile from its end point toward
-        # the transition's centre, then clip it back at its own turn point
+        # Extend each port's own profile from its end point toward the
+        # transition's centre, then clip it back at its own turn point
         # with the mitre plane.
         reach = total / 2.0 + size
         stub_a = api.extrude(api.profile_from_port(end_a), d * reach, solid=True)
@@ -384,27 +497,25 @@ def build_transition_mitered(context):
         stub_b = api.extrude(api.profile_from_port(end_b), d * -reach, solid=True)
         stub_b = api.clip_plane(stub_b, (corner1, normal), side="positive")
 
-        # Step 3: sweep between the stubs' own cut faces at the turn
-        # points -- not a fresh, idealised profile wire, which sits on a
-        # different plane than the mitre cut and would not line up with
-        # it once clipped. Reading the real cut face back off each
-        # already-trimmed stub guarantees the middle piece meets them
-        # exactly, and needs no further clipping of its own.
+        # Sweep between the stubs' own cut faces at the turn points -- not
+        # a fresh, idealised profile wire, which sits on a different plane
+        # than the mitre cut and would not line up with it once clipped.
+        # Reading the real cut face back off each already-trimmed stub
+        # guarantees the middle piece meets them exactly, and needs no
+        # further clipping of its own.
         face_a = api.section_face(stub_a, (corner0, normal))
         face_b = api.section_face(stub_b, (corner1, normal))
         middle = api.loft([face_a.OuterWire, face_b.OuterWire], solid=True, ruled=True)
 
         shape = api.fuse(stub_a, stub_b, middle)
 
-    trim0 = max(0.0, (s0 - api.port_position(ports[0])).dot(api.port_direction(ports[0])))
-    trim1 = max(0.0, (s1 - api.port_position(ports[1])).dot(api.port_direction(ports[1])))
     return {
         "shape": api.refine(shape),
         "connection_lengths": api.build_trim_rec_from_port_lengths([(ports[0], trim0), (ports[1], trim1)]),
     }
 
 
-def _inline(context, factor, minimum):
+def _inline_layout(context, factor, minimum):
     api = context["hvac_api"]
     ports = list(api.connected_ports(context))
     if len(ports) != 2:
@@ -414,6 +525,18 @@ def _inline(context, factor, minimum):
     requested = p.get("BodyLength", p.get("DeviceLength", p.get("Length")))
     length = _positive(requested, max(minimum, factor * size))
     trim = length / 2.0
+    return ports, trim
+
+
+def measure_inline(context, factor, minimum):
+    api = context["hvac_api"]
+    ports, trim = _inline_layout(context, factor, minimum)
+    return api.build_trim_rec_from_port_lengths([(ports[0], trim), (ports[1], trim)])
+
+
+def _inline(context, factor, minimum):
+    api = context["hvac_api"]
+    ports, trim = _inline_layout(context, factor, minimum)
     a, b = _trimmed(api, ports[0], trim), _trimmed(api, ports[1], trim)
     return {
         "shape": api.refine(_loft(api, [a, b], 0.0, ruled=True)),
@@ -425,8 +548,16 @@ def build_damper_generic(context):
     return _inline(context, 0.5, 100.0)
 
 
+def measure_damper_generic(context):
+    return measure_inline(context, 0.5, 100.0)
+
+
 def build_vav_generic(context):
     return _inline(context, 1.0, 300.0)
+
+
+def measure_vav_generic(context):
+    return measure_inline(context, 1.0, 300.0)
 
 
 def _find_run_pair(context, api, ports):
@@ -482,7 +613,7 @@ def _lean_port(api, run_a, run_b, branch):
     return run_a if incoming.dot(da) >= incoming.dot(db) else run_b
 
 
-def _star_junction(context, default_factor=0.6):
+def _star_junction_layout(context, default_factor):
     api = context["hvac_api"]
     ports = api.connected_ports(context)
     if len(ports) < 3:
@@ -491,6 +622,18 @@ def _star_junction(context, default_factor=0.6):
     center = sum((api.port_position(port) for port in ports), api.vec((0, 0, 0))) / len(ports)
     default_trim = max(_size(api, port) for port in ports) * default_factor
     trim = _positive(p.get("JunctionLength", p.get("TrimLength")), default_trim)
+    return ports, center, trim
+
+
+def measure_star_junction(context, default_factor=0.6):
+    api = context["hvac_api"]
+    ports, center, trim = _star_junction_layout(context, default_factor)
+    return api.build_trim_rec_from_port_lengths([(port, trim) for port in ports])
+
+
+def _star_junction(context, default_factor=0.6):
+    api = context["hvac_api"]
+    ports, center, trim = _star_junction_layout(context, default_factor)
     trimmed = [_trimmed(api, port, trim) for port in ports]
     legs = []
     for port in trimmed:
@@ -504,7 +647,19 @@ def _star_junction(context, default_factor=0.6):
         "shape": api.refine(api.fuse(*legs)),
         "connection_lengths": api.build_trim_rec_from_port_lengths([(port, trim) for port in ports]),
     }
-    
+
+
+def measure_branch_generic(context):
+    return measure_star_junction(context, 0.60)
+
+
+def measure_cross(context):
+    return measure_star_junction(context, 0.60)
+
+
+def measure_manifold(context):
+    return measure_star_junction(context, 0.65)
+
 
 def _extra_trim(value, default):
     """Additional trim measured beyond the intrinsic fitting body."""
@@ -643,10 +798,7 @@ def _clip_tap_to_run_body(api, shape, trunk_center, run_a, run_b, trim_a, trim_b
     return shape
 
 
-def _straight_tap(context, run_factor, branch_factor):
-    """Straight tap. TapHeight defines the intrinsic collar height;
-    TrimBranch starts above TapHeight and run trims start beyond the
-    minimum tap footprint."""
+def _straight_tap_layout(context, run_factor, branch_factor):
     api = context["hvac_api"]
     ports = api.connected_ports(context)
     if len(ports) != 3:
@@ -663,6 +815,33 @@ def _straight_tap(context, run_factor, branch_factor):
     surface_profile = api.profile_from_port(surface_port)
     trim_a, trim_b, trim_branch = _tap_trims(api, p, run_a, run_b, branch, trunk_center, branch_dir, tap_top, surface_profile, run_factor, branch_factor)
 
+    return {
+        "run_a": run_a, "run_b": run_b, "branch": branch,
+        "trunk_center": trunk_center, "branch_dir": branch_dir, "base_position": base_position,
+        "trim_a": trim_a, "trim_b": trim_b, "trim_branch": trim_branch,
+    }
+
+
+def measure_straight_tap(context, run_factor, branch_factor):
+    api = context["hvac_api"]
+    layout = _straight_tap_layout(context, run_factor, branch_factor)
+    return api.build_trim_rec_from_port_lengths([
+        (layout["run_a"], layout["trim_a"]), (layout["run_b"], layout["trim_b"]),
+        (layout["branch"], layout["trim_branch"]),
+    ])
+
+
+def _straight_tap(context, run_factor, branch_factor):
+    """Straight tap. TapHeight defines the intrinsic collar height;
+    TrimBranch starts above TapHeight and run trims start beyond the
+    minimum tap footprint."""
+    api = context["hvac_api"]
+    layout = _straight_tap_layout(context, run_factor, branch_factor)
+    run_a, run_b, branch = layout["run_a"], layout["run_b"], layout["branch"]
+    trunk_center, branch_dir = layout["trunk_center"], layout["branch_dir"]
+    base_position = layout["base_position"]
+    trim_a, trim_b, trim_branch = layout["trim_a"], layout["trim_b"], layout["trim_branch"]
+
     trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)])
     branch_end = _trimmed(api, branch, trim_branch)
     reach = max(0.0, (api.port_position(branch_end) - base_position).dot(branch_dir))
@@ -677,9 +856,7 @@ def _straight_tap(context, run_factor, branch_factor):
     }
 
 
-def _saddle_tap(context, run_factor, branch_factor, flare_factor=0.6):
-    """Saddle tap. TapHeight defines the flare height; the embedded flare
-    continues to the run mid-depth but is clipped to the tap body width."""
+def _saddle_tap_layout(context, run_factor, branch_factor, flare_factor=0.6):
     api = context["hvac_api"]
     ports = api.connected_ports(context)
     if len(ports) != 3:
@@ -693,16 +870,48 @@ def _saddle_tap(context, run_factor, branch_factor, flare_factor=0.6):
     tap_top = run_surface + branch_dir * tap_height
     base_position = run_surface - branch_dir * overlap
 
-    top_port = api.copy_port(branch, position=tap_top)
     surface_port = api.copy_port(branch, position=run_surface)
-    base_port = api.copy_port(branch, position=base_position)
-
-    top_profile = api.profile_from_port(top_port)
     surface_profile = api.offset_profile(api.profile_from_port(surface_port), growth)
+
+    trim_a, trim_b, trim_branch = _tap_trims(api, p, run_a, run_b, branch, trunk_center, branch_dir, tap_top, surface_profile, run_factor, branch_factor)
+
+    return {
+        "run_a": run_a, "run_b": run_b, "branch": branch,
+        "trunk_center": trunk_center, "branch_dir": branch_dir,
+        "tap_top": tap_top, "base_position": base_position,
+        "growth": growth, "overlap": overlap, "tap_height": tap_height,
+        "surface_profile": surface_profile,
+        "trim_a": trim_a, "trim_b": trim_b, "trim_branch": trim_branch,
+    }
+
+
+def measure_saddle_tap(context, run_factor, branch_factor, flare_factor=0.6):
+    api = context["hvac_api"]
+    layout = _saddle_tap_layout(context, run_factor, branch_factor, flare_factor)
+    return api.build_trim_rec_from_port_lengths([
+        (layout["run_a"], layout["trim_a"]), (layout["run_b"], layout["trim_b"]),
+        (layout["branch"], layout["trim_branch"]),
+    ])
+
+
+def _saddle_tap(context, run_factor, branch_factor, flare_factor=0.6):
+    """Saddle tap. TapHeight defines the flare height; the embedded flare
+    continues to the run mid-depth but is clipped to the tap body width."""
+    api = context["hvac_api"]
+    layout = _saddle_tap_layout(context, run_factor, branch_factor, flare_factor)
+    run_a, run_b, branch = layout["run_a"], layout["run_b"], layout["branch"]
+    trunk_center, branch_dir = layout["trunk_center"], layout["branch_dir"]
+    tap_top, base_position = layout["tap_top"], layout["base_position"]
+    growth, overlap, tap_height = layout["growth"], layout["overlap"], layout["tap_height"]
+    surface_profile = layout["surface_profile"]
+    trim_a, trim_b, trim_branch = layout["trim_a"], layout["trim_b"], layout["trim_branch"]
+
+    top_port = api.copy_port(branch, position=tap_top)
+    base_port = api.copy_port(branch, position=base_position)
+    top_profile = api.profile_from_port(top_port)
     base_growth = growth * (tap_height + overlap) / tap_height
     base_profile = api.offset_profile(api.profile_from_port(base_port), base_growth)
 
-    trim_a, trim_b, trim_branch = _tap_trims(api, p, run_a, run_b, branch, trunk_center, branch_dir, tap_top, surface_profile, run_factor, branch_factor)
     trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)])
     branch_end = _trimmed(api, branch, trim_branch)
 
@@ -720,8 +929,7 @@ def _saddle_tap(context, run_factor, branch_factor, flare_factor=0.6):
     }
 
 
-def _star_tee(context, run_factor, branch_factor):
-    """Straight-legged tee with trims measured beyond the intrinsic junction body."""
+def _star_tee_layout(context, run_factor, branch_factor):
     api = context["hvac_api"]
     ports = api.connected_ports(context)
     if len(ports) != 3:
@@ -733,7 +941,20 @@ def _star_tee(context, run_factor, branch_factor):
     tee_ports = [run_a, run_b, branch]
     minimums = _junction_minimums(api, center, tee_ports)
     trims = _junction_trims(api, p, tee_ports, ("TrimRunA", "TrimRunB", "TrimBranch"), (run_factor, run_factor, branch_factor), minimums)
-    shape = _star_body(api, center, tee_ports, trims, minimums)
+    return run_a, run_b, branch, center, minimums, trims
+
+
+def measure_star_tee(context, run_factor, branch_factor):
+    api = context["hvac_api"]
+    run_a, run_b, branch, center, minimums, trims = _star_tee_layout(context, run_factor, branch_factor)
+    return api.build_trim_rec_from_port_lengths([(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])])
+
+
+def _star_tee(context, run_factor, branch_factor):
+    """Straight-legged tee with trims measured beyond the intrinsic junction body."""
+    api = context["hvac_api"]
+    run_a, run_b, branch, center, minimums, trims = _star_tee_layout(context, run_factor, branch_factor)
+    shape = _star_body(api, center, [run_a, run_b, branch], trims, minimums)
 
     return {
         "shape": api.refine(shape),
@@ -741,10 +962,16 @@ def _star_tee(context, run_factor, branch_factor):
             [(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]
         ),
     }
-    
 
-def _radius_tee(context, run_factor, branch_factor):
-    """Radiused tee with trims measured beyond the actual generated bend body."""
+
+def _radius_tee_layout(context, run_factor, branch_factor):
+    """Shared layout for a radiused branch tee. The branch bend stub is a
+    genuine (lightweight) swept Shape -- unlike a plain star tee, this
+    fitting's minimum body length depends on how far the actual curved
+    surface extends (_junction_shape_minimums), which can't be recovered
+    from profile bounds alone -- so measurement here builds that one bend
+    stub too (never the full trunk+fuse+clip body build_tee_radius() goes
+    on to assemble)."""
     api = context["hvac_api"]
     ports = api.connected_ports(context)
     if len(ports) != 3:
@@ -771,8 +998,22 @@ def _radius_tee(context, run_factor, branch_factor):
     minimums[lean_index] = max(minimums[lean_index], lean_route_trim)
 
     trims = _junction_trims(api, p, tee_ports, ("TrimRunA", "TrimRunB", "TrimBranch"), (run_factor, run_factor, branch_factor), minimums)
-    stub = _extend_leg(api, stub, branch, branch_route_trim, trims[2])
+    return run_a, run_b, branch, center, trims, stub, branch_route_trim
 
+
+def measure_radius_tee(context, run_factor, branch_factor):
+    api = context["hvac_api"]
+    run_a, run_b, branch, center, trims, stub, branch_route_trim = _radius_tee_layout(context, run_factor, branch_factor)
+    return api.build_trim_rec_from_port_lengths([(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])])
+
+
+def _radius_tee(context, run_factor, branch_factor):
+    """Radiused tee with trims measured beyond the actual generated bend body."""
+    api = context["hvac_api"]
+    run_a, run_b, branch, center, trims, stub, branch_route_trim = _radius_tee_layout(context, run_factor, branch_factor)
+    tee_ports = [run_a, run_b, branch]
+
+    stub = _extend_leg(api, stub, branch, branch_route_trim, trims[2])
     trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])])
     shape = api.fuse(trunk, stub)
     shape = _clip_junction_to_body(api, shape, center, tee_ports, trims)
@@ -784,8 +1025,8 @@ def _radius_tee(context, run_factor, branch_factor):
         ),
     }
 
-def _star_wye(context, factor=0.70):
-    """Straight-legged wye with independent trims outside its minimum body."""
+
+def _star_wye_layout(context, factor=0.70):
     api = context["hvac_api"]
     ports = list(api.connected_ports(context))
     if len(ports) != 3:
@@ -796,24 +1037,50 @@ def _star_wye(context, factor=0.70):
     minimums = _junction_minimums(api, center, ports)
     names = ("TrimBranchA", "TrimBranchB", "TrimBranchC")
     trims = _junction_trims(api, p, ports, names, (factor, factor, factor), minimums)
+    return ports, center, minimums, trims
+
+
+def measure_star_wye(context, factor=0.70):
+    api = context["hvac_api"]
+    ports, center, minimums, trims = _star_wye_layout(context, factor)
+    return api.build_trim_rec_from_port_lengths(list(zip(ports, trims)))
+
+
+def _star_wye(context, factor=0.70):
+    """Straight-legged wye with independent trims outside its minimum body."""
+    api = context["hvac_api"]
+    ports, center, minimums, trims = _star_wye_layout(context, factor)
     shape = _star_body(api, center, ports, trims, minimums)
 
     return {
         "shape": api.refine(shape),
         "connection_lengths": api.build_trim_rec_from_port_lengths(list(zip(ports, trims))),
     }
-    
+
+
+def measure_tee_radius(context):
+    return measure_radius_tee(context, 0.4, 0.6)
+
 
 def build_tee_radius(context):
     return _radius_tee(context, 0.4, 0.6)
+
+
+def measure_tee_mitered(context):
+    return measure_star_tee(context, 0.60, 0.60)
 
 
 def build_tee_mitered(context):
     return _star_tee(context, 0.60, 0.60)
 
 
-def build_tee_mitered_shoe(context):
-    """Mitered branch tee with trims outside the generated bend body."""
+def _tee_mitered_shoe_layout(context):
+    """Same shape as _radius_tee_layout, but the branch bend is a mitred
+    (flat-cut) bend rather than a swept arc -- _mitered_bend() still needs
+    to build that one bend Shape for _junction_shape_minimums, exactly as
+    build_tee_mitered_shoe() does; see that function for why this is
+    unavoidable (the minimum body length depends on the actual curved/
+    faceted surface's own extent, not just port profile bounds)."""
     api = context["hvac_api"]
     ports = api.connected_ports(context)
     if len(ports) != 3:
@@ -840,8 +1107,22 @@ def build_tee_mitered_shoe(context):
     minimums[lean_index] = max(minimums[lean_index], lean_route_trim)
 
     trims = _junction_trims(api, p, tee_ports, ("TrimRunA", "TrimRunB", "TrimBranch"), (0.4, 0.4, 0.6), minimums)
-    bend_shape = _extend_leg(api, bend_shape, branch, branch_route_trim, trims[2])
+    return run_a, run_b, branch, center, trims, bend_shape, branch_route_trim
 
+
+def measure_tee_mitered_shoe(context):
+    api = context["hvac_api"]
+    run_a, run_b, branch, center, trims, bend_shape, branch_route_trim = _tee_mitered_shoe_layout(context)
+    return api.build_trim_rec_from_port_lengths([(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])])
+
+
+def build_tee_mitered_shoe(context):
+    """Mitered branch tee with trims outside the generated bend body."""
+    api = context["hvac_api"]
+    run_a, run_b, branch, center, trims, bend_shape, branch_route_trim = _tee_mitered_shoe_layout(context)
+    tee_ports = [run_a, run_b, branch]
+
+    bend_shape = _extend_leg(api, bend_shape, branch, branch_route_trim, trims[2])
     trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])])
     shape = api.fuse(trunk, bend_shape)
     shape = _clip_junction_to_body(api, shape, center, tee_ports, trims)
@@ -854,11 +1135,7 @@ def build_tee_mitered_shoe(context):
     }
 
 
-def build_lateral_tee(context):
-    """Straight lateral tee with branch geometry starting at the actual run
-    surface. TrimRunA/TrimRunB are measured beyond the minimum branch
-    footprint and TrimBranch is measured outward from the inclined run
-    surface intersection."""
+def _lateral_tee_layout(context):
     api = context["hvac_api"]
     ports = api.connected_ports(context)
     if len(ports) != 3:
@@ -907,6 +1184,34 @@ def build_lateral_tee(context):
     branch_min = max(0.0, (run_surface - api.port_position(branch)).dot(branch_dir) * 2.0)
     trim_branch = branch_min + _extra_trim(p.get("TrimBranch"), 0.65 * _size(api, branch))
 
+    return {
+        "run_a": run_a, "run_b": run_b, "branch": branch, "center": center,
+        "branch_dir": branch_dir, "run_surface": run_surface, "surface_profile": surface_profile,
+        "trim_a": trim_a, "trim_b": trim_b, "trim_branch": trim_branch,
+    }
+
+
+def measure_lateral_tee(context):
+    api = context["hvac_api"]
+    layout = _lateral_tee_layout(context)
+    return api.build_trim_rec_from_port_lengths([
+        (layout["run_a"], layout["trim_a"]), (layout["run_b"], layout["trim_b"]),
+        (layout["branch"], layout["trim_branch"]),
+    ])
+
+
+def build_lateral_tee(context):
+    """Straight lateral tee with branch geometry starting at the actual run
+    surface. TrimRunA/TrimRunB are measured beyond the minimum branch
+    footprint and TrimBranch is measured outward from the inclined run
+    surface intersection."""
+    api = context["hvac_api"]
+    layout = _lateral_tee_layout(context)
+    run_a, run_b, branch, center = layout["run_a"], layout["run_b"], layout["branch"], layout["center"]
+    branch_dir, run_surface = layout["branch_dir"], layout["run_surface"]
+    surface_profile = layout["surface_profile"]
+    trim_a, trim_b, trim_branch = layout["trim_a"], layout["trim_b"], layout["trim_branch"]
+
     trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)])
     branch_end = _trimmed(api, branch, trim_branch)
 
@@ -927,12 +1232,19 @@ def build_lateral_tee(context):
     }
 
 
+def measure_wye_mitered(context):
+    return measure_star_wye(context, 0.70)
+
+
 def build_wye_mitered(context):
     return _star_wye(context, 0.70)
 
 
-def build_wye_radius(context):
-    """Radiused wye with each trim measured beyond the actual generated body."""
+def _wye_radius_layout(context):
+    """Same "needs an actual bend stub for its minimums" shape as
+    _radius_tee_layout, generalized to 2 branch legs merging into one main
+    trunk -- measurement builds the same fused branch-stub shapes
+    build_wye_radius() itself sweeps, never the full assembled body."""
     api = context["hvac_api"]
     ports = list(api.connected_ports(context))
     if len(ports) != 3:
@@ -969,6 +1281,19 @@ def build_wye_radius(context):
         minimums[main_index] = max(minimums[main_index], route["trim_lengths"][1])
 
     trims = _junction_trims(api, p, ports, names, (0.70, 0.70, 0.70), minimums)
+    return ports, center, main, main_index, routes, trims
+
+
+def measure_wye_radius(context):
+    api = context["hvac_api"]
+    ports, center, main, main_index, routes, trims = _wye_radius_layout(context)
+    return api.build_trim_rec_from_port_lengths(list(zip(ports, trims)))
+
+
+def build_wye_radius(context):
+    """Radiused wye with each trim measured beyond the actual generated body."""
+    api = context["hvac_api"]
+    ports, center, main, main_index, routes, trims = _wye_radius_layout(context)
 
     main_end = _trimmed(api, main, trims[main_index])
     main_center = api.copy_port(main, position=center)
@@ -986,18 +1311,23 @@ def build_wye_radius(context):
     }
 
 
+def measure_tap_straight(context):
+    return measure_straight_tap(context, 0.3, 0.5)
+
+
 def build_tap_straight(context):
     return _straight_tap(context, 0.3, 0.5)
+
+
+def measure_tap_saddle(context):
+    return measure_saddle_tap(context, 0.3, 0.5)
 
 
 def build_tap_saddle(context):
     return _saddle_tap(context, 0.3, 0.5)
 
 
-def build_tap_shoe(context):
-    """45-degree shoe tap with profile-independent geometry. TapHeight
-    defines both the vertical shoe height and, at 45 degrees, the toe
-    extension at the run surface."""
+def _tap_shoe_layout(context):
     api = context["hvac_api"]
     ports = api.connected_ports(context)
     if len(ports) != 3:
@@ -1010,15 +1340,47 @@ def build_tap_shoe(context):
     tap_top = run_surface + branch_dir * tap_height
     base_position = run_surface - branch_dir * overlap
 
-    top_port = api.copy_port(branch, position=tap_top)
     surface_port = api.copy_port(branch, position=run_surface)
-    base_port = api.copy_port(branch, position=base_position)
-
-    top_profile = api.profile_from_port(top_port)
     surface_profile = api.stretch_profile_one_sided(api.profile_from_port(surface_port), toe_dir, tap_height)
-    base_profile = api.stretch_profile_one_sided(api.profile_from_port(base_port), toe_dir, tap_height + overlap)
 
     trim_a, trim_b, trim_branch = _tap_trims(api, p, run_a, run_b, branch, trunk_center, branch_dir, tap_top, surface_profile, 0.3, 0.5)
+
+    return {
+        "run_a": run_a, "run_b": run_b, "branch": branch,
+        "trunk_center": trunk_center, "branch_dir": branch_dir, "toe_dir": toe_dir,
+        "tap_top": tap_top, "base_position": base_position, "overlap": overlap, "tap_height": tap_height,
+        "surface_profile": surface_profile,
+        "trim_a": trim_a, "trim_b": trim_b, "trim_branch": trim_branch,
+    }
+
+
+def measure_tap_shoe(context):
+    api = context["hvac_api"]
+    layout = _tap_shoe_layout(context)
+    return api.build_trim_rec_from_port_lengths([
+        (layout["run_a"], layout["trim_a"]), (layout["run_b"], layout["trim_b"]),
+        (layout["branch"], layout["trim_branch"]),
+    ])
+
+
+def build_tap_shoe(context):
+    """45-degree shoe tap with profile-independent geometry. TapHeight
+    defines both the vertical shoe height and, at 45 degrees, the toe
+    extension at the run surface."""
+    api = context["hvac_api"]
+    layout = _tap_shoe_layout(context)
+    run_a, run_b, branch = layout["run_a"], layout["run_b"], layout["branch"]
+    trunk_center, branch_dir, toe_dir = layout["trunk_center"], layout["branch_dir"], layout["toe_dir"]
+    tap_top, base_position = layout["tap_top"], layout["base_position"]
+    overlap, tap_height = layout["overlap"], layout["tap_height"]
+    surface_profile = layout["surface_profile"]
+    trim_a, trim_b, trim_branch = layout["trim_a"], layout["trim_b"], layout["trim_branch"]
+
+    top_port = api.copy_port(branch, position=tap_top)
+    base_port = api.copy_port(branch, position=base_position)
+    top_profile = api.profile_from_port(top_port)
+    base_profile = api.stretch_profile_one_sided(api.profile_from_port(base_port), toe_dir, tap_height + overlap)
+
     trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)])
     branch_end = _trimmed(api, branch, trim_branch)
 
@@ -1048,6 +1410,21 @@ def build_manifold(context):
     return _star_junction(context, 0.65)
 
 
+def _straight_is_transition(context):
+    api = context["hvac_api"]
+    ports = list(api.connected_ports(context))
+    if len(ports) != 2:
+        raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
+    s0, s1 = api.port_section_params(ports[0]), api.port_section_params(ports[1])
+    return api.port_profile(ports[0]) != api.port_profile(ports[1]) or s0 != s1
+
+
+def measure_straight(context):
+    if _straight_is_transition(context):
+        return measure_transition(context)
+    return measure_inline(context, 0.2, 30.0)
+
+
 def build_straight(context):
     """Plain duct-to-duct connection: no bend, no special fitting.
 
@@ -1057,27 +1434,50 @@ def build_straight(context):
     collinear with zero eccentricity (see TOPOLOGY_CLASSIFICATION.md) --
     it says nothing about whether their sizes actually match.
     """
-    api = context["hvac_api"]
-    ports = list(api.connected_ports(context))
-    if len(ports) != 2:
-        raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
-    s0, s1 = api.port_section_params(ports[0]), api.port_section_params(ports[1])
-    if api.port_profile(ports[0]) != api.port_profile(ports[1]) or s0 != s1:
+    if _straight_is_transition(context):
         return build_transition(context)
     return _inline(context, 0.2, 30.0)
 
 
-def build_through_generic(context):
+def _through_generic_dispatch(context):
+    """Which of build_through_generic's 4 cases applies: "elbow"
+    (non-collinear ports), "transition" (collinear but different profile/
+    size), "inline" (collinear, same profile/size), or "marker" (not
+    exactly 2 ports -- a defensive fallback for a not-yet-composed node).
+    Shared so measure_through_generic() can never disagree with
+    build_through_generic() about which case it's in."""
     api = context["hvac_api"]
     ports = api.connected_ports(context)
-    if len(ports) == 2:
-        u0 = api.port_direction(ports[0])
-        u1 = api.port_direction(ports[1])
-        dot = max(-1.0, min(1.0, float(u0.dot(u1))))
-        if dot > -0.985:
-            return build_elbow(context)
-        s0, s1 = api.port_section_params(ports[0]), api.port_section_params(ports[1])
-        if api.port_profile(ports[0]) != api.port_profile(ports[1]) or s0 != s1:
-            return build_transition(context)
+    if len(ports) != 2:
+        return "marker"
+    u0 = api.port_direction(ports[0])
+    u1 = api.port_direction(ports[1])
+    dot = max(-1.0, min(1.0, float(u0.dot(u1))))
+    if dot > -0.985:
+        return "elbow"
+    s0, s1 = api.port_section_params(ports[0]), api.port_section_params(ports[1])
+    if api.port_profile(ports[0]) != api.port_profile(ports[1]) or s0 != s1:
+        return "transition"
+    return "inline"
+
+
+def measure_through_generic(context):
+    kind = _through_generic_dispatch(context)
+    if kind == "elbow":
+        return measure_elbow(context)
+    if kind == "transition":
+        return measure_transition(context)
+    if kind == "inline":
+        return measure_inline(context, 0.35, 80.0)
+    return []
+
+
+def build_through_generic(context):
+    kind = _through_generic_dispatch(context)
+    if kind == "elbow":
+        return build_elbow(context)
+    if kind == "transition":
+        return build_transition(context)
+    if kind == "inline":
         return _inline(context, 0.35, 80.0)
     return _marker(context, 160.0)

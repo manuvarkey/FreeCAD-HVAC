@@ -39,6 +39,10 @@
     "module": "junctions",
     "function": "build_wye_mitered"
   },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_wye_mitered"
+  },
   "loss": {
     "module": "junction_losses",
     "function": "loss_wye_generic"

@@ -290,17 +290,18 @@ composeComponents()
 ```
 
 Each component's `execute()` (run via `touch()` + the next recompute) then
-calls `build_geometry` a second time with those final positions to build
-the real `Shape` — `build_geometry` runs twice per component per sync by
-design, so `execute()` stays the single source of truth for `Shape` rather
-than caching a result across the sync/recompute boundary. **Follow-up TODO**:
-this "peek" call only ever needs `connection_lengths` (and other lightweight
-composition metadata), never a real `Shape` — a lighter
-`measure_connections(context)` contract that skips BREP construction
-entirely would avoid building geometry twice per component per sync, but is
-out of scope for now; not attempted here since it would touch every
-geometry backend (PartScript/static/generator) for a performance win
-unrelated to the loss-model work this document otherwise describes.
+calls `build_geometry` a second time with those final positions to build the
+real `Shape`. For a type that declares an independent `connection_lengths`
+function (see `freecad/HVAC/libraries/README.md`), the "peek" step above no
+longer builds any geometry at all — `HVACLibraryRegistry.
+measure_connection_lengths()` calls that lightweight measurement function
+directly, so `build_geometry`/`execute()` only ever runs once per component
+per sync for a migrated type. A type with no independent measurement
+function declared (not yet migrated) still falls back to peeking via a full
+`build_geometry` call, exactly as every type used to — see
+`DuctJunction._peekConnectionLengths()`'s own TODO for that migration path.
+Either way, `execute()` remains the single source of truth for `Shape`
+rather than caching a result across the sync/recompute boundary.
 
 `AirflowSolver`'s Phase E mirrors this: each edge's own Inline chain is
 evaluated independently of the Primary and of every other edge's chain —

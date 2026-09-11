@@ -802,6 +802,105 @@ class HVACLibraryRegistry:
     def call_generator(self, library_id: str, type_def: HVACTypeDef, context: dict):
         return self.build_geometry(library_id, type_def, context)
 
+    def measure_connection_lengths(self, library_id: str, type_def: HVACTypeDef, context: dict):
+        """
+        Call a type's optional, independently-declared connection-length
+        measurement function (JSON `"connection_lengths": {"module": ...,
+        "function": ...}`, parsed onto HVACTypeDef.lengths_module/
+        lengths_function) -- a lightweight pre-build trim measurement that
+        must NOT construct final geometry, so junction/component
+        composition (DuctJunction._peekConnectionLengths) can learn a
+        component's own per-port trims without building and discarding a
+        full Shape first.
+
+        Uses the exact same context preparation/parameter resolution as
+        build_geometry() (_prepare_geometry_context()) -- there is no
+        separate, possibly-diverging context-building path for
+        measurement -- then dispatches type_def.lengths_module/
+        lengths_function the same way build_geometry() dispatches
+        generator_module/generator_function.
+
+        Returns the standard connection-length record list
+        ([{"edge_key", "segment_end", "length"}, ...], normalized/
+        validated by _normalize_connection_lengths() -- see that method),
+        or None if the type declares no connection_lengths function at all
+        (caller should fall back to reading GeometryResult.
+        connection_lengths off a full build_geometry() call instead --
+        this is the one legitimate "nothing declared" signal, the same
+        convention call_loss() already uses for a type with no loss
+        function wired up).
+        """
+        if not type_def.lengths_module or not type_def.lengths_function:
+            return None
+        context = self._prepare_geometry_context(type_def, context)
+        module = self.import_generator(library_id, type_def.lengths_module)
+        func = getattr(module, type_def.lengths_function, None)
+        if func is None:
+            raise ValueError(
+                "Type '{}' declares connection_lengths function '{}' in module '{}', but it "
+                "wasn't found there".format(type_def.id, type_def.lengths_function, type_def.lengths_module)
+            )
+        raw = func(context)
+        return self.normalize_connection_lengths(raw, type_def.id)
+
+    # Tiny negative floating-point noise (e.g. -1e-9 mm from a geometric
+    # calculation that should have landed on exactly 0.0) is expected and
+    # clamped away below; anything beyond this is a real bug in the
+    # library's own layout math, not noise.
+    _NEGATIVE_LENGTH_TOLERANCE_MM = 1e-6
+
+    @classmethod
+    def normalize_connection_lengths(cls, raw, type_id):
+        """
+        Normalize a connection-length result -- from either
+        measure_connection_lengths()'s own lengths_function or a geometry
+        backend's GeometryResult.connection_lengths -- into the one
+        standard record shape every caller (DuctJunction, DuctComponent)
+        already expects: [{"edge_key": str, "segment_end": str | None,
+        "length": float}, ...]. The one place this gets validated, so
+        neither DuctJunction.py nor a library backend needs its own ad hoc
+        checking (see DuctJunction._peekConnectionLengths(), which routes
+        both its measurement and its geometry-fallback path through this
+        same method).
+        """
+        if raw is None:
+            return []
+        try:
+            entries = list(raw)
+        except TypeError:
+            raise ValueError(
+                "Type '{}': connection-length result must be a list of records, got {}".format(
+                    type_id, type(raw).__name__
+                )
+            )
+
+        out = []
+        for entry in entries:
+            edge_key = entry.get("edge_key") if hasattr(entry, "get") else None
+            if not edge_key:
+                raise ValueError(
+                    "Type '{}': a connection-length record is missing 'edge_key'".format(type_id)
+                )
+            segment_end = entry.get("segment_end")
+            raw_length = entry.get("length", 0.0)
+            try:
+                length = float(raw_length)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    "Type '{}': connection-length record for '{}' has a non-numeric length {!r}".format(
+                        type_id, edge_key, raw_length
+                    )
+                )
+            if length < 0.0:
+                if length < -cls._NEGATIVE_LENGTH_TOLERANCE_MM:
+                    raise ValueError(
+                        "Type '{}': connection-length record for '{}' is materially negative "
+                        "({} mm)".format(type_id, edge_key, length)
+                    )
+                length = 0.0
+            out.append({"edge_key": str(edge_key), "segment_end": segment_end, "length": length})
+        return out
+
     def call_loss(self, library_id: str, type_def: HVACTypeDef, context: dict):
         """
         Call the type's optional fitting-loss function. Returns an

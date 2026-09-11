@@ -46,6 +46,10 @@
     "module": "junctions",
     "function": "build_cross"
   },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_cross"
+  },
   "loss": {
     "module": "junction_losses",
     "function": "loss_cross_generic"

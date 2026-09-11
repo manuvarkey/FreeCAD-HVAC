@@ -46,6 +46,10 @@
     "module": "junctions",
     "function": "build_tee_radius"
   },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_tee_radius"
+  },
   "loss": {
     "module": "junction_losses",
     "function": "loss_tee_generic"

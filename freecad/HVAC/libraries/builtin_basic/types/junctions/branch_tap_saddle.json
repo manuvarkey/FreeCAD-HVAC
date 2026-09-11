@@ -54,6 +54,10 @@
     "module": "junctions",
     "function": "build_tap_saddle"
   },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_tap_saddle"
+  },
   "loss": {
     "module": "junction_losses",
     "function": "loss_tee_generic"

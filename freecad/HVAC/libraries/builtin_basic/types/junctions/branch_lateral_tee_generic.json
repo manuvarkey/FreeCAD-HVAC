@@ -39,6 +39,10 @@
     "module": "junctions",
     "function": "build_lateral_tee"
   },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_lateral_tee"
+  },
   "loss": {
     "module": "junction_losses",
     "function": "loss_tee_generic",

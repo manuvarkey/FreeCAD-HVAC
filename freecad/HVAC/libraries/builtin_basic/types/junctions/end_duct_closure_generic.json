@@ -32,5 +32,9 @@
   "generator": {
     "module": "junctions",
     "function": "build_duct_closure_generic"
+  },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_duct_closure_generic"
   }
 }

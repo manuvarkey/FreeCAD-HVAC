@@ -25,6 +25,10 @@
     "module": "junctions",
     "function": "build_manifold"
   },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_manifold"
+  },
   "loss": {
     "module": "junction_losses",
     "function": "loss_multiport_generic"

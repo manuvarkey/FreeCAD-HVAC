@@ -53,6 +53,10 @@
     "module": "junctions",
     "function": "build_tee_mitered_shoe"
   },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_tee_mitered_shoe"
+  },
   "loss": {
     "module": "junction_losses",
     "function": "loss_tee_generic"
