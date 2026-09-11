@@ -234,15 +234,24 @@ def _mitered_bend(api, port0, port1, radius, cuts):
 
     Shared by ``build_elbow_mitered`` (a real degree-2 through fitting) and
     the branch "mitered shoe" builders, which mitre a branch leg into a
-    synthetic port lying on a main-run axis rather than a real connected
-    port. Returns ``(shape, [trim0, trim1])``, mirroring
+    synthetic port lying at the branch-shoe virtual corner (see
+    ``_branch_shoe_route()``/``_run_surface_along_branch()``) rather than a
+    real connected port. Returns ``(shape, [trim0, trim1])``, mirroring
     ``api.make_elbow_path``'s own trim-length pairing -- the trims
     themselves come from the same ``make_elbow_path`` tangent-arc route
     used to place the gores, computed before any gore/mitre shape is built
-    (unaffected by ``cuts``), which is exactly why ``measure_elbow_mitered``/
-    ``_tee_mitered_shoe_layout`` can read the identical trims straight off
-    a plain ``api.make_elbow_path`` call without needing this function's
-    own (comparatively expensive) shape construction at all.
+    (unaffected by ``cuts``).
+
+    ``measure_elbow_mitered`` reads those trims straight off a plain
+    ``api.make_elbow_path`` call and never needs this function's own
+    (comparatively expensive) shape construction at all -- its two ports
+    are real connected ports, so the route's own trims *are* its answer.
+    ``_tee_mitered_shoe_layout`` is different: its real branch/run trims are
+    surface-based, not this synthetic route's own trims (see
+    ``_branch_shoe_route()``), but its run legs' *minimum* body length
+    still depends on how far the actual faceted bend surface extends,
+    which only this function's Shape can tell it -- so it still builds the
+    bend here, just not to read trims off it.
     """
     u0 = api.port_direction(port0)
     u1 = api.port_direction(port1)
@@ -990,63 +999,166 @@ def _star_tee(context, run_factor, branch_factor):
     }
 
 
+def _run_surface_along_branch(api, center, run_a, run_b, branch_dir):
+    """Find where a branch ray actually enters the run's surface, and how
+    deep the run extends beyond that surface along the branch, from the
+    real run profile geometry -- not a Width/Height or bounding-radius
+    assumption, so this works the same for Circular/Rectangular/Oval runs.
+
+    Mirrors the surface-intersection math ``_lateral_tee_layout()`` already
+    uses for the lateral tee's own branch surface, generalized to also
+    report the run's total depth along the branch ray (needed to tell
+    whether a curved/mitred branch shoe can actually fit inside the run).
+
+    Step 1: split the branch direction into the part along the run's own
+    axis and the part transverse (perpendicular) to it -- a branch running
+    parallel to the run has no well-defined surface to meet.
+    Step 2: project the run's own profile onto that transverse direction to
+    find its near (branch-side) and far surfaces, then rescale by the
+    branch/run angle to turn those into real distances measured along the
+    branch ray itself.
+    """
+    run_dir = api.unit(api.port_direction(run_a))
+    transverse = branch_dir - run_dir * branch_dir.dot(run_dir)
+    sin_angle = transverse.Length
+    if sin_angle <= api.EPS:
+        raise ValueError('Branch is parallel to the run; no run surface to meet')
+    surface_dir = api.unit(transverse)
+
+    center_projection = center.dot(surface_dir)
+    near_projection = None
+    far_projection = None
+    for run_port in (run_a, run_b):
+        centered_port = api.copy_port(run_port, position=center)
+        run_profile = api.profile_from_port(centered_port)
+        p_min, p_max = api.profile_projection_bounds(run_profile, surface_dir)
+        near_projection = p_max if near_projection is None else max(near_projection, p_max)
+        far_projection = p_min if far_projection is None else min(far_projection, p_min)
+
+    normal_surface_depth = near_projection - center_projection
+    normal_run_depth = near_projection - far_projection
+    if normal_run_depth <= api.EPS:
+        raise ValueError('Run profile has zero depth')
+
+    branch_surface_distance = normal_surface_depth / sin_angle
+    run_depth_along_branch = normal_run_depth / sin_angle
+    run_surface = center + branch_dir * branch_surface_distance
+
+    return run_surface, branch_surface_distance, run_depth_along_branch
+
+
 def _radius_tee_layout(context, run_factor, branch_factor):
-    """Shared layout for a radiused branch tee. The branch bend stub is a
-    genuine (lightweight) swept Shape -- unlike a plain star tee, this
-    fitting's minimum body length depends on how far the actual curved
-    surface extends (_junction_shape_minimums), which can't be recovered
-    from profile bounds alone -- so measurement here builds that one bend
-    stub too (never the full trunk+fuse+clip body build_tee_radius() goes
-    on to assemble)."""
-    api = context["hvac_api"]
+    """Layout for a radiused tee.
+
+    The branch bend is a complete elbow whose virtual corner is the
+    junction/run centreline. The swept bend is allowed to intersect the
+    run body; fusion with the trunk forms the final tee.
+
+    TrimBranch is additional straight length beyond the intrinsic curved
+    fitting body, not distance measured from the run surface.
+    """
+    api = context['hvac_api']
     ports = api.connected_ports(context)
     if len(ports) != 3:
-        raise ValueError("Fitting requires exactly three connected ports")
+        raise ValueError('Fitting requires exactly three connected ports')
+
     run_a, run_b, branch = _find_run_pair(context, api, ports)
     p = _props(context)
-
     center = api.center_from_context(context)
     tee_ports = [run_a, run_b, branch]
+
     branch_size = _size(api, branch)
-    radius = _positive(p.get("BranchRadius"), branch_factor * branch_size)
+    radius = _positive(p.get('BranchRadius'), branch_factor * branch_size)
     radius = max(radius, 0.5 * branch_size)
 
     lean = _lean_port(api, run_a, run_b, branch)
-    trunk_axis_port = api.copy_port(branch, position=center, direction=api.port_direction(lean))
-    route = api.make_elbow_path(branch, trunk_axis_port, radius)
-    branch_route_trim, lean_route_trim = route["trim_lengths"]
-    stub = api.sweep([api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])], route["path"], solid=True)
 
+    # The theoretical bend corner is the junction/run centreline.
+    # Keep the branch profile but give the second synthetic port the
+    # selected run direction.
+    trunk_axis_port = api.copy_port(branch, position=center, direction=api.port_direction(lean))
+
+    route = api.make_elbow_path(branch, trunk_axis_port, radius)
+    branch_route_trim, lean_route_trim = route['trim_lengths']
+
+    stub = api.sweep(
+        [
+            api.profile_from_port(route['ports'][0]),
+            api.profile_from_port(route['ports'][1]),
+        ],
+        route['path'],
+        solid=True,
+    )
+
+    # Intrinsic fitting body determines the minimum run/branch extents.
     minimums = _junction_minimums(api, center, tee_ports)
     minimums = _junction_shape_minimums(api, center, tee_ports, stub, minimums)
     minimums[2] = max(minimums[2], branch_route_trim)
+
     lean_index = 0 if lean is run_a else 1
     minimums[lean_index] = max(minimums[lean_index], lean_route_trim)
 
-    trims = _junction_trims(api, p, tee_ports, ("TrimRunA", "TrimRunB", "TrimBranch"), (run_factor, run_factor, branch_factor), minimums)
-    return run_a, run_b, branch, center, trims, stub, branch_route_trim
+    trims = _junction_trims(
+        api,
+        p,
+        tee_ports,
+        ('TrimRunA', 'TrimRunB', 'TrimBranch'),
+        (run_factor, run_factor, branch_factor),
+        minimums,
+    )
+
+    return {
+        'run_a': run_a,
+        'run_b': run_b,
+        'branch': branch,
+        'center': center,
+        'lean': lean,
+        'radius': radius,
+        'route': route,
+        'stub': stub,
+        'branch_route_trim': branch_route_trim,
+        'lean_route_trim': lean_route_trim,
+        'trims': trims,
+    }
 
 
 def measure_radius_tee(context, run_factor, branch_factor):
-    api = context["hvac_api"]
-    run_a, run_b, branch, center, trims, stub, branch_route_trim = _radius_tee_layout(context, run_factor, branch_factor)
-    return api.build_trim_rec_from_port_lengths([(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])])
+    api = context['hvac_api']
+    layout = _radius_tee_layout(context, run_factor, branch_factor)
+
+    return api.build_trim_rec_from_port_lengths(
+        [
+            (layout['run_a'], layout['trims'][0]),
+            (layout['run_b'], layout['trims'][1]),
+            (layout['branch'], layout['trims'][2]),
+        ]
+    )
 
 
 def _radius_tee(context, run_factor, branch_factor):
-    """Radiused tee with trims measured beyond the actual generated bend body."""
-    api = context["hvac_api"]
-    run_a, run_b, branch, center, trims, stub, branch_route_trim = _radius_tee_layout(context, run_factor, branch_factor)
-    tee_ports = [run_a, run_b, branch]
+    api = context['hvac_api']
+    layout = _radius_tee_layout(context, run_factor, branch_factor)
 
-    stub = _extend_leg(api, stub, branch, branch_route_trim, trims[2])
+    run_a = layout['run_a']
+    run_b = layout['run_b']
+    branch = layout['branch']
+    center = layout['center']
+    trims = layout['trims']
+    stub = layout['stub']
+
+    # Add only the straight branch extension required beyond the
+    # intrinsic curved fitting body.
+    stub = _extend_leg(api, stub, branch, layout['branch_route_trim'], trims[2])
+
     trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])])
+
+    # The curved branch intentionally intersects the trunk.
     shape = api.fuse(trunk, stub)
-    shape = _clip_junction_to_body(api, shape, center, tee_ports, trims)
+    shape = _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
 
     return {
-        "shape": api.refine(shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(
+        'shape': api.refine(shape),
+        'connection_lengths': api.build_trim_rec_from_port_lengths(
             [(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]
         ),
     }
@@ -1101,61 +1213,96 @@ def build_tee_mitered(context):
 
 
 def _tee_mitered_shoe_layout(context):
-    """Same shape as _radius_tee_layout, but the branch bend is a mitred
-    (flat-cut) bend rather than a swept arc -- _mitered_bend() still needs
-    to build that one bend Shape for _junction_shape_minimums, exactly as
-    build_tee_mitered_shoe() does; see that function for why this is
-    unavoidable (the minimum body length depends on the actual curved/
-    faceted surface's own extent, not just port profile bounds)."""
-    api = context["hvac_api"]
+    """Layout for a mitered-shoe tee.
+
+    The theoretical bend corner lies at the junction/run centreline.
+    The mitered bend is allowed to intersect the run body and is fused
+    with the run trunk.
+
+    TrimBranch is additional length beyond the intrinsic mitered body.
+    """
+    api = context['hvac_api']
     ports = api.connected_ports(context)
     if len(ports) != 3:
-        raise ValueError("Tee fitting requires exactly three connected ports")
+        raise ValueError('Tee fitting requires exactly three connected ports')
+
     run_a, run_b, branch = _find_run_pair(context, api, ports)
     p = _props(context)
-
     center = api.center_from_context(context)
     tee_ports = [run_a, run_b, branch]
+
     branch_size = _size(api, branch)
-    radius = _positive(p.get("BranchRadius"), 0.6 * branch_size)
+    radius = _positive(p.get('BranchRadius'), 0.6 * branch_size)
     radius = max(radius, 0.5 * branch_size)
-    cuts = max(int(p.get("NumberOfCuts", 1) or 1), 1)
+    cuts = max(int(p.get('NumberOfCuts', 1) or 1), 1)
 
     lean = _lean_port(api, run_a, run_b, branch)
     trunk_axis_port = api.copy_port(branch, position=center, direction=api.port_direction(lean))
+
     bend_shape, route_trims = _mitered_bend(api, branch, trunk_axis_port, radius, cuts)
     branch_route_trim, lean_route_trim = route_trims
 
     minimums = _junction_minimums(api, center, tee_ports)
     minimums = _junction_shape_minimums(api, center, tee_ports, bend_shape, minimums)
     minimums[2] = max(minimums[2], branch_route_trim)
+
     lean_index = 0 if lean is run_a else 1
     minimums[lean_index] = max(minimums[lean_index], lean_route_trim)
 
-    trims = _junction_trims(api, p, tee_ports, ("TrimRunA", "TrimRunB", "TrimBranch"), (0.4, 0.4, 0.6), minimums)
-    return run_a, run_b, branch, center, trims, bend_shape, branch_route_trim
+    trims = _junction_trims(
+        api,
+        p,
+        tee_ports,
+        ('TrimRunA', 'TrimRunB', 'TrimBranch'),
+        (0.4, 0.4, 0.6),
+        minimums,
+    )
+
+    return {
+        'run_a': run_a,
+        'run_b': run_b,
+        'branch': branch,
+        'center': center,
+        'lean': lean,
+        'bend_shape': bend_shape,
+        'branch_route_trim': branch_route_trim,
+        'lean_route_trim': lean_route_trim,
+        'trims': trims,
+    }
 
 
 def measure_tee_mitered_shoe(context):
-    api = context["hvac_api"]
-    run_a, run_b, branch, center, trims, bend_shape, branch_route_trim = _tee_mitered_shoe_layout(context)
-    return api.build_trim_rec_from_port_lengths([(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])])
+    api = context['hvac_api']
+    layout = _tee_mitered_shoe_layout(context)
+
+    return api.build_trim_rec_from_port_lengths(
+        [
+            (layout['run_a'], layout['trims'][0]),
+            (layout['run_b'], layout['trims'][1]),
+            (layout['branch'], layout['trims'][2]),
+        ]
+    )
 
 
 def build_tee_mitered_shoe(context):
-    """Mitered branch tee with trims outside the generated bend body."""
-    api = context["hvac_api"]
-    run_a, run_b, branch, center, trims, bend_shape, branch_route_trim = _tee_mitered_shoe_layout(context)
-    tee_ports = [run_a, run_b, branch]
+    api = context['hvac_api']
+    layout = _tee_mitered_shoe_layout(context)
 
-    bend_shape = _extend_leg(api, bend_shape, branch, branch_route_trim, trims[2])
+    run_a = layout['run_a']
+    run_b = layout['run_b']
+    branch = layout['branch']
+    center = layout['center']
+    trims = layout['trims']
+
+    bend_shape = _extend_leg(api, layout['bend_shape'], branch, layout['branch_route_trim'], trims[2])
     trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])])
+
     shape = api.fuse(trunk, bend_shape)
-    shape = _clip_junction_to_body(api, shape, center, tee_ports, trims)
+    shape = _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
 
     return {
-        "shape": api.refine(shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(
+        'shape': api.refine(shape),
+        'connection_lengths': api.build_trim_rec_from_port_lengths(
             [(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]
         ),
     }
