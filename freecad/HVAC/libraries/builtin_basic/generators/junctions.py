@@ -1224,11 +1224,11 @@ def build_tee_radius(context):
     return _radius_tee(context, 0.4, 0.6)
 
 
-def measure_tee_mitered(context):
+def measure_tee_straight(context):
     return measure_star_tee(context, 0.60, 0.60)
 
 
-def build_tee_mitered(context):
+def build_tee_straight(context):
     return _star_tee(context, 0.60, 0.60)
 
 
