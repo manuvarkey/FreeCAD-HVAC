@@ -33,6 +33,20 @@
       "group": "Dimensions",
       "description": "Trim length for branch port C",
       "default": 100.0
+    },
+    {
+      "name": "BranchRadius",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Reference centerline radius used to position the mitered branch bends",
+      "default": 150.0
+    },
+    {
+      "name": "NumberOfCuts",
+      "prop_type": "App::PropertyInteger",
+      "group": "Dimensions",
+      "description": "Number of internal mitre joints in each branch bend",
+      "default": 2
     }
   ],
   "generator": {

@@ -230,28 +230,14 @@ def _profile_extent(profile):
 
 
 def _mitered_bend(api, port0, port1, radius, cuts):
-    """Build a flat-cut (mitre-gore) bend between two arbitrary ports.
-
-    Shared by ``build_elbow_mitered`` (a real degree-2 through fitting) and
-    the branch "mitered shoe" builders, which mitre a branch leg into a
-    synthetic port lying at the branch-shoe virtual corner (see
-    ``_branch_shoe_route()``/``_run_surface_along_branch()``) rather than a
-    real connected port. Returns ``(shape, [trim0, trim1])``, mirroring
-    ``api.make_elbow_path``'s own trim-length pairing -- the trims
-    themselves come from the same ``make_elbow_path`` tangent-arc route
-    used to place the gores, computed before any gore/mitre shape is built
-    (unaffected by ``cuts``).
-
-    ``measure_elbow_mitered`` reads those trims straight off a plain
-    ``api.make_elbow_path`` call and never needs this function's own
-    (comparatively expensive) shape construction at all -- its two ports
-    are real connected ports, so the route's own trims *are* its answer.
-    ``_tee_mitered_shoe_layout`` is different: its real branch/run trims are
-    surface-based, not this synthetic route's own trims (see
-    ``_branch_shoe_route()``), but its run legs' *minimum* body length
-    still depends on how far the actual faceted bend surface extends,
-    which only this function's Shape can tell it -- so it still builds the
-    bend here, just not to read trims off it.
+    """Build a faceted constant-profile bend between two arbitrary ports.
+    
+    Used by through mitered elbows, the mitered-shoe tee, and mitered wye.
+    The tangent-arc route defines the fitting-end positions and the reference
+    radius; the actual body between those ends is constructed from straight
+    gores separated by mitre planes.
+    
+    Returns ``(shape, [trim0, trim1])``.
     """
     u0 = api.port_direction(port0)
     u1 = api.port_direction(port1)
@@ -1439,12 +1425,136 @@ def build_lateral_tee(context):
     }
 
 
+def _wye_mitered_layout(context):
+    """Mitered wye built from two faceted branch bends entering one common leg."""
+    api = context['hvac_api']
+    ports = list(api.connected_ports(context))
+    if len(ports) != 3:
+        raise ValueError('Mitered wye requires exactly three connected ports')
+
+    p = _props(context)
+    names = ('TrimBranchA', 'TrimBranchB', 'TrimBranchC')
+    center = api.center_from_context(context)
+
+    main_index = _wye_common_index(api, ports)
+    main = ports[main_index]
+    main_dir = api.unit(api.port_direction(main))
+
+    branch_legs = [(i, ports[i]) for i in range(3) if i != main_index]
+    smallest_branch_size = min(_size(api, branch) for _, branch in branch_legs)
+
+    radius = _positive(p.get('BranchRadius'), 0.6 * smallest_branch_size)
+    cuts = max(int(p.get('NumberOfCuts', 2) or 2), 1)
+
+    routes = []
+    intrinsic_shapes = []
+
+    for branch_index, branch in branch_legs:
+        branch_size = _size(api, branch)
+        branch_radius = max(radius, 0.5 * branch_size)
+
+        trunk_axis_port = api.copy_port(branch, position=center, direction=main_dir)
+
+        bend_shape, route_trims = _mitered_bend(
+            api,
+            branch,
+            trunk_axis_port,
+            branch_radius,
+            cuts,
+        )
+
+        routes.append(
+            {
+                'branch': branch,
+                'branch_index': branch_index,
+                'shape': bend_shape,
+                'branch_trim': route_trims[0],
+                'main_trim': route_trims[1],
+            }
+        )
+        intrinsic_shapes.append(bend_shape)
+
+    intrinsic_shape = api.fuse(*intrinsic_shapes)
+
+    minimums = _junction_minimums(api, center, ports)
+    minimums = _junction_shape_minimums(api, center, ports, intrinsic_shape, minimums)
+
+    for route in routes:
+        branch_index = route['branch_index']
+        minimums[branch_index] = max(minimums[branch_index], route['branch_trim'])
+        minimums[main_index] = max(minimums[main_index], route['main_trim'])
+
+    trims = _junction_trims(
+        api,
+        p,
+        ports,
+        names,
+        (0.70, 0.70, 0.70),
+        minimums,
+    )
+
+    return {
+        'ports': ports,
+        'center': center,
+        'main': main,
+        'main_index': main_index,
+        'routes': routes,
+        'trims': trims,
+    }
+
+
 def measure_wye_mitered(context):
-    return measure_star_wye(context, 0.70)
+    api = context['hvac_api']
+    layout = _wye_mitered_layout(context)
+
+    return api.build_trim_rec_from_port_lengths(
+        list(zip(layout['ports'], layout['trims']))
+    )
 
 
 def build_wye_mitered(context):
-    return _star_wye(context, 0.70)
+    """Mitered wye with each non-main branch entering the common leg through a faceted bend."""
+    api = context['hvac_api']
+    layout = _wye_mitered_layout(context)
+
+    ports = layout['ports']
+    center = layout['center']
+    main = layout['main']
+    main_index = layout['main_index']
+    trims = layout['trims']
+
+    main_end = _trimmed(api, main, trims[main_index])
+    main_center = api.copy_port(main, position=center)
+    shape = _loft(api, [main_end, main_center], 0.0, ruled=True)
+
+    for route in layout['routes']:
+        branch = route['branch']
+        branch_index = route['branch_index']
+
+        bend_shape = _extend_leg(
+            api,
+            route['shape'],
+            branch,
+            route['branch_trim'],
+            trims[branch_index],
+        )
+
+        shape = api.fuse(shape, bend_shape)
+
+    shape = _clip_junction_to_body(
+        api,
+        shape,
+        center,
+        ports,
+        trims,
+    )
+
+    return {
+        'shape': api.refine(shape),
+        'connection_lengths': api.build_trim_rec_from_port_lengths(
+            list(zip(ports, trims))
+        ),
+    }
 
 
 def _wye_common_index(api, ports):
