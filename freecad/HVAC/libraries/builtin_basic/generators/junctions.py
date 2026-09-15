@@ -634,18 +634,52 @@ def _extend_leg(api, shape, port, current_trim, requested_trim):
     return api.fuse(shape, stub)
 
 
-def _lean_port(api, run_a, run_b, branch):
-    """Pick whichever run leg a branch leg should curve/mitre toward.
+def _lean_port_from_profile_frame(api, run_a, run_b, branch):
+    """Choose a physical run direction deterministically for a symmetric tee.
 
-    There is no geometric signal for which way a branch should lean (flow
-    direction isn't known at generator time), so this picks the run
-    direction the branch's own incoming direction is already closer to
-    aligned with -- a deterministic, reproducible choice.
+    The branch profile frame provides the local reference. Swapping run_a/run_b
+    therefore does not mirror the fitting.
     """
-    incoming = api.port_direction(branch) * -1.0
-    da = api.port_direction(run_a)
-    db = api.port_direction(run_b)
-    return run_a if incoming.dot(da) >= incoming.dot(db) else run_b
+    preferred_x = api.port_profile_x_axis(branch)
+
+    if preferred_x is not None:
+        _, x_axis, y_axis, _ = api.make_profile_frame(api.port_direction(branch), preferred_x)
+        run_dir = api.unit(api.port_direction(run_a))
+
+        local_x = run_dir.dot(x_axis)
+        local_y = run_dir.dot(y_axis)
+
+        if abs(local_x) >= abs(local_y):
+            return run_a if local_x >= 0.0 else run_b
+        return run_a if local_y >= 0.0 else run_b
+
+    key_a = (str(run_a.get('edge_key', '') or ''), str(run_a.get('segment_end', '') or ''))
+    key_b = (str(run_b.get('edge_key', '') or ''), str(run_b.get('segment_end', '') or ''))
+
+    if key_a == ('', '') or key_b == ('', ''):
+        raise ValueError('Symmetric tee bend direction requires profile_x_axis or stable run edge keys')
+
+    return run_a if key_a > key_b else run_b
+
+
+def _lean_port(api, run_a, run_b, branch, reverse=False):
+    """Pick the run leg toward which an asymmetric branch bend is formed."""
+    incoming = api.unit(api.port_direction(branch) * -1.0)
+    dir_a = api.unit(api.port_direction(run_a))
+    dir_b = api.unit(api.port_direction(run_b))
+
+    score_a = incoming.dot(dir_a)
+    score_b = incoming.dot(dir_b)
+
+    if abs(score_a - score_b) > _EPS:
+        selected = run_a if score_a > score_b else run_b
+    else:
+        selected = _lean_port_from_profile_frame(api, run_a, run_b, branch)
+
+    if reverse:
+        return run_b if selected is run_a else run_a
+
+    return selected
 
 
 def _star_junction_layout(context, default_factor):
@@ -1071,7 +1105,7 @@ def _radius_tee_layout(context, run_factor, branch_factor):
     radius = _positive(p.get('BranchRadius'), branch_factor * branch_size)
     radius = max(radius, 0.5 * branch_size)
 
-    lean = _lean_port(api, run_a, run_b, branch)
+    lean = _lean_port(api, run_a, run_b, branch, reverse=bool(p.get('ReverseBranchBend', False)))
 
     # The theoretical bend corner is the junction/run centreline.
     # Keep the branch profile but give the second synthetic port the
@@ -1236,7 +1270,7 @@ def _tee_mitered_shoe_layout(context):
     radius = max(radius, 0.5 * branch_size)
     cuts = max(int(p.get('NumberOfCuts', 1) or 1), 1)
 
-    lean = _lean_port(api, run_a, run_b, branch)
+    lean = _lean_port(api, run_a, run_b, branch, reverse=bool(p.get('ReverseBranchBend', False)))
     trunk_axis_port = api.copy_port(branch, position=center, direction=api.port_direction(lean))
 
     bend_shape, route_trims = _mitered_bend(api, branch, trunk_axis_port, radius, cuts)

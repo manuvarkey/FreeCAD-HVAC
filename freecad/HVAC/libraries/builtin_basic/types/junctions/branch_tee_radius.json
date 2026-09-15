@@ -40,6 +40,13 @@
       "group": "Dimensions",
       "description": "Bend radius of the branch takeoff as it curves into the run",
       "default": 150.0
+    },
+    {
+      "name": "ReverseBranchBend",
+      "prop_type": "App::PropertyBool",
+      "group": "Dimensions",
+      "description": "Reverse the branch bend toward the opposite run leg",
+      "default": false
     }
   ],
   "generator": {

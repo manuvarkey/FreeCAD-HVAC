@@ -47,6 +47,13 @@
       "group": "Dimensions",
       "description": "Number of mitre cuts in the branch's lean into the run (1 = a single two-piece joint)",
       "default": 2
+    },
+    {
+      "name": "ReverseBranchBend",
+      "prop_type": "App::PropertyBool",
+      "group": "Dimensions",
+      "description": "Reverse the branch bend toward the opposite run leg",
+      "default": false
     }
   ],
   "generator": {
