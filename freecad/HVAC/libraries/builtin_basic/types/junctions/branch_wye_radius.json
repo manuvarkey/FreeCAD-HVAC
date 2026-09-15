@@ -14,24 +14,24 @@
   },
   "properties": [
     {
+      "name": "TrimMain",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Additional trim beyond the intrinsic body on the common/main leg",
+      "default": 100.0
+    },
+    {
       "name": "TrimBranchA",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Trim length for branch port A",
+      "description": "Additional trim beyond the intrinsic body on branch A",
       "default": 100.0
     },
     {
       "name": "TrimBranchB",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Trim length for branch port B",
-      "default": 100.0
-    },
-    {
-      "name": "TrimBranchC",
-      "prop_type": "App::PropertyLength",
-      "group": "Dimensions",
-      "description": "Trim length for branch port C",
+      "description": "Additional trim beyond the intrinsic body on branch B",
       "default": 100.0
     },
     {

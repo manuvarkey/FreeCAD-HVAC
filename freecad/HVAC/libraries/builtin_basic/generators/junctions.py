@@ -1428,19 +1428,19 @@ def build_lateral_tee(context):
 def _wye_mitered_layout(context):
     """Mitered wye built from two faceted branch bends entering one common leg."""
     api = context['hvac_api']
-    ports = list(api.connected_ports(context))
-    if len(ports) != 3:
+    raw_ports = list(api.connected_ports(context))
+    if len(raw_ports) != 3:
         raise ValueError('Mitered wye requires exactly three connected ports')
 
+    main, branch_a, branch_b = _wye_port_roles(api, raw_ports)
+    ports = [main, branch_a, branch_b]
     p = _props(context)
-    names = ('TrimBranchA', 'TrimBranchB', 'TrimBranchC')
     center = api.center_from_context(context)
 
-    main_index = _wye_common_index(api, ports)
-    main = ports[main_index]
+    main_index = 0
     main_dir = api.unit(api.port_direction(main))
 
-    branch_legs = [(i, ports[i]) for i in range(3) if i != main_index]
+    branch_legs = [(1, branch_a), (2, branch_b)]
     smallest_branch_size = min(_size(api, branch) for _, branch in branch_legs)
 
     radius = _positive(p.get('BranchRadius'), 0.6 * smallest_branch_size)
@@ -1488,7 +1488,7 @@ def _wye_mitered_layout(context):
         api,
         p,
         ports,
-        names,
+        ('TrimMain', 'TrimBranchA', 'TrimBranchB'),
         (0.70, 0.70, 0.70),
         minimums,
     )
@@ -1576,49 +1576,89 @@ def _wye_common_index(api, ports):
     return next(index for index in range(3) if index not in branch_pair)
 
 
+def _wye_branch_sort_key(api, main, branch):
+    """Stable branch-side ordering in the main leg's local profile frame."""
+    preferred_x = api.port_profile_x_axis(main)
+
+    if preferred_x is not None:
+        _, x_axis, y_axis, _ = api.make_profile_frame(api.port_direction(main), preferred_x)
+        direction = api.unit(api.port_direction(branch))
+        return round(direction.dot(x_axis), 12), round(direction.dot(y_axis), 12)
+
+    key = (str(branch.get('edge_key', '') or ''), str(branch.get('segment_end', '') or ''))
+
+    if key == ('', ''):
+        raise ValueError('Wye branch ordering requires profile_x_axis or stable branch edge keys')
+
+    return key
+
+
+def _wye_port_roles(api, ports):
+    """Return stable semantic ordering: common/main leg, branch A, branch B."""
+    if len(ports) != 3:
+        raise ValueError('Wye requires exactly three ports')
+
+    main_index = _wye_common_index(api, ports)
+    main = ports[main_index]
+    branches = [ports[index] for index in range(3) if index != main_index]
+
+    branches.sort(key=lambda branch: _wye_branch_sort_key(api, main, branch), reverse=True)
+    return main, branches[0], branches[1]
+
+
 def _wye_radius_layout(context):
     """Same "needs an actual bend stub for its minimums" shape as
     _radius_tee_layout, generalized to 2 branch legs merging into one main
     trunk -- measurement builds the same fused branch-stub shapes
     build_wye_radius() itself sweeps, never the full assembled body."""
-    api = context["hvac_api"]
-    ports = list(api.connected_ports(context))
-    if len(ports) != 3:
-        raise ValueError("Fitting requires exactly three connected ports")
+    api = context['hvac_api']
+    raw_ports = list(api.connected_ports(context))
+    if len(raw_ports) != 3:
+        raise ValueError('Fitting requires exactly three connected ports')
+
+    main, branch_a, branch_b = _wye_port_roles(api, raw_ports)
+    ports = [main, branch_a, branch_b]
     p = _props(context)
-    names = ("TrimBranchA", "TrimBranchB", "TrimBranchC")
-
     center = api.center_from_context(context)
-    main_index = _wye_common_index(api, ports)
-    main_name, main = names[main_index], ports[main_index]
-    branch_legs = [
-        (_size(api, ports[i]), names[i], i, ports[i]) for i in range(3) if i != main_index
-    ]
+    main_index = 0
+    branch_legs = [(_size(api, branch_a), 1, branch_a), (_size(api, branch_b), 2, branch_b)]
 
-    smallest_branch_size = min(size for size, _, _, _ in branch_legs)
-    radius = _positive(p.get("BranchRadius"), 0.6 * smallest_branch_size)
+    smallest_branch_size = min(size for size, _, _ in branch_legs)
+    radius = _positive(p.get('BranchRadius'), 0.6 * smallest_branch_size)
     radius = max(radius, 0.5 * smallest_branch_size)
 
     main_dir = api.unit(api.port_direction(main))
     routes = []
     route_shapes = []
-    for branch_size, branch_name, branch_index, branch in branch_legs:
+
+    for branch_size, branch_index, branch in branch_legs:
         branch_radius = max(radius, 0.5 * branch_size)
         trunk_axis_port = api.copy_port(branch, position=center, direction=main_dir)
         route = api.make_elbow_path(branch, trunk_axis_port, branch_radius)
-        stub = api.sweep([api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])], route["path"], solid=True)
-        routes.append((branch, branch_name, branch_index, branch_size, route, stub))
+        stub = api.sweep(
+            [api.profile_from_port(route['ports'][0]), api.profile_from_port(route['ports'][1])],
+            route['path'],
+            solid=True,
+        )
+        routes.append((branch, branch_index, branch_size, route, stub))
         route_shapes.append(stub)
 
     intrinsic_shape = api.fuse(*route_shapes)
     minimums = _junction_minimums(api, center, ports)
     minimums = _junction_shape_minimums(api, center, ports, intrinsic_shape, minimums)
 
-    for branch, branch_name, branch_index, branch_size, route, stub in routes:
-        minimums[branch_index] = max(minimums[branch_index], route["trim_lengths"][0])
-        minimums[main_index] = max(minimums[main_index], route["trim_lengths"][1])
+    for branch, branch_index, branch_size, route, stub in routes:
+        minimums[branch_index] = max(minimums[branch_index], route['trim_lengths'][0])
+        minimums[main_index] = max(minimums[main_index], route['trim_lengths'][1])
 
-    trims = _junction_trims(api, p, ports, names, (0.70, 0.70, 0.70), minimums)
+    trims = _junction_trims(
+        api,
+        p,
+        ports,
+        ('TrimMain', 'TrimBranchA', 'TrimBranchB'),
+        (0.70, 0.70, 0.70),
+        minimums,
+    )
     return ports, center, main, main_index, routes, trims
 
 
@@ -1630,22 +1670,22 @@ def measure_wye_radius(context):
 
 def build_wye_radius(context):
     """Radiused wye with each trim measured beyond the actual generated body."""
-    api = context["hvac_api"]
+    api = context['hvac_api']
     ports, center, main, main_index, routes, trims = _wye_radius_layout(context)
 
     main_end = _trimmed(api, main, trims[main_index])
     main_center = api.copy_port(main, position=center)
     shape = _loft(api, [main_end, main_center], 0.0, ruled=True)
 
-    for branch, branch_name, branch_index, branch_size, route, stub in routes:
-        stub = _extend_leg(api, stub, branch, route["trim_lengths"][0], trims[branch_index])
+    for branch, branch_index, branch_size, route, stub in routes:
+        stub = _extend_leg(api, stub, branch, route['trim_lengths'][0], trims[branch_index])
         shape = api.fuse(shape, stub)
 
     shape = _clip_junction_to_body(api, shape, center, ports, trims)
 
     return {
-        "shape": api.refine(shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(list(zip(ports, trims))),
+        'shape': api.refine(shape),
+        'connection_lengths': api.build_trim_rec_from_port_lengths(list(zip(ports, trims))),
     }
 
 
