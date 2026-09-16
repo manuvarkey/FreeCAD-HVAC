@@ -281,6 +281,27 @@ def test_list_types_connected_ports_drops_types_that_cannot_cover_the_ports():
     assert [t.id for t in result] == ["through_generic"]
 
 
+def test_list_types_excludes_inline_kind_types_even_via_family_ancestor_match():
+    # through_damper_generic's family ("through.straight.damper") is an
+    # ancestor match for a requested family of "through.straight" (see
+    # _family_match), so without an explicit kind=="inline" exclusion it
+    # would leak into the manual "change type" listing even though
+    # applying it as a Primary TypeId doesn't work -- it's selectable only
+    # via list_inline_types() ("Add Inline Component").
+    damper = _type_def(
+        "through_damper_generic", "junction", family=["through.straight.damper"], topology="through",
+        profiles=["Circular"], kind="inline", priority=999,
+    )
+    model = _type_def(
+        "through_straight_generic", "junction", family=["through.straight"], topology="through",
+        profiles=["Circular"], kind="model", priority=50,
+    )
+    lib = _library_with(damper, model)
+
+    result = lib.list_types(category="junction", topology="through", family="through.straight")
+    assert [t.id for t in result] == ["through_straight_generic"]
+
+
 # ----------------------------------------------------------------------
 # Automatic selection (select_type)
 # ----------------------------------------------------------------------

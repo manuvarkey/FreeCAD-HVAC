@@ -323,6 +323,17 @@ class HVACLibrary:
                 continue
             if family and not any(self._family_match(family, candidate) for candidate in t.family):
                 continue
+            if getattr(t.selection, "kind", SELECTION_KIND_MODEL) == SELECTION_KIND_INLINE:
+                # "inline"-kind types (dampers, VAVs, ...) are never a valid
+                # Primary-component selection -- same exclusion
+                # _rebuild_match_index() already applies to the automatic
+                # (select_type) path. Without this, a family ancestor match
+                # (e.g. "through.straight.damper" matching a requested
+                # "through.straight") would leak them into this listing
+                # even though applying one as a Primary TypeId doesn't
+                # actually work -- they're only reachable via
+                # list_inline_types() for the "Add Inline Component" UI.
+                continue
             if use_ports:
                 if not validation.is_context_valid(t, ctx):
                     continue
