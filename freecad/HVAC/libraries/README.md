@@ -598,14 +598,23 @@ junction composes its component chain. A type-def marks itself as one of
 these by declaring `selection.kind: "inline"`.
 
 Inline types are excluded entirely from `HVACLibrary`'s automatic-matching
-indexes (`_rebuild_match_index`), so `select_type()`/`resolve_sticky_type()`
-can never choose one as a Primary component, no matter how its `family`/
-`profiles` are declared -- they're reachable only through
-`HVACLibraryRegistry.list_inline_types(library_id, topology=, profile=)`,
-which the "Add Inline Component" UI action uses to populate its type
-picker. Unlike Primary selection, there's no family matching involved:
-adding an inline component is always a direct, deliberate user choice, not
-something the classifier's output should drive.
+indexes (`_rebuild_match_index`), so `select_type()` can never choose one as
+a Primary component *automatically*, no matter how its `family`/`profiles`
+are declared. They're reachable through two deliberate, manual paths
+instead:
+
+- `HVACLibraryRegistry.list_inline_types(library_id, topology=, profile=)`,
+  which the "Add Inline Component" UI action uses to populate its type
+  picker (no family matching involved here -- adding an inline component
+  is always a direct user choice, not something the classifier's output
+  should drive);
+- `HVACLibrary.list_types(...)`, the same listing the "change type" editor
+  uses for a Primary component, which includes inline types too -- so a
+  user can deliberately set a damper/VAV as a junction's Primary type
+  itself, not just as a chained Inline component. Once set this way,
+  `resolve_sticky_type()` retains it across sync like any other
+  non-placeholder type (see "Sticky selection" below) -- only a *fresh*
+  `select_type()` call never returns one.
 
 `freecad/HVAC/libraries/smacna/types/junctions/through_damper_generic.json`
 and `through_vav_generic.json` are the built-in examples.

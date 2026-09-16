@@ -119,11 +119,18 @@ class HVACSelectionDef:
         "placeholder" -- an invisible/marker fallback (never sticky; always
                           re-evaluated on sync so it can upgrade to a model).
         "inline"      -- a user-added-only device (damper, silencer, flex
-                          connector, ...). Never automatically selected as a
-                          Primary component -- excluded from select_type()'s
-                          indexes entirely; only reachable via
+                          connector, ...). Excluded from select_type()'s own
+                          indexes entirely, so it's never chosen as a
+                          Primary component *automatically*. It's still
+                          reachable as a Primary component through a
+                          deliberate manual choice, two ways: (a) as an
+                          Inline component in a junction's chain, via
                           HVACLibrary.list_inline_types() for the "Add
-                          Inline Component" UI action.
+                          Inline Component" UI action; (b) directly as the
+                          Primary type itself, via HVACLibrary.list_types()
+                          (the "change type" editor) -- and once manually
+                          set that way, resolve_sticky_type() retains it
+                          across sync like any other non-placeholder type.
     priority:
         Tiebreaker used only when choosing among multiple candidates that are
         otherwise equally specific (same tier: exact-profile model,
@@ -322,17 +329,6 @@ class HVACLibrary:
             if topology and t.topology != topology:
                 continue
             if family and not any(self._family_match(family, candidate) for candidate in t.family):
-                continue
-            if getattr(t.selection, "kind", SELECTION_KIND_MODEL) == SELECTION_KIND_INLINE:
-                # "inline"-kind types (dampers, VAVs, ...) are never a valid
-                # Primary-component selection -- same exclusion
-                # _rebuild_match_index() already applies to the automatic
-                # (select_type) path. Without this, a family ancestor match
-                # (e.g. "through.straight.damper" matching a requested
-                # "through.straight") would leak them into this listing
-                # even though applying one as a Primary TypeId doesn't
-                # actually work -- they're only reachable via
-                # list_inline_types() for the "Add Inline Component" UI.
                 continue
             if use_ports:
                 if not validation.is_context_valid(t, ctx):
@@ -668,26 +664,31 @@ class HVACLibraryRegistry:
         """
         Normal (non-reset) synchronization policy:
 
-            current TypeId exists, resolves in library_id, is a real model
-            (not a placeholder), and remains compatible with `request`?
+            current TypeId exists, resolves in library_id, is not a
+            placeholder, and remains compatible with `request`?
                 -> retain it (status="retained")
             otherwise
                 -> automatic selection (select_type)
 
         Placeholders are deliberately never retained here -- they're
         re-evaluated every sync so they can upgrade to a real model.
+
+        An "inline"-kind current type (a damper/VAV/...) IS retained here
+        if the user manually picked it as this component's Primary type via
+        the "change type" editor (list_types() includes inline types for
+        that manual picker, unlike select_type()'s own automatic-selection
+        indexes) -- sync must not silently discard a deliberate manual
+        choice back to whatever select_type() would have auto-picked.
+        select_type() itself still never returns an inline type fresh (see
+        _rebuild_match_index), so one can only ever end up "retained" here,
+        never freshly auto-selected.
         """
         lib = self.get_library(library_id)
         if lib is not None and current_type_id:
             current_type = lib.get_type(current_type_id)
             if current_type is not None:
                 kind = getattr(current_type.selection, "kind", SELECTION_KIND_MODEL)
-                # Defense-in-depth: inline types are never assigned as a
-                # Primary component's current_type_id in practice (the UI
-                # never offers them there), but treat them the same as
-                # placeholders here anyway rather than relying solely on
-                # that invariant.
-                if kind not in (SELECTION_KIND_PLACEHOLDER, SELECTION_KIND_INLINE) and lib.matches_type(current_type, request):
+                if kind != SELECTION_KIND_PLACEHOLDER and lib.matches_type(current_type, request):
                     return HVACTypeSelection(
                         library_id=library_id,
                         type_def=current_type,

@@ -281,13 +281,15 @@ def test_list_types_connected_ports_drops_types_that_cannot_cover_the_ports():
     assert [t.id for t in result] == ["through_generic"]
 
 
-def test_list_types_excludes_inline_kind_types_even_via_family_ancestor_match():
+def test_list_types_includes_inline_kind_types_for_manual_primary_selection():
+    # Unlike select_type()'s own automatic-matching indexes, list_types()
+    # (the manual "change type" editor's listing) deliberately includes
+    # inline-kind types -- a user may want to pick a damper/VAV directly as
+    # a junction's Primary type, not just add one as a chained Inline
+    # component (see libraries/README.md "Inline components"). Here
     # through_damper_generic's family ("through.straight.damper") is an
     # ancestor match for a requested family of "through.straight" (see
-    # _family_match), so without an explicit kind=="inline" exclusion it
-    # would leak into the manual "change type" listing even though
-    # applying it as a Primary TypeId doesn't work -- it's selectable only
-    # via list_inline_types() ("Add Inline Component").
+    # _family_match), so it shows up alongside the ordinary model.
     damper = _type_def(
         "through_damper_generic", "junction", family=["through.straight.damper"], topology="through",
         profiles=["Circular"], kind="inline", priority=999,
@@ -299,7 +301,7 @@ def test_list_types_excludes_inline_kind_types_even_via_family_ancestor_match():
     lib = _library_with(damper, model)
 
     result = lib.list_types(category="junction", topology="through", family="through.straight")
-    assert [t.id for t in result] == ["through_straight_generic"]
+    assert {t.id for t in result} == {"through_straight_generic", "through_damper_generic"}
 
 
 # ----------------------------------------------------------------------
@@ -1000,7 +1002,15 @@ def test_select_type_never_returns_an_inline_type():
     assert selection.type_def.id == "m1"
 
 
-def test_resolve_sticky_type_treats_inline_current_type_like_placeholder():
+def test_resolve_sticky_type_retains_manually_chosen_inline_current_type():
+    # A user can deliberately set an inline-kind type (damper/VAV) as a
+    # junction's Primary type via the manual "change type" editor
+    # (list_types() includes inline types for that picker -- see
+    # test_list_types_includes_inline_kind_types_for_manual_primary_selection).
+    # Sync must not silently discard that choice back to whatever
+    # select_type() would auto-pick -- resolve_sticky_type() retains a
+    # compatible inline current type exactly like any other non-placeholder
+    # type.
     inline = _type_def("i1", "junction", ["through.straight"], topology="through",
                         profiles=["Circular"], kind="inline")
     fallback = _type_def("m1", "junction", ["through.straight"], topology="through",
@@ -1010,12 +1020,29 @@ def test_resolve_sticky_type_treats_inline_current_type_like_placeholder():
     reg.register_library(lib)
 
     request = _junction_request("through", "through.straight", "Circular", _ports(2))
-    # An inline type should never end up as a Primary's current_type_id in
-    # practice, but resolve_sticky_type must not treat it as sticky if it
-    # somehow does -- same as a placeholder, always re-evaluated.
+    selection = reg.resolve_sticky_type("lib", "i1", request)
+    assert selection.status == "retained"
+    assert selection.type_def.id == "i1"
+
+
+def test_resolve_sticky_type_reselects_when_inline_current_type_no_longer_compatible():
+    # Retention still requires actual compatibility -- an inline current
+    # type that no longer matches the request re-runs automatic selection
+    # exactly like a model would, and (per select_type()'s own inline
+    # exclusion) can never land back on another inline type.
+    inline = _type_def("i1", "junction", ["through.straight"], topology="through",
+                        profiles=["Circular"], kind="inline")
+    fallback = _type_def("m1", "junction", ["through.straight"], topology="through",
+                          profiles=["Circular"], kind="model")
+    lib = _library_with(inline, fallback)
+    reg = HVACLibraryRegistry()
+    reg.register_library(lib)
+
+    # Rectangular request -- "i1" only declares "Circular".
+    request = _junction_request("through", "through.straight", "Rectangular", _ports(2, "Rectangular"))
     selection = reg.resolve_sticky_type("lib", "i1", request)
     assert selection.status != "retained"
-    assert selection.type_def.id == "m1"
+    assert selection.type_def is None
 
 
 def test_list_inline_types_filters_by_topology_and_profile():
