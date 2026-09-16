@@ -143,11 +143,15 @@ reusing the same `enum`/`minimum`/`maximum`/exclusive-bound operators as
 
 `profile_relation`/`inlet_profile`/`outlet_profile` can be constrained the
 same way, either directly (as shown for `flow_class`) or nested under
-`qualifiers` -- both read from the same classifier-produced qualifier.
-These constraints never expand `HVACMatchKey`: a type-def is still indexed
-purely by (category, topology, family, profile) for the automatic-selection
-lookup, and this extra data only filters candidates *after* that lookup,
-exactly like the existing `degree`/topology/profile checks.
+`qualifiers` -- both read from the same classifier-produced qualifier. Note
+these are classification *qualifiers*, not actual profile names -- a value
+like `profile_relation: "mixed"` describes the shape of the transition
+(e.g. differing inlet/outlet profiles), it's never itself a `profiles`
+entry or an index key. These constraints never expand `HVACMatchKey`: a
+type-def is still indexed purely by (category, topology, family) for the
+automatic-selection lookup, and this extra data (like actual per-port
+profile compatibility) only filters candidates *after* that lookup, exactly
+like the existing `degree`/topology checks.
 
 Every `qualifiers.<key>` and every other top-level key (an implied
 `derived_values` entry) is checked against a fixed, known vocabulary at
@@ -442,12 +446,25 @@ by-reference convention).
 `freecad/HVAC/core/NetworkParser.py` classifies *what* a network item is
 (topology, family, connected-port profiles). It never picks a TypeId. That
 job belongs to `HVACLibraryRegistry` (see `freecad/HVAC/library/Library.py`),
-which matches a `HVACTypeMatchRequest` (category/topology/family/profile,
-derived by `DuctNetwork` sync from the parser's output) against every
-type-def a library declares, and picks one. `DuctNetwork` sync then writes
-the resulting `LibraryId`/`TypeId` onto the segment/junction object;
+which matches a `HVACTypeMatchRequest` (category/topology/family, derived
+by `DuctNetwork` sync from the parser's output) against every type-def a
+library declares, and picks one. `DuctNetwork` sync then writes the
+resulting `LibraryId`/`TypeId` onto the segment/junction object;
 `execute()` only ever does an exact `resolve_type(library_id, type_id)`
 lookup -- it never classifies or matches anything itself.
+
+Profile is deliberately not part of the request's structural index key: a
+junction can have several distinct connected-port profiles at once (e.g. a
+Circular -> Rectangular transition, or a mixed-profile multiport), so a
+single profile string can't correctly key a junction lookup. Every type
+that structurally fits (same category/topology/family) is instead checked
+for profile compatibility individually -- a junction against every
+connected port's own profile (`context["connected_ports"]`), a segment
+against its own single profile (`context["profile"]`) -- via
+`validation.context_violations()`, the same check `matches_type()` already
+used. A segment only ever has one profile, so this reduces to the same
+exact-vs-Generic behavior as before for segments and homogeneous-profile
+junctions.
 
 A type-def opts into this by declaring what it can represent:
 
@@ -506,20 +523,28 @@ anything more specific -- see "Sticky selection".)
 
 ### How automatic matching works (`select_type`)
 
-For a request (category, topology, family, profile), matching tries, in
-order:
-
-1. `kind: "model"`, exact profile match
-2. `kind: "model"`, `"Generic"`-profile match
-3. `kind: "placeholder"`, exact profile match
-4. `kind: "placeholder"`, `"Generic"`-profile match
-
-Within a tier, every candidate is checked against the request's structural
-context (topology, degree/constraints, connected-port profiles) using the
-same rules as `freecad/HVAC/library/validation.py`'s `context_violations()`
--- a candidate that fails degree/topology/profile constraints is dropped
+For a request (category, topology, family), `select_type()` first pulls
+every structurally-indexed candidate (same category/topology/family, see
+`HVACMatchKey`), then checks each one against the request's full context
+(topology, degree/constraints, connected-port profiles) using the same
+rules as `freecad/HVAC/library/validation.py`'s `context_violations()` --
+a candidate that fails degree/topology/profile constraints is dropped
 before ranking, so `matches_type()` and `select_type()` can never disagree
 about whether a given type is eligible for a request.
+
+The surviving, compatible candidates are then ranked into tiers, in order:
+
+1. `kind: "model"`, declares concrete profile(s)
+2. `kind: "model"`, `"Generic"`-profile match
+3. `kind: "placeholder"`, declares concrete profile(s)
+4. `kind: "placeholder"`, `"Generic"`-profile match
+
+A type only reaches tier 1/3 if it's already been confirmed compatible --
+i.e. its declared `profiles` cover every connected port's actual profile,
+even when those ports span more than one profile (e.g. a dedicated
+Circular -> Rectangular transition type with `profiles: ["Circular",
+"Rectangular"]` outranks the broad Generic-profile fallback for a
+mixed-profile transition, the same way it would for a homogeneous one).
 
 **Ranking** picks the highest `selection.priority` within the first
 non-empty, constraint-passing tier. If two or more candidates in that tier

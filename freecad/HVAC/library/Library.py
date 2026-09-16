@@ -183,11 +183,22 @@ class HVACTypeDef:
 
 @dataclass(frozen=True)
 class HVACMatchKey:
-    """Index key for HVACLibrary's per-library match indexes."""
+    """
+    Index key for HVACLibrary's per-library match indexes:
+    (category, topology, family) only -- deliberately no profile.
+
+    A junction can have several different connected-port profiles at once
+    (e.g. a Circular -> Rectangular transition, or a mixed-profile
+    multiport), so there's no single profile value that could ever key a
+    junction lookup correctly. Profile compatibility is instead checked
+    per-candidate, after this structural lookup, by
+    HVACLibrary._compatible() (which calls
+    validation.context_violations() -- the same connected-port-profile
+    check used everywhere else). See HVACLibrary.select_type().
+    """
     category: str
     topology: str
     family: str
-    profile: str
 
 
 @dataclass(frozen=True)
@@ -202,6 +213,14 @@ class HVACTypeMatchRequest:
     second-stage constraint check (junctions: "connected_ports"/"topology";
     segments: "profile") -- topology/profile are auto-filled from this
     request's own fields if the caller didn't already put them in context.
+
+    profile is NOT part of the match index (see HVACMatchKey) -- a junction
+    may have several distinct connected-port profiles at once, so a single
+    profile string can't key a junction lookup. It still matters for
+    segments (a straight/curved run only ever has one profile, carried into
+    context["profile"] for context_violations() to check) and it's kept
+    here as a plain convenience default for that case; junction profile
+    compatibility is authoritative from context["connected_ports"] alone.
     """
     category: str
     topology: str
@@ -271,19 +290,31 @@ class HVACLibrary:
     def _family_match(self, parent, child):
         return child == parent or child.startswith(parent + ".")
 
-    def list_types(self, category=None, topology=None, family=None, profile=None, include_placeholders=True):
+    def list_types(self, category=None, topology=None, family=None, profile=None, connected_ports=None, include_placeholders=True):
         """Types matching the given filters, best-suited first.
 
         Ordered by the same ranking `select_type` uses (see
         freecad/HVAC/libraries/README.md's "Ranking" section): a
         `kind: "model"` type before a `kind: "placeholder"` one; among
-        those, one whose own `profiles` names the requested `profile`
-        exactly before one that only matches it via the "Generic"
-        wildcard (or wasn't filtered by profile at all); then
-        `selection.priority` descending. `id` breaks any remaining tie,
-        only to keep the order deterministic -- it carries no ranking
-        meaning of its own.
+        those, one that declares a concrete profile before one that only
+        matches via the "Generic" wildcard; then `selection.priority`
+        descending. `id` breaks any remaining tie, only to keep the order
+        deterministic -- it carries no ranking meaning of its own.
+
+        `connected_ports`, when given, replaces the plain `profile`
+        membership check below with the same per-port compatibility check
+        select_type() uses (validation.context_violations()). A junction
+        can have several different connected-port profiles at once, so a
+        single `profile` string (e.g. a "Mixed" pseudo-profile read off an
+        already-composed heterogeneous component) can never correctly
+        filter it -- the same reason HVACMatchKey doesn't index on profile
+        either. `profile` alone (no `connected_ports`) still works exactly
+        as before, for callers with only one real profile to filter by
+        (segments, or a homogeneous-profile junction).
         """
+        use_ports = connected_ports is not None
+        ctx = {"connected_ports": list(connected_ports or []), "topology": topology or ""} if use_ports else None
+
         out = []
         for t in self.types_by_id.values():
             if category and t.category != category:
@@ -292,7 +323,10 @@ class HVACLibrary:
                 continue
             if family and not any(self._family_match(family, candidate) for candidate in t.family):
                 continue
-            if profile and t.profiles and profile not in t.profiles:
+            if use_ports:
+                if not validation.is_context_valid(t, ctx):
+                    continue
+            elif profile and t.profiles and profile not in t.profiles:
                 continue
             if not include_placeholders and getattr(t.selection, "kind", SELECTION_KIND_MODEL) == SELECTION_KIND_PLACEHOLDER:
                 continue
@@ -301,8 +335,11 @@ class HVACLibrary:
         def rank_key(t):
             kind = getattr(t.selection, "kind", SELECTION_KIND_MODEL)
             kind_rank = 0 if kind == SELECTION_KIND_MODEL else (1 if kind == SELECTION_KIND_PLACEHOLDER else 2)
-            exact_profile = bool(profile) and bool(t.profiles) and profile in t.profiles
-            profile_rank = 0 if (exact_profile or not profile) else 1
+            if use_ports:
+                profile_rank = 0 if self._declares_concrete_profile(t) else 1
+            else:
+                exact_profile = bool(profile) and bool(t.profiles) and profile in t.profiles
+                profile_rank = 0 if (exact_profile or not profile) else 1
             priority = getattr(t.selection, "priority", 0)
             return (kind_rank, profile_rank, -priority, t.id)
 
@@ -354,10 +391,11 @@ class HVACLibrary:
     def _rebuild_match_index(self):
         """
         Build two lookup tables (real "model" types, and "placeholder"
-        fallback types), keyed by (category, topology, family, profile) so
-        select_type() can jump straight to the candidates for a request
-        instead of scanning every type. A type with no declared profiles is
-        indexed under "Generic" (matches any profile).
+        fallback types), keyed by (category, topology, family) so
+        select_type() can jump straight to the structural candidates for a
+        request instead of scanning every type. Profile compatibility is
+        deliberately NOT part of this key -- see HVACMatchKey -- it's
+        checked per-candidate afterwards, in select_type() itself.
 
         "inline"-kind types (see HVACSelectionDef) are deliberately left out
         of both indexes -- they must never be reachable through automatic
@@ -376,11 +414,9 @@ class HVACLibrary:
                 if kind == SELECTION_KIND_MODEL
                 else self._placeholder_match_index
             )
-            index_profiles = list(t.profiles) if t.profiles else ["Generic"]
             for fam in t.family:
-                for prof in index_profiles:
-                    key = HVACMatchKey(category=t.category, topology=t.topology, family=fam, profile=prof)
-                    target.setdefault(key, []).append(t)
+                key = HVACMatchKey(category=t.category, topology=t.topology, family=fam)
+                target.setdefault(key, []).append(t)
 
         self._index_dirty = False
 
@@ -406,17 +442,29 @@ class HVACLibrary:
     # Automatic / compatibility matching
     # ------------------------------------------------------------------
 
-    def _index_candidates(self, index, request: HVACTypeMatchRequest):
-        """Return (exact_profile_candidates, generic_profile_candidates)."""
-        exact_key = HVACMatchKey(request.category, request.topology, request.family, request.profile)
-        exact = list(index.get(exact_key, []))
+    def _structural_candidates(self, index, request: HVACTypeMatchRequest):
+        """All types indexed under this request's (category, topology, family) -- unfiltered by profile."""
+        key = HVACMatchKey(request.category, request.topology, request.family)
+        return list(index.get(key, []))
 
-        generic = []
-        if request.profile != "Generic":
-            generic_key = HVACMatchKey(request.category, request.topology, request.family, "Generic")
-            generic = list(index.get(generic_key, []))
+    @staticmethod
+    def _declares_concrete_profile(type_def: HVACTypeDef):
+        """
+        True if this type declares real, specific profiles (e.g.
+        ["Circular", "Rectangular"]) rather than the "Generic" wildcard (or
+        no profiles at all, treated the same as "Generic" -- see
+        validation.py/libraries/README.md).
 
-        return exact, generic
+        Used to rank a concrete-profile type ahead of a Generic-profile one
+        among candidates that already passed _compatible() -- i.e. that
+        already cover every connected port's actual profile. This replaces
+        the old exact/generic index-key split, and works even when a
+        junction's connected ports span more than one profile (a concrete
+        type covering e.g. both "Circular" and "Rectangular" still ranks
+        above a Generic one for a mixed-profile request).
+        """
+        profiles = set(type_def.profiles or [])
+        return bool(profiles) and "Generic" not in profiles
 
     def _compatible(self, type_def: HVACTypeDef, request: HVACTypeMatchRequest):
         if type_def.category != request.category:
@@ -451,10 +499,19 @@ class HVACLibrary:
         """
         Choose the best compatible type for `request` in this library.
 
-        Tiers, in priority order (see freecad/HVAC/libraries/README.md):
-            1. model,       exact profile match
+        Structural candidates (same category/topology/family) are pulled
+        from the index in one shot -- see HVACMatchKey -- then filtered
+        down to the ones actually compatible with this request via
+        _compatible() (which validates connected-port profiles for a
+        junction, or context["profile"] for a segment, via
+        validation.context_violations() -- the single authoritative
+        profile-compatibility check, not duplicated here).
+
+        Compatible candidates are then split into tiers, in priority order
+        (see freecad/HVAC/libraries/README.md):
+            1. model,       declares concrete profile(s)
             2. model,       Generic-profile (wildcard) match
-            3. placeholder, exact profile match
+            3. placeholder, declares concrete profile(s)
             4. placeholder, Generic-profile match
 
         Within a tier, selection.priority breaks ties; a genuine tie (equal
@@ -465,14 +522,20 @@ class HVACLibrary:
         """
         self._ensure_match_index()
 
-        model_exact, model_generic = self._index_candidates(self.model_match_index, request)
-        ph_exact, ph_generic = self._index_candidates(self.placeholder_match_index, request)
+        model_compatible = [
+            t for t in self._structural_candidates(self.model_match_index, request)
+            if self._compatible(t, request)
+        ]
+        ph_compatible = [
+            t for t in self._structural_candidates(self.placeholder_match_index, request)
+            if self._compatible(t, request)
+        ]
 
         tiers = (
-            ([t for t in model_exact if self._compatible(t, request)], "exact"),
-            ([t for t in model_generic if self._compatible(t, request)], "generic_profile"),
-            ([t for t in ph_exact if self._compatible(t, request)], "placeholder"),
-            ([t for t in ph_generic if self._compatible(t, request)], "placeholder"),
+            ([t for t in model_compatible if self._declares_concrete_profile(t)], "exact"),
+            ([t for t in model_compatible if not self._declares_concrete_profile(t)], "generic_profile"),
+            ([t for t in ph_compatible if self._declares_concrete_profile(t)], "placeholder"),
+            ([t for t in ph_compatible if not self._declares_concrete_profile(t)], "placeholder"),
         )
 
         for candidates, status in tiers:

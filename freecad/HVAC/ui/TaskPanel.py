@@ -759,18 +759,34 @@ class TaskPanelTypeEditor:
             # For a junction's Primary/Inline DuctComponent, Family is a
             # junction-level classifier concept (not the component's own --
             # see Component.py), so resolve it off the parent junction via
-            # ParentJunctionName. Profile is the component's own
-            # composer-derived local profile.
+            # ParentJunctionName. A component's own Profile can collapse
+            # several distinct connected-port profiles into a single
+            # "Mixed" label (see HVACLibraryService.match_profile_from_ports),
+            # which can never correctly filter a type by plain membership
+            # (no type declares a literal "Mixed" profile) -- pull the
+            # parent junction's own connected_ports instead, same as
+            # automatic selection does, so list_types() can check each
+            # port's real profile individually.
             family = getattr(ref, "Family", "")
-            if not family and hvaclib.isDuctComponent(ref):
+            parent = None
+            if hvaclib.isDuctComponent(ref):
                 parent_name = getattr(ref, "ParentJunctionName", "")
                 parent = ref.Document.getObject(parent_name) if parent_name else None
-                family = getattr(parent, "Family", "") if parent is not None else ""
-            profile = getattr(ref, "Profile", "")
+                if not family:
+                    family = getattr(parent, "Family", "") if parent is not None else ""
+
+            connected_ports = None
+            if parent is not None:
+                try:
+                    analysis = json.loads(getattr(parent, "AnalysisJson", "") or "{}")
+                except Exception:
+                    analysis = {}
+                connected_ports = list(analysis.get("connected_ports", []) or [])
+
             type_defs = lib.list_types(
                 category="junction",
                 family=family if family else None,
-                profile=profile if profile else None,
+                connected_ports=connected_ports,
             )
 
         for tdef in type_defs:

@@ -151,7 +151,11 @@ def test_invalid_selection_kind_raises(tmp_path):
 # Indexing
 # ----------------------------------------------------------------------
 
-def test_model_match_index_expands_multiple_families_and_profiles():
+def test_model_match_index_expands_multiple_families_not_profiles():
+    # The index key is (category, topology, family) only -- see
+    # HVACMatchKey. A type with several declared profiles is indexed once
+    # per family entry, not once per (family, profile) pair; profile
+    # compatibility is checked later, per-candidate, by select_type().
     t = _type_def(
         "branch_tee_generic", "junction",
         family=["branch.tee", "branch.tee.3d"],
@@ -162,30 +166,35 @@ def test_model_match_index_expands_multiple_families_and_profiles():
 
     index = lib.model_match_index
     for fam in ("branch.tee", "branch.tee.3d"):
-        for prof in ("Circular", "Rectangular"):
-            key = [k for k in index if k.family == fam and k.profile == prof]
-            assert len(key) == 1
-            assert index[key[0]] == [t]
+        key = [k for k in index if k.family == fam]
+        assert len(key) == 1
+        assert index[key[0]] == [t]
 
 
-def test_generic_profile_indexed_as_wildcard():
+def test_generic_profile_type_is_indexed_by_structure_only():
+    # A Generic-profile placeholder is indexed the same way as any other
+    # type -- by (category, topology, family) -- profile plays no part in
+    # the index itself, only in select_type()'s later ranking.
     t = _type_def("through_marker", "junction", family=["through.bend"], topology="through", profiles=["Generic"], kind="placeholder")
     lib = _library_with(t)
 
     index = lib.placeholder_match_index
-    matches = [k for k in index if k.family == "through.bend" and k.profile == "Generic"]
+    matches = [k for k in index if k.family == "through.bend"]
     assert len(matches) == 1
+    assert index[matches[0]] == [t]
 
 
-def test_empty_profiles_list_indexed_as_generic_wildcard_too():
+def test_empty_profiles_list_still_indexed_by_structure_only():
     # Existing repo semantics: profiles=[] is profile-independent, same as
-    # ["Generic"] -- see validation.py / libraries/README.md.
+    # ["Generic"] -- see validation.py / libraries/README.md. It doesn't
+    # change how the type is indexed (still keyed by structure only).
     t = _type_def("multiport_generic", "junction", family=["multiport.multiport"], topology="multiport", profiles=[])
     lib = _library_with(t)
 
     index = lib.model_match_index
-    matches = [k for k in index if k.family == "multiport.multiport" and k.profile == "Generic"]
+    matches = [k for k in index if k.family == "multiport.multiport"]
     assert len(matches) == 1
+    assert index[matches[0]] == [t]
 
 
 def test_indexes_isolated_per_library():
@@ -210,6 +219,66 @@ def test_reindex_after_add_type_reflects_new_type_not_stale():
 
     ids = {tt.id for cands in lib.model_match_index.values() for tt in cands}
     assert ids == {"new_type"}
+
+
+# ----------------------------------------------------------------------
+# list_types(): the manual "change type" UI (TaskPanel.TaskPanelTypeEditor)
+# and HVACLibraryService.all_type_defs_for_object() both call this with a
+# junction's connected_ports rather than a single profile string, since a
+# component's own Profile can collapse several distinct connected-port
+# profiles into one "Mixed" label that no type ever literally declares.
+# ----------------------------------------------------------------------
+
+def test_list_types_plain_profile_still_filters_by_membership():
+    # No connected_ports given -- unchanged, pre-existing behavior.
+    circular = _type_def("circular_straight", "segment", family=["straight_segment"], profiles=["Circular"])
+    rectangular = _type_def("rectangular_straight", "segment", family=["straight_segment"], profiles=["Rectangular"])
+    lib = _library_with(circular, rectangular)
+
+    result = lib.list_types(category="segment", profile="Circular")
+    assert [t.id for t in result] == ["circular_straight"]
+
+
+def test_list_types_mixed_profile_connected_ports_does_not_exclude_every_type():
+    # This is the bug a plain profile="Mixed" string used to cause: every
+    # type's own `profiles` list never literally contains "Mixed", so the
+    # old membership check dropped every candidate, including the Generic
+    # fallback -- leaving the manual "change type" dropdown empty.
+    concrete = _type_def(
+        "through_transition_angled", "junction", family=["through.transition"], topology="through",
+        profiles=["Circular", "Rectangular", "Oval"], priority=50,
+    )
+    generic = _type_def(
+        "through_generic", "junction", family=["through.transition"], topology="through",
+        profiles=["Generic"], priority=10,
+    )
+    lib = _library_with(concrete, generic)
+
+    mixed_ports = [{"profile": "Circular"}, {"profile": "Rectangular"}]
+    result = lib.list_types(category="junction", topology="through", connected_ports=mixed_ports)
+
+    assert [t.id for t in result] == ["through_transition_angled", "through_generic"]
+
+
+def test_list_types_connected_ports_drops_types_that_cannot_cover_the_ports():
+    # A type declaring only "Rectangular" must not be offered for a
+    # Circular/Oval mixed-profile junction -- connected_ports still
+    # filters, it just checks each port's real profile instead of a single
+    # collapsed string.
+    rectangular_only = _type_def(
+        "through_elbow_rectangular", "junction", family=["through.bend"], topology="through",
+        profiles=["Rectangular"], priority=100,
+    )
+    generic = _type_def(
+        "through_generic", "junction", family=["through.bend"], topology="through",
+        profiles=["Generic"], priority=10,
+    )
+    lib = _library_with(rectangular_only, generic)
+
+    mixed_ports = [{"profile": "Circular"}, {"profile": "Oval"}]
+    result = lib.list_types(category="junction", topology="through", connected_ports=mixed_ports)
+
+    assert [t.id for t in result] == ["through_generic"]
 
 
 # ----------------------------------------------------------------------
@@ -631,19 +700,50 @@ def _load_bundled_registry():
 
 
 def test_bundled_libraries_have_no_unresolved_priority_ties():
+    # An index bucket (category, topology, family) can legitimately hold
+    # several same-priority concrete-profile types side by side now (e.g.
+    # circular_straight/rectangular_straight/oval_straight all share one
+    # "straight_segment" bucket) -- they're never actually ambiguous for a
+    # real request as long as they don't advertise any of the same profile,
+    # since select_type() only ever compares candidates that both passed
+    # per-port/segment profile compatibility for that request. So: check
+    # for a genuine priority tie only among candidates that share at least
+    # one profile (Generic-profile candidates always "share" with each
+    # other, since they accept every request in the bucket).
     reg = _load_bundled_registry()
     for lib in reg.list_libraries():
         for index in (lib.model_match_index, lib.placeholder_match_index):
             for key, candidates in index.items():
                 if len(candidates) < 2:
                     continue
-                max_priority = max(c.selection.priority for c in candidates)
-                top = [c for c in candidates if c.selection.priority == max_priority]
-                assert len(top) == 1, (
-                    "Ambiguous automatic selection in library '{}' for {}: {} tie at priority {}".format(
-                        lib.id, key, sorted(c.id for c in top), max_priority
+
+                generic = [c for c in candidates if not lib._declares_concrete_profile(c)]
+                concrete = [c for c in candidates if lib._declares_concrete_profile(c)]
+
+                def _assert_no_tie(group, label):
+                    if len(group) < 2:
+                        return
+                    max_priority = max(c.selection.priority for c in group)
+                    top = [c for c in group if c.selection.priority == max_priority]
+                    assert len(top) == 1, (
+                        "Ambiguous automatic selection in library '{}' for {} ({}): {} tie at priority {}".format(
+                            lib.id, key, label, sorted(c.id for c in top), max_priority
+                        )
                     )
-                )
+
+                _assert_no_tie(generic, "Generic-profile")
+
+                # Concrete candidates only really compete for a request
+                # that shares one of their declared profiles -- group by
+                # each profile value seen, and check ties within each group
+                # (any pairwise profile overlap is caught this way, since a
+                # shared profile always shows up in at least one such group).
+                profiles_seen = set()
+                for c in concrete:
+                    profiles_seen.update(c.profiles or [])
+                for profile in profiles_seen:
+                    group = [c for c in concrete if profile in (c.profiles or [])]
+                    _assert_no_tie(group, "profile={!r}".format(profile))
 
 
 def test_bundled_builtin_basic_branch_tee_prefers_specific_tee_model():
@@ -714,25 +814,37 @@ def test_bundled_manual_end_diffuser_selection_stays_sticky():
 
 
 # ----------------------------------------------------------------------
-# Mixed-profile branch/cross/multiport fall back to the broad Generic-
-# profile model (not the invisible marker) -- branch_generic (builtin_basic)
-# / branch_wye_generic (smacna) / cross_generic / multiport_generic all
-# advertise "Generic" alongside their concrete profiles, mirroring how
-# through_generic already covers "through". This matters because a
-# placeholder selection here would silently drop to AirflowSolver's generic
-# K_DEFAULT fallback instead of a real, type-specific loss coefficient.
+# Mixed-profile branch/cross/multiport must never fall to the invisible
+# placeholder marker -- and, since matching no longer keys candidates by a
+# single pseudo "Mixed" profile string (see HVACMatchKey), a mixed-profile
+# request now reaches a dedicated concrete-profile model whenever one
+# structurally covers every connected port's own profile (per
+# validation.context_violations()'s existing per-port check), the same way
+# it already would for a homogeneous request -- it's no longer forced past
+# every concrete candidate straight to the broad Generic-profile catch-all.
+# Where a library has no dedicated model covering the actual profile mix
+# (cross/multiport here), the broad Generic-profile model
+# (cross_generic/multiport_generic) is still the correct landing spot, not
+# the marker -- this matters because a placeholder selection would silently
+# drop to AirflowSolver's generic K_DEFAULT fallback instead of a real,
+# type-specific loss coefficient.
 # ----------------------------------------------------------------------
 
 def _mixed_ports(n, extra_profile="Rectangular"):
     return _ports(n - 1, "Circular") + [{"profile": extra_profile}]
 
 
-def test_bundled_builtin_basic_mixed_profile_branch_uses_generic_model_not_marker():
+def test_bundled_builtin_basic_mixed_profile_branch_reaches_dedicated_tee_model():
+    # branch_tee_radius declares profiles=["Circular", "Rectangular",
+    # "Oval"] (no "Generic") and structurally covers every port in this
+    # mixed Circular/Rectangular tee, so it now wins outright -- a real,
+    # type-specific loss coefficient beats even the broad Generic-profile
+    # branch_generic fallback, exactly like a homogeneous-profile request.
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.tee", "Mixed", _mixed_ports(3))
     selection = reg.select_type("builtin_basic", request, strict=True)
-    assert selection.status == "generic_profile"
-    assert selection.type_def.id == "branch_generic"
+    assert selection.status == "exact"
+    assert selection.type_def.id == "branch_tee_radius"
 
 
 def test_bundled_builtin_basic_mixed_profile_cross_uses_generic_model_not_marker():
@@ -749,6 +861,50 @@ def test_bundled_builtin_basic_mixed_profile_multiport_uses_generic_model_not_ma
     selection = reg.select_type("builtin_basic", request, strict=True)
     assert selection.status == "generic_profile"
     assert selection.type_def.id == "multiport_generic"
+
+
+# ----------------------------------------------------------------------
+# Circular -> Rectangular (and other cross-profile) transitions: since
+# matching no longer indexes on a single profile, a 2-port through.transition
+# node with two different connected-port profiles now reaches the library's
+# dedicated transition model instead of being routed past it straight to the
+# broad through_generic fallback -- see HVACMatchKey/select_type().
+# ----------------------------------------------------------------------
+
+def test_bundled_smacna_circular_to_rectangular_transition_reaches_dedicated_model():
+    reg = _load_bundled_registry()
+    ports = [{"profile": "Circular"}, {"profile": "Rectangular"}]
+    request = _junction_request("through", "through.transition", "Mixed", ports)
+    selection = reg.select_type("smacna", request, strict=True)
+    assert selection.status == "exact"
+    assert selection.type_def.id == "through_transition_generic"
+
+
+def test_bundled_builtin_basic_circular_to_rectangular_transition_reaches_dedicated_model():
+    reg = _load_bundled_registry()
+    ports = [{"profile": "Circular"}, {"profile": "Rectangular"}]
+    request = _junction_request("through", "through.transition", "Mixed", ports)
+    selection = reg.select_type("builtin_basic", request, strict=True)
+    assert selection.status == "exact"
+    # through_transition_angled (priority 50) beats through_transition_mitered
+    # (45) and through_transition_radiussed (40) -- same priority ordering as
+    # a homogeneous-profile transition would use.
+    assert selection.type_def.id == "through_transition_angled"
+
+
+def test_bundled_generic_fallback_still_used_when_no_concrete_type_covers_profile():
+    # No shipped transition model declares a "CustomShape" profile, so even
+    # though matching no longer requires an exact index-key hit, the
+    # structural candidates for through.transition all fail their per-port
+    # profile check -- automatic selection correctly falls through to the
+    # library's broad Generic-profile through_generic model.
+    reg = _load_bundled_registry()
+    ports = [{"profile": "CustomShape"}, {"profile": "CustomShape"}]
+    request = _junction_request("through", "through.transition", "CustomShape", ports)
+    for lib_id in ("smacna", "builtin_basic"):
+        selection = reg.select_type(lib_id, request, strict=True)
+        assert selection.status == "generic_profile"
+        assert selection.type_def.id == "through_generic"
 
 
 def test_bundled_smacna_mixed_profile_branch_uses_generic_model_not_marker():

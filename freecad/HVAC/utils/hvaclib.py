@@ -243,16 +243,28 @@ class HVACLibraryService:
             return lib.list_types(category="segment")
 
         if isDuctComponent(obj):
-            # A component's own Profile is derived/read-only, but topology
-            # is a junction-level concept -- read it off the parent.
+            # Topology is a junction-level concept -- read it off the
+            # parent. A component's own Profile can collapse several
+            # distinct connected-port profiles into a single "Mixed" label
+            # (see match_profile_from_ports), which can never correctly
+            # filter a type by plain membership (no type declares a
+            # literal "Mixed" profile) -- pass the parent's own
+            # connected_ports instead, so list_types() checks each port's
+            # real profile individually, the same way select_type() does.
             parent_name = getattr(obj, "ParentJunctionName", "")
             parent = obj.Document.getObject(parent_name) if parent_name else None
             topology = getattr(parent, "Topology", "") if parent is not None else ""
-            profile = getattr(obj, "Profile", "")
+            connected_ports = None
+            if parent is not None:
+                try:
+                    analysis = json.loads(getattr(parent, "AnalysisJson", "") or "{}")
+                except Exception:
+                    analysis = {}
+                connected_ports = list(analysis.get("connected_ports", []) or [])
             return lib.list_types(
                 category="junction",
                 topology=topology or None,
-                profile=profile or None,
+                connected_ports=connected_ports,
             )
 
         return []
