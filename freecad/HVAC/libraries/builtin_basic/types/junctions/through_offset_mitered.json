@@ -1,0 +1,36 @@
+{
+  "id": "through_offset_mitered",
+  "label": "Offset - Mitered",
+  "category": "junction",
+  "topology": "through",
+  "family": ["through.offset"],
+  "profiles": ["Circular", "Rectangular", "Oval"],
+  "selection": {
+    "kind": "model",
+    "priority": 45
+  },
+  "constraints": {
+    "degree": 2
+  },
+  "properties": [
+    {
+      "name": "TransitionLength",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Offset body length",
+      "default": 300.0
+    }
+  ],
+  "generator": {
+    "module": "junctions",
+    "function": "build_transition_mitered"
+  },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_transition_mitered"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_offset_generic"
+  }
+}

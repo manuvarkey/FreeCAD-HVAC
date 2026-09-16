@@ -213,6 +213,77 @@ class HVACLossAPI:
             return HVACLossAPI._unsupported("unexpected error computing transition loss: {}".format(exc))
 
     @staticmethod
+    def offset_loss(context):
+        """
+        Lateral-offset (jog) fitting loss: a same-size collinear pair whose
+        axes are transversely displaced -- the "through.offset" case (see
+        TOPOLOGY_CLASSIFICATION.md), as opposed to transition_loss's area
+        change. Expects exactly 2 connected_ports and a "TransitionLength"
+        entry in properties (the offset body's own axial length, shared with
+        through.transition's angled/mitered/radiussed builders).
+
+        Modelled as two corner deflections in series, each at the fitting's
+        own turn angle (HVACLibraryAPI.offset_transition_axis), using
+        SMACNA's generic-angle mitered-elbow tables (A7C/A7D) -- unlike the
+        90-deg-only smooth-radius tables (elbow_zeta_round/rect), these are
+        indexed by angle directly, which an offset's shallow corners need.
+        A "TransitionRadius" entry in properties (the radiussed corner
+        style) still borrows the mitered coefficient, since SMACNA has no
+        generic-angle smooth-radius table -- that case comes back as
+        APPROXIMATION rather than EXACT.
+        """
+        try:
+            ports = HVACLibraryAPI.connected_ports(context)
+            if len(ports) != 2:
+                return HVACLossAPI._unsupported(
+                    "expected exactly 2 connected ports, found {}".format(len(ports))
+                )
+            outlet = next((p for p in ports if p.get("flow_into_junction") is False), None)
+            if outlet is None:
+                return HVACLossAPI._unsupported("could not resolve outlet direction")
+            inlet = next((p for p in ports if p is not outlet), None)
+
+            properties = context.get("properties") or {}
+            length_mm = float(properties.get("TransitionLength", 0.0) or 0.0)
+            if length_mm <= 0.0:
+                return HVACLossAPI._unsupported("invalid TransitionLength")
+
+            axis = HVACLibraryAPI.offset_transition_axis(ports[0], ports[1], length_mm)
+            theta_deg = math.degrees(axis["turn_angle"])
+            if theta_deg <= 1e-6:
+                return HVACLossAPI._exact(
+                    [HVACLossAPI._leg_path(outlet, inlet["edge_key"], 0.0, source="smacna_offset")]
+                )
+
+            profile = HVACLibraryAPI.port_profile(outlet)
+            if profile == "Circular":
+                corner_zeta = smacna_loss.elbow_zeta_round_mitered(theta_deg)
+            elif profile == "Rectangular":
+                width = HVACLibraryAPI.port_width(outlet)
+                height = HVACLibraryAPI.port_height(outlet)
+                if width <= 0.0 or height <= 0.0:
+                    return HVACLossAPI._unsupported("invalid width/height")
+                corner_zeta = smacna_loss.elbow_zeta_rect_mitered(height / width, theta_deg)
+            else:
+                return HVACLossAPI._unsupported("no offset table for profile '{}'".format(profile))
+
+            path = HVACLossAPI._leg_path(
+                outlet, inlet["edge_key"], 2.0 * corner_zeta, source="smacna_offset"
+            )
+            if "TransitionRadius" in properties:
+                return HVACLossAPI._approximation(
+                    [path],
+                    warning=(
+                        "radiused-corner offset loss approximated via SMACNA A7C/A7D "
+                        "mitered-elbow coefficients; SMACNA has no generic-angle "
+                        "smooth-radius elbow table"
+                    ),
+                )
+            return HVACLossAPI._exact([path])
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing offset loss: {}".format(exc))
+
+    @staticmethod
     def _leg_angle_deg(leg_dir, reference_dir):
         """
         Angle (degrees) a leg makes against a reference leg, given both as

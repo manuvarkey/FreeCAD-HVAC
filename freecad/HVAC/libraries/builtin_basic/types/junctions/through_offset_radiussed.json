@@ -1,0 +1,43 @@
+{
+  "id": "through_offset_radiussed",
+  "label": "Offset - Radiussed",
+  "category": "junction",
+  "topology": "through",
+  "family": ["through.offset"],
+  "profiles": ["Circular", "Rectangular", "Oval"],
+  "selection": {
+    "kind": "model",
+    "priority": 40
+  },
+  "constraints": {
+    "degree": 2
+  },
+  "properties": [
+    {
+      "name": "TransitionLength",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Offset body length",
+      "default": 300.0
+    },
+    {
+      "name": "TransitionRadius",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Offset corner radius",
+      "default": 50.0
+    }
+  ],
+  "generator": {
+    "module": "junctions",
+    "function": "build_transition_radiussed"
+  },
+  "connection_lengths": {
+    "module": "junctions",
+    "function": "measure_transition_radiussed"
+  },
+  "loss": {
+    "module": "junction_losses",
+    "function": "loss_offset_generic"
+  }
+}

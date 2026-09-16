@@ -164,6 +164,45 @@ def elbow_zeta_rect(h_on_w, r_on_w, reynolds):
 
 
 # ----------------------------------------------------------------------------
+# Mitered elbows, generic angle (SMACNA A7C / A7D)
+#
+# Unlike A7A/A7F above (smooth-radius, fixed at 90 deg), these tables are
+# indexed by turn angle directly, which is what a lateral-offset fitting's
+# two corners actually need -- an offset's corner deflection is set by its
+# own body length/lateral spread (HVACLibraryAPI.offset_transition_axis),
+# essentially never 90 deg.
+# ----------------------------------------------------------------------------
+
+_ELBOW_MITERED_ROUND_THETA = [20.0, 30.0, 45.0, 60.0, 75.0, 90.0]
+_ELBOW_MITERED_ROUND_ZETA = [0.08, 0.16, 0.34, 0.55, 0.81, 1.2]
+
+
+def elbow_zeta_round_mitered(theta_deg):
+    """Mitered (sharp-cornered) round elbow at an arbitrary turn angle. SMACNA A7C."""
+    return _interp1d(theta_deg, _ELBOW_MITERED_ROUND_THETA, _ELBOW_MITERED_ROUND_ZETA)
+
+
+_ELBOW_MITERED_RECT_H_ON_W = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0, 6.0, 8.0]
+_ELBOW_MITERED_RECT_THETA = [20.0, 30.0, 45.0, 60.0, 75.0, 90.0]
+_ELBOW_MITERED_RECT_ZETA = [
+    [0.08, 0.08, 0.08, 0.07, 0.07, 0.07, 0.06, 0.05, 0.05],
+    [0.18, 0.17, 0.17, 0.16, 0.15, 0.15, 0.13, 0.12, 0.11],
+    [0.38, 0.37, 0.36, 0.34, 0.33, 0.31, 0.27, 0.25, 0.24],
+    [0.60, 0.59, 0.57, 0.55, 0.52, 0.49, 0.43, 0.39, 0.38],
+    [0.89, 0.87, 0.84, 0.81, 0.77, 0.73, 0.63, 0.58, 0.57],
+    [1.30, 1.30, 1.20, 1.20, 1.10, 1.10, 0.92, 0.85, 0.83],
+]
+
+
+def elbow_zeta_rect_mitered(h_on_w, theta_deg):
+    """
+    Mitered (sharp-cornered) rectangular elbow at an arbitrary turn angle.
+    h_on_w = duct height / width. SMACNA A7D.
+    """
+    return _interp2d(h_on_w, theta_deg, _ELBOW_MITERED_RECT_H_ON_W, _ELBOW_MITERED_RECT_THETA, _ELBOW_MITERED_RECT_ZETA)
+
+
+# ----------------------------------------------------------------------------
 # Transitions (SMACNA A8A / A8B / A9A)
 # ----------------------------------------------------------------------------
 

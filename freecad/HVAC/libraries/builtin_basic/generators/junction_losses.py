@@ -72,6 +72,10 @@ def loss_transition_generic(context):
     return context["loss_api"].transition_loss(context)
 
 
+def loss_offset_generic(context):
+    return context["loss_api"].offset_loss(context)
+
+
 def loss_tee_generic(context):
     return context["loss_api"].branch_loss(context)
 
