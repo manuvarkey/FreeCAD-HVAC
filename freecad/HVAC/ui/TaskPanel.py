@@ -787,6 +787,7 @@ class TaskPanelTypeEditor:
                 category="junction",
                 family=family if family else None,
                 connected_ports=connected_ports,
+                include_placeholders=False,
             )
 
         for tdef in type_defs:
