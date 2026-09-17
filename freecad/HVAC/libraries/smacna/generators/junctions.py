@@ -23,6 +23,13 @@ def _trimmed(api, port, length):
     return api.copy_port(port, position=api.port_position(port) + api.port_direction(port) * float(length))
 
 
+def _port_axis_point(api, port, point):
+    """Project a point onto the infinite axis defined by a port."""
+    position = api.port_position(port)
+    direction = api.unit(api.port_direction(port))
+    return position + direction * ((api.vec(point) - position).dot(direction))
+
+
 def _loft(api, ports, offset=0.0, ruled=True):
     return api.loft([api.profile_from_port(port, offset) for port in ports], solid=True, ruled=ruled)
 
@@ -220,7 +227,7 @@ def build_vav_generic(context):
     return _inline(context, 1.0, 300.0)
 
 
-def _star_layered(context, factor):
+def _star_layered(context, factor, align_branch=False):
     api = context["hvac_api"]
     ports = api.connected_ports(context)
     if len(ports) < 3:
@@ -228,14 +235,31 @@ def _star_layered(context, factor):
     p = _props(context)
     thickness = float(p.get("Thickness", 0.8) or 0.0)
     center = sum((api.port_position(port) for port in ports), api.vec((0, 0, 0))) / len(ports)
+    branch = None
+    if align_branch:
+        pairs = api.collinear_port_index_pairs(context)
+        if not pairs:
+            raise ValueError("Could not identify tee run pair")
+        run_a, run_b = pairs[0]
+        branch_index = next(i for i in range(len(ports)) if i not in (run_a, run_b))
+        branch = ports[branch_index]
+        center = api.center_from_context(context)
     trim = _positive(p.get("JunctionLength", p.get("TrimLength")), factor * max(_size(api, port) for port in ports))
     ends = [_trimmed(api, port, trim) for port in ports]
 
     def build_envelope(offset):
         legs = []
-        for end in ends:
-            center_port = api.copy_port(end, position=center, direction=api.port_direction(end) * -1.0)
-            legs.append(_loft(api, [end, center_port], offset, ruled=True))
+        for port, end in zip(ports, ends):
+            inner_position = _port_axis_point(api, port, center) if port is branch else center
+            center_port = api.copy_port(end, position=inner_position, direction=api.port_direction(end) * -1.0)
+            leg = _loft(api, [end, center_port], offset, ruled=True)
+            if port is branch:
+                leg = api.clip_plane(
+                    leg,
+                    (center, api.port_direction(branch)),
+                    side="positive",
+                )
+            legs.append(leg)
         return api.fuse(*legs)
 
     result = api.build_layered_geometry(build_envelope, context["construction_layers"], p)
@@ -246,7 +270,7 @@ def _star_layered(context, factor):
 
 
 def build_tee(context):
-    return _star_layered(context, 0.60)
+    return _star_layered(context, 0.60, align_branch=True)
 
 
 def build_wye(context):

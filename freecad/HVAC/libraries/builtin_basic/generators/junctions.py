@@ -45,6 +45,22 @@ def _trimmed(api, port, length):
     )
 
 
+def _port_axis_point(api, port, point):
+    """Project a point onto the infinite axis defined by a port."""
+    position = api.port_position(port)
+    direction = api.unit(api.port_direction(port))
+    return position + direction * ((api.vec(point) - position).dot(direction))
+
+
+def _clip_branch_at_trunk_center(api, shape, trunk_center, branch):
+    """Keep the branch-facing half of a stub at the trunk center plane."""
+    return api.clip_plane(
+        shape,
+        (trunk_center, api.port_direction(branch)),
+        side='positive',
+    )
+
+
 def _loft(api, ports, offset=0.0, ruled=True):
     return api.loft([api.profile_from_port(p, offset) for p in ports], solid=True, ruled=ruled)
 
@@ -686,18 +702,30 @@ def measure_star_junction(context, default_factor=0.6):
     return api.build_trim_rec_from_port_lengths([(port, trim) for port in ports])
 
 
-def _star_junction(context, default_factor=0.6):
+def _star_junction(context, default_factor=0.6, align_branch=False):
     api = context["hvac_api"]
     ports, center, trim = _star_junction_layout(context, default_factor)
+    branch = None
+    if align_branch:
+        pairs = api.collinear_port_index_pairs(context)
+        if pairs:
+            run_a, run_b = pairs[0]
+            branch_index = next(i for i in range(len(ports)) if i not in (run_a, run_b))
+            branch = ports[branch_index]
+            center = api.center_from_context(context)
     trimmed = [_trimmed(api, port, trim) for port in ports]
     legs = []
-    for port in trimmed:
+    for source_port, port in zip(ports, trimmed):
+        inner_position = _port_axis_point(api, source_port, center) if source_port is branch else center
         center_port = api.copy_port(
             port,
-            position=center,
+            position=inner_position,
             direction=api.port_direction(port) * -1.0,
         )
-        legs.append(_loft(api, [port, center_port], 0.0, ruled=True))
+        leg = _loft(api, [port, center_port], 0.0, ruled=True)
+        if source_port is branch:
+            leg = _clip_branch_at_trunk_center(api, leg, center, branch)
+        legs.append(leg)
     return {
         "shape": api.refine(api.fuse(*legs)),
         "connection_lengths": api.build_trim_rec_from_port_lengths([(port, trim) for port in ports]),
@@ -768,15 +796,19 @@ def _clip_junction_to_body(api, shape, center, ports, trims):
     return shape
 
 
-def _star_body(api, center, ports, trims, minimums):
+def _star_body(api, center, ports, trims, minimums, branch=None):
     """Build robust straight-legged junction geometry with controlled overlap."""
     legs = []
     for port, trim, minimum in zip(ports, trims, minimums):
         direction = api.unit(api.port_direction(port))
         end = _trimmed(api, port, trim)
         embed = max(0.10 * minimum, 1.0)
-        inner = api.copy_port(port, position=center - direction * embed)
-        legs.append(_loft(api, [end, inner], 0.0, ruled=True))
+        inner_center = _port_axis_point(api, port, center) if port is branch else center
+        inner = api.copy_port(port, position=inner_center - direction * embed)
+        leg = _loft(api, [end, inner], 0.0, ruled=True)
+        if port is branch:
+            leg = _clip_branch_at_trunk_center(api, leg, center, branch)
+        legs.append(leg)
     shape = api.fuse(*legs)
     return _clip_junction_to_body(api, shape, center, ports, trims)
 
@@ -793,12 +825,13 @@ def _tap_geometry(context, api, run_a, run_b, branch):
         raise ValueError("Tap requires a non-degenerate branch/run angle")
     toe_dir = api.unit(toe_dir)
 
-    branch_center = api.copy_port(branch, position=trunk_center)
+    branch_axis_center = _port_axis_point(api, branch, trunk_center)
+    branch_center = api.copy_port(branch, position=branch_axis_center)
     branch_profile = api.profile_from_port(branch_center)
     branch_min, branch_max = api.profile_projection_bounds(branch_profile, toe_dir)
     branch_width = max(branch_max - branch_min, 1.0)
 
-    center_projection = trunk_center.dot(branch_dir)
+    center_projection = branch_axis_center.dot(branch_dir)
     near_projection = None
     far_projection = None
     for run_port in (run_a, run_b):
@@ -813,7 +846,7 @@ def _tap_geometry(context, api, run_a, run_b, branch):
         raise ValueError("Tap run profile has zero depth")
 
     run_surface_offset = near_projection - center_projection
-    run_surface = trunk_center + branch_dir * run_surface_offset
+    run_surface = branch_axis_center + branch_dir * run_surface_offset
 
     # Embed to the actual mid-depth of the run. This gives a substantial
     # boolean intersection without approaching the opposite surface.
@@ -902,6 +935,7 @@ def _straight_tap(context, run_factor, branch_factor):
     reach = max(0.0, (api.port_position(branch_end) - base_position).dot(branch_dir))
     stub = api.extrude(api.profile_from_port(branch_end), branch_dir * -reach, solid=True)
     stub = _clip_tap_to_run_body(api, stub, trunk_center, run_a, run_b, trim_a, trim_b)
+    stub = _clip_branch_at_trunk_center(api, stub, trunk_center, branch)
 
     return {
         "shape": api.refine(api.fuse(trunk, stub)),
@@ -975,6 +1009,7 @@ def _saddle_tap(context, run_factor, branch_factor, flare_factor=0.6):
         profiles.insert(0, api.profile_from_port(branch_end))
     stub = api.loft(profiles, solid=True, ruled=True)
     stub = _clip_tap_to_run_body(api, stub, trunk_center, run_a, run_b, trim_a, trim_b)
+    stub = _clip_branch_at_trunk_center(api, stub, trunk_center, branch)
 
     return {
         "shape": api.refine(api.fuse(trunk, stub)),
@@ -1009,7 +1044,14 @@ def _star_tee(context, run_factor, branch_factor):
     """Straight-legged tee with trims measured beyond the intrinsic junction body."""
     api = context["hvac_api"]
     run_a, run_b, branch, center, minimums, trims = _star_tee_layout(context, run_factor, branch_factor)
-    shape = _star_body(api, center, [run_a, run_b, branch], trims, minimums)
+    shape = _star_body(
+        api,
+        center,
+        [run_a, run_b, branch],
+        trims,
+        minimums,
+        branch=branch,
+    )
 
     return {
         "shape": api.refine(shape),
@@ -1070,9 +1112,9 @@ def _run_surface_along_branch(api, center, run_a, run_b, branch_dir):
 def _radius_tee_layout(context, run_factor, branch_factor):
     """Layout for a radiused tee.
 
-    The branch bend is a complete elbow whose virtual corner is the
-    junction/run centreline. The swept bend is allowed to intersect the
-    run body; fusion with the trunk forms the final tee.
+    The branch bend is a complete elbow whose virtual corner lies on the
+    branch axis. Its buried portion is limited at the trunk center plane
+    before the stub and trunk are fused.
 
     TrimBranch is additional straight length beyond the intrinsic curved
     fitting body, not distance measured from the run surface.
@@ -1093,10 +1135,14 @@ def _radius_tee_layout(context, run_factor, branch_factor):
 
     lean = _lean_port(api, run_a, run_b, branch, reverse=bool(p.get('ReverseBranchBend', False)))
 
-    # The theoretical bend corner is the junction/run centreline.
-    # Keep the branch profile but give the second synthetic port the
-    # selected run direction.
-    trunk_axis_port = api.copy_port(branch, position=center, direction=api.port_direction(lean))
+    # Place the inner port on the branch axis. The junction center can be
+    # offset from that axis, which would skew the generated bend stub.
+    inner_position = _port_axis_point(api, branch, center)
+    trunk_axis_port = api.copy_port(
+        branch,
+        position=inner_position,
+        direction=api.port_direction(lean),
+    )
 
     route = api.make_elbow_path(branch, trunk_axis_port, radius)
     branch_route_trim, lean_route_trim = route['trim_lengths']
@@ -1172,7 +1218,9 @@ def _radius_tee(context, run_factor, branch_factor):
 
     trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])])
 
-    # The curved branch intentionally intersects the trunk.
+    # Discard anything extending beyond the trunk center toward the
+    # opposite side before fusion.
+    stub = _clip_branch_at_trunk_center(api, stub, center, branch)
     shape = api.fuse(trunk, stub)
     shape = _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
 
@@ -1235,9 +1283,8 @@ def build_tee_straight(context):
 def _tee_mitered_shoe_layout(context):
     """Layout for a mitered-shoe tee.
 
-    The theoretical bend corner lies at the junction/run centreline.
-    The mitered bend is allowed to intersect the run body and is fused
-    with the run trunk.
+    The theoretical bend corner lies on the branch axis. The mitered bend
+    is limited at the trunk center plane before it is fused with the run.
 
     TrimBranch is additional length beyond the intrinsic mitered body.
     """
@@ -1257,7 +1304,12 @@ def _tee_mitered_shoe_layout(context):
     cuts = max(int(p.get('NumberOfCuts', 1) or 1), 1)
 
     lean = _lean_port(api, run_a, run_b, branch, reverse=bool(p.get('ReverseBranchBend', False)))
-    trunk_axis_port = api.copy_port(branch, position=center, direction=api.port_direction(lean))
+    inner_position = _port_axis_point(api, branch, center)
+    trunk_axis_port = api.copy_port(
+        branch,
+        position=inner_position,
+        direction=api.port_direction(lean),
+    )
 
     bend_shape, route_trims = _mitered_bend(api, branch, trunk_axis_port, radius, cuts)
     branch_route_trim, lean_route_trim = route_trims
@@ -1317,6 +1369,7 @@ def build_tee_mitered_shoe(context):
     bend_shape = _extend_leg(api, layout['bend_shape'], branch, layout['branch_route_trim'], trims[2])
     trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])])
 
+    bend_shape = _clip_branch_at_trunk_center(api, bend_shape, center, branch)
     shape = api.fuse(trunk, bend_shape)
     shape = _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
 
@@ -1338,6 +1391,7 @@ def _lateral_tee_layout(context):
 
     center = api.center_from_context(context)
     branch_dir = api.unit(api.port_direction(branch))
+    branch_axis_center = _port_axis_point(api, branch, center)
     lean = _lean_port(api, run_a, run_b, branch)
     run_dir = api.unit(api.port_direction(lean))
 
@@ -1347,7 +1401,7 @@ def _lateral_tee_layout(context):
         raise ValueError("Lateral tee branch is parallel to the run")
     surface_dir = api.unit(transverse)
 
-    center_projection = center.dot(surface_dir)
+    center_projection = branch_axis_center.dot(surface_dir)
     surface_projection = None
     for run_port in (run_a, run_b):
         centered_port = api.copy_port(run_port, position=center)
@@ -1360,7 +1414,7 @@ def _lateral_tee_layout(context):
 
     normal_depth = surface_projection - center_projection
     branch_depth = normal_depth / sin_angle
-    run_surface = center + branch_dir * branch_depth
+    run_surface = branch_axis_center + branch_dir * branch_depth
     surface_port = api.copy_port(branch, position=run_surface)
     surface_profile = api.profile_from_port(surface_port)
 
@@ -1411,11 +1465,14 @@ def build_lateral_tee(context):
     visible_reach = max(0.0, (api.port_position(branch_end) - run_surface).dot(branch_dir))
     visible_stub = api.extrude(api.profile_from_port(branch_end), branch_dir * -visible_reach, solid=True)
 
-    embed_reach = max(0.0, (run_surface - center).dot(branch_dir))
+    branch_axis_center = _port_axis_point(api, branch, center)
+    embed_reach = max(0.0, (run_surface - branch_axis_center).dot(branch_dir))
     embedded_stub = api.extrude(surface_profile, branch_dir * -embed_reach, solid=True)
     embedded_stub = _clip_junction_to_body(api, embedded_stub, center, (run_a, run_b), (trim_a, trim_b))
 
-    shape = api.fuse(trunk, visible_stub, embedded_stub)
+    branch_stub = api.fuse(visible_stub, embedded_stub)
+    branch_stub = _clip_branch_at_trunk_center(api, branch_stub, center, branch)
+    shape = api.fuse(trunk, branch_stub)
 
     return {
         "shape": api.refine(shape),
@@ -1767,6 +1824,7 @@ def build_tap_shoe(context):
         profiles.insert(0, api.profile_from_port(branch_end))
     stub = api.loft(profiles, solid=True, ruled=True)
     stub = _clip_tap_to_run_body(api, stub, trunk_center, run_a, run_b, trim_a, trim_b)
+    stub = _clip_branch_at_trunk_center(api, stub, trunk_center, branch)
 
     return {
         "shape": api.refine(api.fuse(trunk, stub)),
@@ -1777,7 +1835,7 @@ def build_tap_shoe(context):
 
 
 def build_branch_generic(context):
-    return _star_junction(context, 0.60)
+    return _star_junction(context, 0.60, align_branch=True)
 
 
 def build_cross(context):
