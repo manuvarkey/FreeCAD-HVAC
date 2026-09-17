@@ -1238,7 +1238,27 @@ def measure_tee_straight(context):
 
 
 def build_tee_straight(context):
-    return _star_tee(context, 0.60, 0.60)
+    api = context["hvac_api"]
+    run_a, run_b, branch, center, _, trims = _star_tee_layout(context, 0.60, 0.60)
+
+    # Build the run as one continuous trunk, matching the radius tee.
+    trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])])
+
+    # Join a straight branch stub at the trunk center plane.
+    branch_end = _trimmed(api, branch, trims[2])
+    branch_center = api.copy_port(branch, position=_port_axis_point(api, branch, center))
+    stub = _loft(api, [branch_end, branch_center])
+    stub = _clip_branch_at_trunk_center(api, stub, center, branch)
+
+    shape = api.fuse(trunk, stub)
+    shape = _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
+
+    return {
+        "shape": api.refine(shape),
+        "connection_lengths": api.build_trim_rec_from_port_lengths(
+            [(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]
+        ),
+    }
 
 
 def _tee_mitered_shoe_layout(context):
