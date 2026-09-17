@@ -418,7 +418,7 @@ def test_execute_context_includes_parent_analysis(monkeypatch):
     """
     Regression: context["analysis"] was dropped entirely from
     DuctComponent.execute() -- builtin_basic's build_tee needs
-    analysis["collinear_pairs"] (via _find_run_pair) to identify which two
+    analysis["collinear_pairs"] (via run_branch_ports) to identify which two
     of a tee's three ports form the straight run, so every real tee failed
     with "Could not identify run pair" and never got a Shape.
     """

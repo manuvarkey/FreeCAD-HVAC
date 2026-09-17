@@ -597,30 +597,6 @@ def measure_vav_generic(context):
     return measure_inline(context, 1.0, 300.0)
 
 
-def _find_run_pair(context, api, ports):
-    """Split a degree-3 node's ports into ``(run_a, run_b, branch)``.
-
-    ``run_a``/``run_b`` are the collinear trunk run a "branch.tee"/
-    "branch.lateral_tee" node is guaranteed to have (see
-    ``freecad/HVAC/core/TOPOLOGY_CLASSIFICATION.md``); the remaining port is
-    the branch/tap leg. Read straight off the network classifier's own
-    answer (``api.collinear_port_index_pairs``, sourced from the parent
-    junction's ``AnalysisJson`` -- see the "Generator context" section of
-    ``freecad/HVAC/libraries/samples/README.md``) rather than re-deriving
-    collinearity here: that keeps this to one, single source of truth for
-    "which two ports form the straight run", and it's always available --
-    every real caller of these generators is a Primary component on an
-    actual branch.tee/branch.lateral_tee junction, which is only ever
-    selected once the classifier has already found exactly this pair.
-    """
-    pairs = api.collinear_port_index_pairs(context)
-    if not pairs:
-        raise ValueError("Could not identify run pair: context['analysis']['collinear_pairs'] is empty")
-    a, b = pairs[0]
-    branch_index = next(i for i in range(len(ports)) if i not in (a, b))
-    return ports[a], ports[b], ports[branch_index]
-
-
 def _extend_leg(api, shape, port, current_trim, requested_trim):
     """Fuse a plain straight extension onto a swept/mitred leg's outer end,
     so a user-requested trim length can grow past whatever minimum the
@@ -709,9 +685,7 @@ def _star_junction(context, default_factor=0.6, align_branch=False):
     if align_branch:
         pairs = api.collinear_port_index_pairs(context)
         if pairs:
-            run_a, run_b = pairs[0]
-            branch_index = next(i for i in range(len(ports)) if i not in (run_a, run_b))
-            branch = ports[branch_index]
+            _, _, branch = api.run_branch_ports(context)
             center = api.center_from_context(context)
     trimmed = [_trimmed(api, port, trim) for port in ports]
     legs = []
@@ -888,10 +862,7 @@ def _clip_tap_to_run_body(api, shape, trunk_center, run_a, run_b, trim_a, trim_b
 
 def _straight_tap_layout(context, run_factor, branch_factor):
     api = context["hvac_api"]
-    ports = api.connected_ports(context)
-    if len(ports) != 3:
-        raise ValueError("Fitting requires exactly three connected ports")
-    run_a, run_b, branch = _find_run_pair(context, api, ports)
+    run_a, run_b, branch = api.run_branch_ports(context)
     p = _props(context)
 
     trunk_center, branch_dir, toe_dir, branch_width, run_depth, overlap, run_surface = _tap_geometry(context, api, run_a, run_b, branch)
@@ -947,10 +918,7 @@ def _straight_tap(context, run_factor, branch_factor):
 
 def _saddle_tap_layout(context, run_factor, branch_factor, flare_factor=0.6):
     api = context["hvac_api"]
-    ports = api.connected_ports(context)
-    if len(ports) != 3:
-        raise ValueError("Fitting requires exactly three connected ports")
-    run_a, run_b, branch = _find_run_pair(context, api, ports)
+    run_a, run_b, branch = api.run_branch_ports(context)
     p = _props(context)
 
     trunk_center, branch_dir, toe_dir, branch_width, run_depth, overlap, run_surface = _tap_geometry(context, api, run_a, run_b, branch)
@@ -1021,10 +989,7 @@ def _saddle_tap(context, run_factor, branch_factor, flare_factor=0.6):
 
 def _star_tee_layout(context, run_factor, branch_factor):
     api = context["hvac_api"]
-    ports = api.connected_ports(context)
-    if len(ports) != 3:
-        raise ValueError("Fitting requires exactly three connected ports")
-    run_a, run_b, branch = _find_run_pair(context, api, ports)
+    run_a, run_b, branch = api.run_branch_ports(context)
     p = _props(context)
 
     center = api.center_from_context(context)
@@ -1120,11 +1085,7 @@ def _radius_tee_layout(context, run_factor, branch_factor):
     fitting body, not distance measured from the run surface.
     """
     api = context['hvac_api']
-    ports = api.connected_ports(context)
-    if len(ports) != 3:
-        raise ValueError('Fitting requires exactly three connected ports')
-
-    run_a, run_b, branch = _find_run_pair(context, api, ports)
+    run_a, run_b, branch = api.run_branch_ports(context)
     p = _props(context)
     center = api.center_from_context(context)
     tee_ports = [run_a, run_b, branch]
@@ -1289,11 +1250,7 @@ def _tee_mitered_shoe_layout(context):
     TrimBranch is additional length beyond the intrinsic mitered body.
     """
     api = context['hvac_api']
-    ports = api.connected_ports(context)
-    if len(ports) != 3:
-        raise ValueError('Tee fitting requires exactly three connected ports')
-
-    run_a, run_b, branch = _find_run_pair(context, api, ports)
+    run_a, run_b, branch = api.run_branch_ports(context)
     p = _props(context)
     center = api.center_from_context(context)
     tee_ports = [run_a, run_b, branch]
@@ -1383,10 +1340,7 @@ def build_tee_mitered_shoe(context):
 
 def _lateral_tee_layout(context):
     api = context["hvac_api"]
-    ports = api.connected_ports(context)
-    if len(ports) != 3:
-        raise ValueError("Fitting requires exactly three connected ports")
-    run_a, run_b, branch = _find_run_pair(context, api, ports)
+    run_a, run_b, branch = api.run_branch_ports(context)
     p = _props(context)
 
     center = api.center_from_context(context)
@@ -1764,10 +1718,7 @@ def build_tap_saddle(context):
 
 def _tap_shoe_layout(context):
     api = context["hvac_api"]
-    ports = api.connected_ports(context)
-    if len(ports) != 3:
-        raise ValueError("Fitting requires exactly three connected ports")
-    run_a, run_b, branch = _find_run_pair(context, api, ports)
+    run_a, run_b, branch = api.run_branch_ports(context)
     p = _props(context)
 
     trunk_center, branch_dir, toe_dir, branch_width, run_depth, overlap, run_surface = _tap_geometry(context, api, run_a, run_b, branch)

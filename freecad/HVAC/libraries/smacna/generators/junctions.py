@@ -237,12 +237,7 @@ def _star_layered(context, factor, align_branch=False):
     center = sum((api.port_position(port) for port in ports), api.vec((0, 0, 0))) / len(ports)
     branch = None
     if align_branch:
-        pairs = api.collinear_port_index_pairs(context)
-        if not pairs:
-            raise ValueError("Could not identify tee run pair")
-        run_a, run_b = pairs[0]
-        branch_index = next(i for i in range(len(ports)) if i not in (run_a, run_b))
-        branch = ports[branch_index]
+        _, _, branch = api.run_branch_ports(context)
         center = api.center_from_context(context)
     trim = _positive(p.get("JunctionLength", p.get("TrimLength")), factor * max(_size(api, port) for port in ports))
     ends = [_trimmed(api, port, trim) for port in ports]

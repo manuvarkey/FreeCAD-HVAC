@@ -359,6 +359,43 @@ class HVACLibraryAPI:
         return result
 
     @staticmethod
+    def run_branch_ports(context):
+        """Return ``(run_a, run_b, branch)`` for a degree-three tee/tap.
+
+        The run pair comes from the network classifier's collinear-pair
+        analysis. Port roles are not guessed again from raw geometry here.
+        """
+        ports = HVACLibraryAPI.connected_ports(context)
+        if len(ports) != 3:
+            raise ValueError("Run/branch resolution requires exactly three connected ports")
+
+        pairs = HVACLibraryAPI.collinear_port_index_pairs(context)
+        if not pairs:
+            raise ValueError(
+                "Could not identify run pair: "
+                "context['analysis']['collinear_pairs'] is empty"
+            )
+
+        run_a_index, run_b_index = pairs[0]
+        valid_indices = range(len(ports))
+        if (
+            run_a_index == run_b_index
+            or run_a_index not in valid_indices
+            or run_b_index not in valid_indices
+        ):
+            raise ValueError("Run pair contains invalid connected-port indices")
+
+        branch_indices = [
+            index
+            for index in valid_indices
+            if index not in (run_a_index, run_b_index)
+        ]
+        if len(branch_indices) != 1:
+            raise ValueError("Could not identify exactly one branch port")
+
+        return ports[run_a_index], ports[run_b_index], ports[branch_indices[0]]
+
+    @staticmethod
     def port_position(port):
         """Return a port's position as a FreeCAD vector."""
         return HVACLibraryAPI.vec(port["position"])
