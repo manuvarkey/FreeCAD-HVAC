@@ -1422,30 +1422,33 @@ def measure_lateral_tee(context):
 
 
 def build_lateral_tee(context):
-    """Straight lateral tee with branch geometry starting at the actual run
-    surface. TrimRunA/TrimRunB are measured beyond the minimum branch
-    footprint and TrimBranch is measured outward from the inclined run
-    surface intersection."""
+    """Straight lateral tee with a continuous run trunk and branch stub.
+
+    TrimRunA/TrimRunB are measured beyond the minimum branch footprint.
+    TrimBranch is measured outward from the inclined run surface.
+    """
     api = context["hvac_api"]
     layout = _lateral_tee_layout(context)
     run_a, run_b, branch, center = layout["run_a"], layout["run_b"], layout["branch"], layout["center"]
-    branch_dir, run_surface = layout["branch_dir"], layout["run_surface"]
-    surface_profile = layout["surface_profile"]
     trim_a, trim_b, trim_branch = layout["trim_a"], layout["trim_b"], layout["trim_branch"]
 
+    # Build the run as one continuous trunk, matching the straight tee.
     trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)])
+
+    # Join a straight branch stub at the trunk center plane.
     branch_end = _trimmed(api, branch, trim_branch)
-
-    visible_reach = max(0.0, (api.port_position(branch_end) - run_surface).dot(branch_dir))
-    visible_stub = api.extrude(api.profile_from_port(branch_end), branch_dir * -visible_reach, solid=True)
-
     branch_axis_center = _port_axis_point(api, branch, center)
-    embed_reach = max(0.0, (run_surface - branch_axis_center).dot(branch_dir))
-    embedded_stub = api.extrude(surface_profile, branch_dir * -embed_reach, solid=True)
-    embedded_stub = _clip_junction_to_body(api, embedded_stub, center, (run_a, run_b), (trim_a, trim_b))
+    branch_center = api.copy_port(branch, position=branch_axis_center)
+    branch_stub = _loft(api, [branch_end, branch_center])
+    branch_dir = api.port_direction(branch)
+    trunk_dir = api.port_direction(run_a)
 
-    branch_stub = api.fuse(visible_stub, embedded_stub)
-    branch_stub = _clip_branch_at_trunk_center(api, branch_stub, center, branch)
+    # Cut on a plane perpendicular to the wye plane. Its normal stays in
+    # the wye plane and points from the trunk axis toward the branch.
+    wye_plane_normal = api.unit(trunk_dir.cross(branch_dir))
+    clip_normal = api.unit(wye_plane_normal.cross(trunk_dir))
+    branch_stub = api.clip_plane(branch_stub, (branch_axis_center, clip_normal), side="positive")
+
     shape = api.fuse(trunk, branch_stub)
 
     return {
