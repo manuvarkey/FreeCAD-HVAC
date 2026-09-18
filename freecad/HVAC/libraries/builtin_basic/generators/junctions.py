@@ -1467,12 +1467,10 @@ def _wye_mitered_layout(context):
     """Lay out two split-profile faceted bends entering one common leg."""
     api = context['hvac_api']
     p = _props(context)
-    center = api.center_from_context(context)
     cuts = max(int(p.get('NumberOfCuts', 2) or 2), 1)
 
-    # Reuse the radius wye's port roles, proportional main-profile split,
-    # feasible radius, and relocated split plane.
-    ports, main_center, split_routes, _radius_trims = _wye_radius_layout(context)
+    # Reuse the same split plane and feasible elbow paths as the radius wye.
+    ports, center, main_center, split_routes = _wye_split_route_layout(context)
     main = ports[0]
     main_direction = api.unit(api.port_direction(main))
     routes = []
@@ -1737,8 +1735,8 @@ def _wye_elbow_route(api, branch, split_port, requested_radius):
     return route
 
 
-def _wye_radius_layout(context):
-    """Calculate the split profiles, branch paths, and trims for a wye."""
+def _wye_split_route_layout(context):
+    """Calculate shared port roles, split profiles, and feasible elbow paths."""
     api = context['hvac_api']
     raw_ports = list(api.connected_ports(context))
     if len(raw_ports) != 3:
@@ -1746,11 +1744,9 @@ def _wye_radius_layout(context):
 
     main, branch_a, branch_b = _wye_port_roles(api, raw_ports)
     ports = [main, branch_a, branch_b]
-    p = _props(context)
     center = api.center_from_context(context)
     branch_legs = [(1, branch_a), (2, branch_b)]
-
-    radius = float(p.get('BranchRadius') or 0.0)
+    radius = float(_props(context).get('BranchRadius') or 0.0)
 
     # Step 1: Build provisional paths at the junction center.
     main_direction = api.unit(api.port_direction(main))
@@ -1791,7 +1787,18 @@ def _wye_radius_layout(context):
         )
         routes = build_routes(main_center)
 
-    # Step 3: Include the relocated split plane in the main-leg trim.
+    return ports, center, main_center, routes
+
+
+def _wye_radius_layout(context):
+    """Calculate the split profiles, branch paths, and trims for a wye."""
+    api = context['hvac_api']
+    p = _props(context)
+    ports, center, main_center, routes = _wye_split_route_layout(context)
+    main = ports[0]
+    main_direction = api.unit(api.port_direction(main))
+
+    # Include the relocated split plane in the main-leg trim.
     minimums = _junction_minimums(api, center, ports)
     main_split_trim = (
         api.port_position(main_center) - api.port_position(main)
