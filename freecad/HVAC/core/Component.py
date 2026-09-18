@@ -195,9 +195,17 @@ class DuctComponent:
             # DuctSegment.execute().
             _geometry_apply.apply_computed_properties(obj, type_def, result)
 
+            if getattr(obj, "GeometryError", ""):
+                obj.GeometryError = ""
+
         except Exception as e:
-            FreeCAD.Console.PrintWarning(
-                "HVAC - DuctComponent - Execute Error generating component '{}': {}\n".format(obj.Label, e)
+            message = str(e) or e.__class__.__name__
+            if "GeometryError" in getattr(obj, "PropertiesList", []):
+                obj.GeometryError = message
+            FreeCAD.Console.PrintError(
+                "HVAC - DuctComponent - Execute Error generating component '{}': {}\n".format(
+                    obj.Label, message
+                )
             )
             FreeCAD.Console.PrintMessage(traceback.format_exc())
 
@@ -451,6 +459,17 @@ class DuctComponent:
         self._addProperty(obj, "App::PropertyStringList", "ConstructionFeatureIds", "HVAC", "Internal: construction feature ids of the last-applied type (see core/_construction_schema.py)")
         self._addProperty(obj, "App::PropertyString", "LocalPortsJson", "HVAC", "Internal: this component's local inlet/outlet port geometry, written by the parent junction's composer")
         self._addProperty(obj, "App::PropertyString", "ConnectionLengthsJson", "HVAC", "This component's own per-port connection (trim) lengths")
+        self._addProperty(
+            obj,
+            "App::PropertyString",
+            "GeometryError",
+            "HVAC",
+            "Last geometry-generation error; blank when the current geometry built successfully",
+        )
+        try:
+            obj.setEditorMode("GeometryError", 1)
+        except Exception:
+            pass
 
         # Per-construction-layer Layer_<id>_Shape/Layer_<id>_Material
         # properties are added/removed by applyTypeSchema() (via

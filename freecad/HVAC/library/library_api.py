@@ -907,8 +907,86 @@ class HVACLibraryAPI:
         rotation = FreeCAD.Rotation(d, FreeCAD.Vector(1.0, 0.0, 0.0))
         probe.transformShape(rotation.toMatrix())
         return probe.BoundBox.XMin, probe.BoundBox.XMax
-    
-    
+
+    @classmethod
+    def split_profile_face_by_extent(cls, profile, split_direction, positive_ratio):
+        """Split a profile at a linear ratio of its projected extent.
+
+        The requested direction snaps to the nearest local horizontal or
+        vertical axis. The positive face points with that oriented axis.
+        """
+        if not isinstance(profile, HVACProfile):
+            raise TypeError("split_profile_face_by_extent() requires an HVACProfile")
+
+        ratio = float(positive_ratio)
+        if not 0.0 < ratio < 1.0:
+            raise ValueError("Profile split ratio must be between 0 and 1")
+
+        # Step 1: Snap the requested split to one local profile axis.
+        _, x_axis, y_axis, profile_normal = cls.make_profile_frame(
+            profile.direction,
+            profile.profile_x_axis,
+            profile.center,
+        )
+        requested = cls.vec(split_direction)
+        requested = requested - profile_normal * requested.dot(profile_normal)
+        if requested.Length <= cls.EPS:
+            raise ValueError("Profile split direction must lie in the profile plane")
+        requested = cls.unit(requested)
+
+        x_score = requested.dot(x_axis)
+        y_score = requested.dot(y_axis)
+        normal = x_axis if abs(x_score) >= abs(y_score) else y_axis
+        if requested.dot(normal) < 0.0:
+            normal = normal * -1.0
+        transverse = profile_normal.cross(normal)
+
+        # Step 2: Convert the ratio directly into a projected cut coordinate.
+        normal_min, normal_max = cls.profile_projection_bounds(profile, normal)
+        transverse_min, transverse_max = cls.profile_projection_bounds(
+            profile, transverse
+        )
+        normal_extent = normal_max - normal_min
+        transverse_extent = transverse_max - transverse_min
+        if normal_extent <= cls.EPS or transverse_extent <= cls.EPS:
+            raise ValueError("Profile has no usable split extent")
+        cut = normal_max - normal_extent * ratio
+
+        # Step 3: Clip both sides with masks larger than the profile bounds.
+        source_face = Part.Face(profile.wire)
+        margin = max(normal_extent, transverse_extent, 1.0)
+        mask_height = transverse_extent + 2.0 * margin
+        transverse_center = 0.5 * (transverse_min + transverse_max)
+
+        def clipped_face(lower, upper):
+            width = upper - lower
+            mask_center = cls.vec(profile.center)
+            mask_center += normal * (
+                0.5 * (lower + upper) - mask_center.dot(normal)
+            )
+            mask_center += transverse * (
+                transverse_center - mask_center.dot(transverse)
+            )
+            mask = Part.Face(
+                cls.make_rectangular_wire(
+                    mask_center,
+                    normal,
+                    transverse,
+                    width,
+                    mask_height,
+                )
+            )
+            result = source_face.common(mask)
+            faces = list(result.Faces)
+            if len(faces) != 1 or faces[0].Area <= cls.EPS:
+                raise ValueError("Profile extent split did not produce one face")
+            return faces[0]
+
+        positive = clipped_face(cut, normal_max + margin)
+        negative = clipped_face(normal_min - margin, cut)
+        return positive, negative
+
+
     @staticmethod
     def stretch_profile_one_sided(profile, direction, extension):
         """Stretch a profile along direction while keeping its heel side fixed.

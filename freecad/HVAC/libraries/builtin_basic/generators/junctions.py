@@ -1640,11 +1640,90 @@ def _wye_port_roles(api, ports):
     return main, branches[0], branches[1]
 
 
+def _wye_horizontal_extent(api, port):
+    """Return the branch profile dimension along its horizontal axis."""
+    profile = api.port_profile(port)
+    if profile == 'Circular':
+        extent = float(api.port_diameter(port))
+    elif profile in {'Rectangular', 'Oval'}:
+        extent = float(api.port_width(port))
+    else:
+        raise ValueError("Wye radius requires a circular, rectangular, or oval profile")
+
+    if extent <= api.EPS:
+        raise ValueError('Wye branch horizontal extent must be positive')
+    return extent
+
+
+def _wye_main_split_faces(api, main_center, branch_a, branch_b):
+    """Split the main profile horizontally in proportion to the branches."""
+    main_profile = api.profile_from_port(main_center)
+    _, horizontal, _vertical, main_dir = api.make_profile_frame(
+        api.port_direction(main_center),
+        api.port_profile_x_axis(main_center),
+        api.port_position(main_center),
+    )
+
+    # Keep the positive split face on branch A's side.
+    branch_delta = api.unit(api.port_direction(branch_a)) - api.unit(
+        api.port_direction(branch_b)
+    )
+    branch_delta = branch_delta - main_dir * branch_delta.dot(main_dir)
+    side = branch_delta.dot(horizontal)
+    if abs(side) <= api.EPS:
+        raise ValueError('Wye branches do not separate along the horizontal profile axis')
+    if side < 0.0:
+        horizontal = horizontal * -1.0
+
+    branch_a_extent = _wye_horizontal_extent(api, branch_a)
+    branch_b_extent = _wye_horizontal_extent(api, branch_b)
+    ratio = branch_a_extent / (branch_a_extent + branch_b_extent)
+    positive, negative = api.split_profile_face_by_extent(
+        main_profile,
+        horizontal,
+        ratio,
+    )
+    return {id(branch_a): positive, id(branch_b): negative}
+
+
+def _wye_route_clearance(api, branch):
+    """Small modeling clearance scaled to the branch profile."""
+    return max(1.0e-2 * _size(api, branch), 0.1)
+
+
+def _wye_elbow_route(api, branch, split_port, requested_radius):
+    """Build a route whose tangent points stay on both usable leg sides."""
+    branch_size = _size(api, branch)
+    clearance = _wye_route_clearance(api, branch)
+
+    # The half-size limit keeps the inside of the swept profile from folding
+    # through the bend centerline.
+    radius = max(float(requested_radius or 0.0), 0.5 * branch_size)
+    route = api.make_elbow_path(branch, split_port, radius)
+
+    # An offset split profile can need more radius before both tangent points
+    # lie beyond their source ports. The signed distances vary linearly with R.
+    signed_trims = [
+        (
+            api.port_position(route_port) - api.port_position(source_port)
+        ).dot(api.unit(api.port_direction(source_port)))
+        for route_port, source_port in zip(route['ports'], (branch, split_port))
+    ]
+    deficit = clearance - signed_trims[0]
+    if deficit > 0.0:
+        theta = api.angle_between(
+            api.port_direction(branch),
+            api.port_direction(split_port),
+        )
+        radius += deficit * math.tan(theta / 2.0)
+        route = api.make_elbow_path(branch, split_port, radius)
+
+    route['radius'] = radius
+    return route
+
+
 def _wye_radius_layout(context):
-    """Same "needs an actual bend stub for its minimums" shape as
-    _radius_tee_layout, generalized to 2 branch legs merging into one main
-    trunk -- measurement builds the same fused branch-stub shapes
-    build_wye_radius() itself sweeps, never the full assembled body."""
+    """Calculate the split profiles, branch paths, and trims for a wye."""
     api = context['hvac_api']
     raw_ports = list(api.connected_ports(context))
     if len(raw_ports) != 3:
@@ -1654,36 +1733,60 @@ def _wye_radius_layout(context):
     ports = [main, branch_a, branch_b]
     p = _props(context)
     center = api.center_from_context(context)
-    main_index = 0
-    branch_legs = [(_size(api, branch_a), 1, branch_a), (_size(api, branch_b), 2, branch_b)]
+    branch_legs = [(1, branch_a), (2, branch_b)]
 
-    smallest_branch_size = min(size for size, _, _ in branch_legs)
-    radius = _positive(p.get('BranchRadius'), 0.6 * smallest_branch_size)
-    radius = max(radius, 0.5 * smallest_branch_size)
+    radius = float(p.get('BranchRadius') or 0.0)
 
-    main_dir = api.unit(api.port_direction(main))
-    routes = []
-    route_shapes = []
+    # Step 1: Build provisional paths at the junction center.
+    main_direction = api.unit(api.port_direction(main))
+    main_axis_center = _port_axis_point(api, main, center)
+    main_center = api.copy_port(main, position=main_axis_center)
 
-    for branch_size, branch_index, branch in branch_legs:
-        branch_radius = max(radius, 0.5 * branch_size)
-        trunk_axis_port = api.copy_port(branch, position=center, direction=main_dir)
-        route = api.make_elbow_path(branch, trunk_axis_port, branch_radius)
-        stub = api.sweep(
-            [api.profile_from_port(route['ports'][0]), api.profile_from_port(route['ports'][1])],
-            route['path'],
-            solid=True,
+    def build_routes(split_center):
+        split_faces = _wye_main_split_faces(api, split_center, branch_a, branch_b)
+        result = []
+        for branch_index, branch in branch_legs:
+            split_face = split_faces[id(branch)]
+            split_port = api.copy_port(
+                split_center,
+                position=split_face.CenterOfMass,
+            )
+            route = _wye_elbow_route(api, branch, split_port, radius)
+            result.append((branch, branch_index, split_face, route))
+        return result
+
+    routes = build_routes(main_center)
+
+    # Step 2: Large radii can put an elbow tangent beyond the split plane.
+    # Move the plane outward so each split half approaches its arc from behind.
+    main_shift = max(
+        [0.0]
+        + [
+            (
+                api.port_position(route['ports'][1]) - split_face.CenterOfMass
+            ).dot(main_direction)
+            + _wye_route_clearance(api, branch)
+            for branch, _, split_face, route in routes
+        ]
+    )
+    if main_shift > api.EPS:
+        main_center = api.copy_port(
+            main_center,
+            position=api.port_position(main_center) + main_direction * main_shift,
         )
-        routes.append((branch, branch_index, branch_size, route, stub))
-        route_shapes.append(stub)
+        routes = build_routes(main_center)
 
-    intrinsic_shape = api.fuse(*route_shapes)
+    # Step 3: Include the relocated split plane in the main-leg trim.
     minimums = _junction_minimums(api, center, ports)
-    minimums = _junction_shape_minimums(api, center, ports, intrinsic_shape, minimums)
-
-    for branch, branch_index, branch_size, route, stub in routes:
-        minimums[branch_index] = max(minimums[branch_index], route['trim_lengths'][0])
-        minimums[main_index] = max(minimums[main_index], route['trim_lengths'][1])
+    main_split_trim = (
+        api.port_position(main_center) - api.port_position(main)
+    ).dot(main_direction)
+    minimums[0] = max(minimums[0], main_split_trim)
+    for _branch, branch_index, _split_face, route in routes:
+        minimums[branch_index] = max(
+            minimums[branch_index],
+            route['trim_lengths'][0],
+        )
 
     trims = _junction_trims(
         api,
@@ -1693,32 +1796,143 @@ def _wye_radius_layout(context):
         (0.70, 0.70, 0.70),
         minimums,
     )
-    return ports, center, main, main_index, routes, trims
+    return ports, main_center, routes, trims
 
 
 def measure_wye_radius(context):
-    api = context["hvac_api"]
-    ports, center, main, main_index, routes, trims = _wye_radius_layout(context)
+    api = context['hvac_api']
+    ports, _main_center, _routes, trims = _wye_radius_layout(context)
     return api.build_trim_rec_from_port_lengths(list(zip(ports, trims)))
 
 
 def build_wye_radius(context):
-    """Radiused wye with each trim measured beyond the actual generated body."""
+    """Build a radiused wye from a horizontally divided main profile."""
     api = context['hvac_api']
-    ports, center, main, main_index, routes, trims = _wye_radius_layout(context)
+    ports, main_center, routes, trims = _wye_radius_layout(context)
 
-    main_end = _trimmed(api, main, trims[main_index])
-    main_center = api.copy_port(main, position=center)
-    shape = _loft(api, [main_end, main_center], 0.0, ruled=True)
+    # Sweep each split half of the main profile into its branch tangent.
+    split_sweeps = []
+    split_touch_sweeps = []
+    branch_sweeps = []
+    for branch, _branch_index, split_face, route in routes:
+        main_tangent = route['ports'][1]
+        main_tangent_position = api.port_position(main_tangent)
+        main_reach = main_tangent_position - split_face.CenterOfMass
+        tangent_face = split_face
+        if main_reach.Length > api.EPS:
+            route_overlap = 0.1 * _wye_route_clearance(api, branch)
+            section_probe = api.extrude(split_face.OuterWire, main_reach, solid=True)
+            probe = api.extrude(
+                split_face.OuterWire,
+                main_reach + api.unit(main_reach) * route_overlap,
+                solid=True,
+            )
+            tangent_face = api.section_face(
+                section_probe,
+                (main_tangent_position, api.port_direction(main_tangent)),
+            )
+            split_sweeps.append(probe)
+            split_touch_sweeps.append(section_probe)
+        else:
+            split_sweeps.append(None)
+            split_touch_sweeps.append(None)
 
-    for branch, branch_index, branch_size, route, stub in routes:
-        stub = _extend_leg(api, stub, branch, route['trim_lengths'][0], trims[branch_index])
-        shape = api.fuse(shape, stub)
+        branch_tangent = route['ports'][0]
+        try:
+            branch_sweeps.append(
+                api.sweep(
+                    [tangent_face.OuterWire, api.profile_from_port(branch_tangent)],
+                    api.reverse(route['path']),
+                    solid=True,
+                )
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                'Wye branch sweep failed at effective radius {:.3f} mm: {}'.format(
+                    route['radius'], exc
+                )
+            ) from exc
 
-    shape = _clip_junction_to_body(api, shape, center, ports, trims)
+    # A small scaled overlap avoids a coplanar boolean at the split plane;
+    # the full main profile still stops at the split approach itself.
+    main_overlap = 0.1 * min(
+        _wye_route_clearance(api, branch) for branch, _, _, _ in routes
+    )
+    main_trim_start = api.copy_port(
+        main_center,
+        position=(
+            api.port_position(main_center)
+            - api.unit(api.port_direction(main_center)) * main_overlap
+        ),
+    )
+    trim_starts = [main_trim_start] + [route['ports'][0] for _, _, _, route in routes]
+    trim_sweeps = []
+    for port, trim_start, trim in zip(ports, trim_starts, trims):
+        trim_end = _trimmed(api, port, trim)
+        trim_reach = api.port_position(trim_end) - api.port_position(trim_start)
+        trim_tolerance = max(api.EPS, 1.0e-6 * _size(api, port))
+        if trim_reach.Length <= trim_tolerance:
+            trim_sweeps.append(None)
+            continue
+        trim_path = api.make_line(
+            api.port_position(trim_start),
+            api.port_position(trim_end),
+        )
+        try:
+            trim_sweeps.append(
+                api.sweep(
+                    [api.profile_from_port(trim_start), api.profile_from_port(trim_end)],
+                    trim_path,
+                    solid=True,
+                )
+            )
+        except Exception as exc:
+            edge_key = str(port.get('edge_key', '') or '?')
+            raise RuntimeError(
+                "Wye trim sweep failed for port '{}' at {:.6f} mm: {}".format(
+                    edge_key, trim_reach.Length, exc
+                )
+            ) from exc
+
+    main_trim = trim_sweeps[0]
+    fuse_orders = []
+    for connector_sweeps in (split_sweeps, split_touch_sweeps):
+        leg_a = (connector_sweeps[0], branch_sweeps[0], trim_sweeps[1])
+        leg_b = (connector_sweeps[1], branch_sweeps[1], trim_sweeps[2])
+        fuse_orders.extend((
+            (main_trim, *leg_a, *leg_b),
+            (main_trim, leg_a[0], leg_a[1], leg_b[0], leg_b[1], leg_a[2], leg_b[2]),
+            (*leg_a, main_trim, *leg_b),
+            (main_trim, *leg_b, *leg_a),
+            (*connector_sweeps, *branch_sweeps, *trim_sweeps),
+        ))
+
+    # OCC booleans are order-sensitive when several swept solids share seams.
+    # Keep the first sequence that produces exactly one valid solid.
+    shape = None
+    for fuse_order in fuse_orders:
+        try:
+            candidate = api.fuse(*fuse_order)
+        except Exception:
+            continue
+        validation = api.validate(candidate, require_solid=True)
+        if validation['valid'] and validation['solid_count'] == 1:
+            shape = candidate
+            break
+    if shape is None:
+        requested_radius = float(_props(context).get('BranchRadius') or 0.0)
+        effective_radii = ', '.join(
+            '{:.3f}'.format(route['radius']) for _, _, _, route in routes
+        )
+        raise RuntimeError(
+            'Wye geometry could not be fused into one valid solid '
+            '(requested radius {:.3f} mm; effective branch radii {} mm)'.format(
+                requested_radius, effective_radii
+            )
+        )
 
     return {
-        'shape': api.refine(shape),
+        'shape': shape,
         'connection_lengths': api.build_trim_rec_from_port_lengths(list(zip(ports, trims))),
     }
 

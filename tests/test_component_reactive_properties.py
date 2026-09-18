@@ -120,7 +120,7 @@ def test_setproperties_hides_internal_bookkeeping_and_json_properties(monkeypatc
     ):
         assert obj._editor_modes[name] == 2, name
 
-    for name in ("ComponentRole", "Profile"):
+    for name in ("ComponentRole", "Profile", "GeometryError"):
         assert obj._editor_modes[name] == 1, name
 
     assert "PortSequence" not in obj._editor_modes
@@ -183,6 +183,8 @@ def test_execute_writes_connection_lengths(monkeypatch):
     obj.ParentJunctionName = ""
     obj.LocalPortsJson = json.dumps([_port("A", "end", True), _port("B", "start", False)])
     obj.ConnectionLengthsJson = "[]"
+    obj.addProperty("App::PropertyString", "GeometryError", "HVAC", "")
+    obj.GeometryError = "old failure"
     obj.Label = "Damper"
 
     lengths = [{"edge_key": "A", "segment_end": "end", "length": 50.0}]
@@ -193,6 +195,35 @@ def test_execute_writes_connection_lengths(monkeypatch):
     dc.execute(obj)
 
     assert json.loads(obj.ConnectionLengthsJson) == lengths
+    assert obj.GeometryError == ""
+
+
+def test_execute_exposes_geometry_failure_on_component(monkeypatch):
+    class FailingRegistry(_FakeRegistry):
+        def build_geometry(self, lib_id, type_def, context):
+            raise RuntimeError("radius 275.000 mm cannot produce one solid")
+
+    obj = FakeDuctObj()
+    obj.LibraryId = "builtin_basic"
+    obj.TypeId = "branch_wye_radius"
+    obj.ComponentRole = "Primary"
+    obj.ParentJunctionName = ""
+    obj.LocalPortsJson = json.dumps(
+        [_port("A", "end", True), _port("B", "start", False), _port("C", "start", False)]
+    )
+    obj.addProperty("App::PropertyString", "GeometryError", "HVAC", "")
+    obj.GeometryError = ""
+    obj.Label = "Radius Wye"
+
+    _patch_registry(monkeypatch, FailingRegistry(_FakeTypeDef([])))
+    component_mod.FreeCAD.Console.PrintError.reset_mock()
+
+    _bare_component(obj).execute(obj)
+
+    assert obj.GeometryError == "radius 275.000 mm cannot produce one solid"
+    assert "radius 275.000 mm" in str(
+        component_mod.FreeCAD.Console.PrintError.call_args.args[0]
+    )
 
 
 def test_execute_does_nothing_without_library_or_type_id(monkeypatch):

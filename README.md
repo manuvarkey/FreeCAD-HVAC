@@ -62,6 +62,18 @@ Basic duct creation functionality is now reasonably in place. The project alread
 
 This provides a solid base for further development, including richer fitting logic, validation tools, and future analysis capabilities.
 
+### Known geometry limitations
+
+The `builtin_basic` `branch_wye_radius` fitting is experimental and its
+geometry generation is incomplete. It can build circular, rectangular, and
+oval wyes across a broad range of sizes and radii, but some combinations of
+profile dimensions, branch angles, and radii may still fail in Open CASCADE's
+sweep or boolean operations. The generator may increase an undersized radius
+or move the main split plane to keep the layout geometrically feasible. When a
+build fails, the generated component retains the previous geometry and reports
+the current failure in its read-only `GeometryError` property and the FreeCAD
+Report view.
+
 ## For developers
 
 For how the addon is put together internally (module responsibilities,
