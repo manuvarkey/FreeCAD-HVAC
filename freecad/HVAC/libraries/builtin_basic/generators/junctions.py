@@ -245,14 +245,16 @@ def _profile_extent(profile):
     return max(bb.DiagonalLength, bb.XLength, bb.YLength, bb.ZLength, 1.0)
 
 
-def _mitered_bend(api, port0, port1, radius, cuts):
-    """Build a faceted constant-profile bend between two arbitrary ports.
+def _mitered_bend(api, port0, port1, radius, cuts, profile0=None, profile1=None):
+    """Build a faceted bend between two arbitrary ports.
     
     Used by through mitered elbows, the mitered-shoe tee, and mitered wye.
     The tangent-arc route defines the fitting-end positions and the reference
     radius; the actual body between those ends is constructed from straight
     gores separated by mitre planes.
     
+    ``profile0``/``profile1`` optionally replace the exact tangent-end
+    sections, allowing a split wye profile to transition through the gores.
     Returns ``(shape, [trim0, trim1])``.
     """
     u0 = api.port_direction(port0)
@@ -330,8 +332,10 @@ def _mitered_bend(api, port0, port1, radius, cuts):
         return solid, cut_face.OuterWire
 
     # Actual fitting-end profiles. These may be geometrically different.
-    profile0 = api.profile_from_port(route_port0)
-    profile1 = api.profile_from_port(route_port1)
+    if profile0 is None:
+        profile0 = api.profile_from_port(route_port0)
+    if profile1 is None:
+        profile1 = api.profile_from_port(route_port1)
 
     # Use one central gore as the finite transition between the exact
     # profiles propagated from each end.
@@ -1460,63 +1464,70 @@ def build_lateral_tee(context):
 
 
 def _wye_mitered_layout(context):
-    """Mitered wye built from two faceted branch bends entering one common leg."""
+    """Lay out two split-profile faceted bends entering one common leg."""
     api = context['hvac_api']
-    raw_ports = list(api.connected_ports(context))
-    if len(raw_ports) != 3:
-        raise ValueError('Mitered wye requires exactly three connected ports')
-
-    main, branch_a, branch_b = _wye_port_roles(api, raw_ports)
-    ports = [main, branch_a, branch_b]
     p = _props(context)
     center = api.center_from_context(context)
-
-    main_index = 0
-    main_dir = api.unit(api.port_direction(main))
-
-    branch_legs = [(1, branch_a), (2, branch_b)]
-    smallest_branch_size = min(_size(api, branch) for _, branch in branch_legs)
-
-    radius = _positive(p.get('BranchRadius'), 0.6 * smallest_branch_size)
     cuts = max(int(p.get('NumberOfCuts', 2) or 2), 1)
 
+    # Reuse the radius wye's port roles, proportional main-profile split,
+    # feasible radius, and relocated split plane.
+    ports, main_center, split_routes, _radius_trims = _wye_radius_layout(context)
+    main = ports[0]
+    main_direction = api.unit(api.port_direction(main))
     routes = []
     intrinsic_shapes = []
 
-    for branch_index, branch in branch_legs:
-        branch_size = _size(api, branch)
-        branch_radius = max(radius, 0.5 * branch_size)
-
-        trunk_axis_port = api.copy_port(branch, position=center, direction=main_dir)
+    for branch, branch_index, split_face, route in split_routes:
+        split_port = api.copy_port(
+            main_center,
+            position=split_face.CenterOfMass,
+        )
+        main_tangent = route['ports'][1]
+        main_tangent_position = api.port_position(main_tangent)
+        main_reach = main_tangent_position - split_face.CenterOfMass
+        tangent_face = split_face
+        split_shape = None
+        if main_reach.Length > api.EPS:
+            split_shape = api.extrude(split_face.OuterWire, main_reach, solid=True)
+            tangent_face = api.section_face(
+                split_shape,
+                (main_tangent_position, api.port_direction(main_tangent)),
+            )
 
         bend_shape, route_trims = _mitered_bend(
             api,
             branch,
-            trunk_axis_port,
-            branch_radius,
+            split_port,
+            route['radius'],
             cuts,
+            profile1=tangent_face.OuterWire,
         )
 
         routes.append(
             {
                 'branch': branch,
                 'branch_index': branch_index,
-                'shape': bend_shape,
+                'split_shape': split_shape,
+                'bend_shape': bend_shape,
                 'branch_trim': route_trims[0],
-                'main_trim': route_trims[1],
+                'radius': route['radius'],
             }
         )
-        intrinsic_shapes.append(bend_shape)
+        intrinsic_shapes.extend((split_shape, bend_shape))
 
-    intrinsic_shape = api.fuse(*intrinsic_shapes)
+    intrinsic_shape = api.compound(intrinsic_shapes)
 
     minimums = _junction_minimums(api, center, ports)
     minimums = _junction_shape_minimums(api, center, ports, intrinsic_shape, minimums)
+    main_split_trim = (
+        api.port_position(main_center) - api.port_position(main)
+    ).dot(main_direction)
+    minimums[0] = max(minimums[0], main_split_trim)
 
     for route in routes:
         branch_index = route['branch_index']
         minimums[branch_index] = max(minimums[branch_index], route['branch_trim'])
-        minimums[main_index] = max(minimums[main_index], route['main_trim'])
 
     trims = _junction_trims(
         api,
@@ -1531,7 +1542,7 @@ def _wye_mitered_layout(context):
         'ports': ports,
         'center': center,
         'main': main,
-        'main_index': main_index,
+        'main_center': main_center,
         'routes': routes,
         'trims': trims,
     }
@@ -1552,14 +1563,16 @@ def build_wye_mitered(context):
     layout = _wye_mitered_layout(context)
 
     ports = layout['ports']
-    center = layout['center']
     main = layout['main']
-    main_index = layout['main_index']
+    main_center = layout['main_center']
     trims = layout['trims']
 
-    main_end = _trimmed(api, main, trims[main_index])
-    main_center = api.copy_port(main, position=center)
-    shape = _loft(api, [main_end, main_center], 0.0, ruled=True)
+    main_end = _trimmed(api, main, trims[0])
+    main_reach = api.port_position(main_end) - api.port_position(main_center)
+    main_tolerance = max(api.EPS, 1.0e-6 * _size(api, main))
+    shape = None
+    if main_reach.Length > main_tolerance:
+        shape = _loft(api, [main_end, main_center], 0.0, ruled=True)
 
     for route in layout['routes']:
         branch = route['branch']
@@ -1567,24 +1580,26 @@ def build_wye_mitered(context):
 
         bend_shape = _extend_leg(
             api,
-            route['shape'],
+            route['bend_shape'],
             branch,
             route['branch_trim'],
             trims[branch_index],
         )
 
-        shape = api.fuse(shape, bend_shape)
+        shape = api.fuse(shape, route['split_shape'], bend_shape)
 
-    shape = _clip_junction_to_body(
-        api,
-        shape,
-        center,
-        ports,
-        trims,
-    )
+    validation = api.validate(shape, require_solid=True)
+    if not validation['valid'] or validation['solid_count'] != 1:
+        raise RuntimeError(
+            'Mitered wye geometry could not be fused into one valid solid '
+            '(requested radius {:.3f} mm; cuts {})'.format(
+                float(_props(context).get('BranchRadius') or 0.0),
+                max(int(_props(context).get('NumberOfCuts', 2) or 2), 1),
+            )
+        )
 
     return {
-        'shape': api.refine(shape),
+        'shape': shape,
         'connection_lengths': api.build_trim_rec_from_port_lengths(
             list(zip(ports, trims))
         ),
@@ -1648,7 +1663,7 @@ def _wye_horizontal_extent(api, port):
     elif profile in {'Rectangular', 'Oval'}:
         extent = float(api.port_width(port))
     else:
-        raise ValueError("Wye radius requires a circular, rectangular, or oval profile")
+        raise ValueError("Split-profile wye requires a circular, rectangular, or oval profile")
 
     if extent <= api.EPS:
         raise ValueError('Wye branch horizontal extent must be positive')
