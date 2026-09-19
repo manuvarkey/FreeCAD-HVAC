@@ -119,7 +119,30 @@ happening without having to reverse-engineer it from the code alone.
   comments in line with this style rather than leaving old dense/cryptic
   ones sitting next to new ones.
 
-## 5. Rule stability
+## 5. Python formatting
+
+AI agents must use the following Ruff settings when generating or editing
+Python code:
+
+```toml
+line-length = 120
+
+[format]
+skip-magic-trailing-comma = true
+
+[lint]
+select = ["E302", "E303", "I"]
+
+[lint.isort]
+split-on-trailing-comma = false
+```
+
+Run Ruff's selected lint fixes and formatter on the Python files changed
+by the task, then verify that lint and format checks pass. Enable preview
+for the lint command if the installed Ruff version requires it for E302
+and E303. Do not reformat unrelated files.
+
+## 6. Rule stability
 
 Do not modify this file, or otherwise change the rules above, without
 explicit instruction to do so. Encountering a case these rules don't cover

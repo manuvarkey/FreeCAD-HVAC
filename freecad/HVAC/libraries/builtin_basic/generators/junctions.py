@@ -39,10 +39,7 @@ def _positive(value, fallback):
 
 
 def _trimmed(api, port, length):
-    return api.copy_port(
-        port,
-        position=api.port_position(port) + api.port_direction(port) * float(length),
-    )
+    return api.copy_port(port, position=api.port_position(port) + api.port_direction(port) * float(length))
 
 
 def _port_axis_point(api, port, point):
@@ -54,11 +51,7 @@ def _port_axis_point(api, port, point):
 
 def _clip_branch_at_trunk_center(api, shape, trunk_center, branch):
     """Keep the branch-facing half of a stub at the trunk center plane."""
-    return api.clip_plane(
-        shape,
-        (trunk_center, api.port_direction(branch)),
-        side='positive',
-    )
+    return api.clip_plane(shape, (trunk_center, api.port_direction(branch)), side="positive")
 
 
 def _loft(api, ports, offset=0.0, ruled=True):
@@ -227,9 +220,7 @@ def build_elbow(context):
     api = context["hvac_api"]
     ports, route = _elbow_route(context)
     shape = api.sweep(
-        [api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])],
-        route["path"],
-        solid=True,
+        [api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])], route["path"], solid=True
     )
     return {
         "shape": api.refine(shape),
@@ -247,12 +238,12 @@ def _profile_extent(profile):
 
 def _mitered_bend(api, port0, port1, radius, cuts, profile0=None, profile1=None):
     """Build a faceted bend between two arbitrary ports.
-    
+
     Used by through mitered elbows, the mitered-shoe tee, and mitered wye.
     The tangent-arc route defines the fitting-end positions and the reference
     radius; the actual body between those ends is constructed from straight
     gores separated by mitre planes.
-    
+
     ``profile0``/``profile1`` optionally replace the exact tangent-end
     sections, allowing a split wye profile to transition through the gores.
     Returns ``(shape, [trim0, trim1])``.
@@ -471,9 +462,7 @@ def build_transition_radiussed(context):
     api = context["hvac_api"]
     ports, route = _transition_radiussed_route(context)
     shape = api.sweep(
-        [api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])],
-        route["path"],
-        solid=True,
+        [api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])], route["path"], solid=True
     )
     return {
         "shape": api.refine(shape),
@@ -635,11 +624,11 @@ def _lean_port_from_profile_frame(api, run_a, run_b, branch):
             return run_a if local_x >= 0.0 else run_b
         return run_a if local_y >= 0.0 else run_b
 
-    key_a = (str(run_a.get('edge_key', '') or ''), str(run_a.get('segment_end', '') or ''))
-    key_b = (str(run_b.get('edge_key', '') or ''), str(run_b.get('segment_end', '') or ''))
+    key_a = (str(run_a.get("edge_key", "") or ""), str(run_a.get("segment_end", "") or ""))
+    key_b = (str(run_b.get("edge_key", "") or ""), str(run_b.get("segment_end", "") or ""))
 
-    if key_a == ('', '') or key_b == ('', ''):
-        raise ValueError('Symmetric tee bend direction requires profile_x_axis or stable run edge keys')
+    if key_a == ("", "") or key_b == ("", ""):
+        raise ValueError("Symmetric tee bend direction requires profile_x_axis or stable run edge keys")
 
     return run_a if key_a > key_b else run_b
 
@@ -695,11 +684,7 @@ def _star_junction(context, default_factor=0.6, align_branch=False):
     legs = []
     for source_port, port in zip(ports, trimmed):
         inner_position = _port_axis_point(api, source_port, center) if source_port is branch else center
-        center_port = api.copy_port(
-            port,
-            position=inner_position,
-            direction=api.port_direction(port) * -1.0,
-        )
+        center_port = api.copy_port(port, position=inner_position, direction=api.port_direction(port) * -1.0)
         leg = _loft(api, [port, center_port], 0.0, ruled=True)
         if source_port is branch:
             leg = _clip_branch_at_trunk_center(api, leg, center, branch)
@@ -844,7 +829,9 @@ def _tap_run_minimums(api, trunk_center, run_a, run_b, surface_profile):
     return min_a, min_b
 
 
-def _tap_trims(api, p, run_a, run_b, branch, trunk_center, branch_dir, tap_top, surface_profile, run_factor, branch_factor):
+def _tap_trims(
+    api, p, run_a, run_b, branch, trunk_center, branch_dir, tap_top, surface_profile, run_factor, branch_factor
+):
     """Total connection lengths = intrinsic fitting dimensions + user trims."""
     min_a, min_b = _tap_run_minimums(api, trunk_center, run_a, run_b, surface_profile)
     branch_min = max(0.0, (tap_top - api.port_position(branch)).dot(branch_dir))
@@ -869,29 +856,42 @@ def _straight_tap_layout(context, run_factor, branch_factor):
     run_a, run_b, branch = api.run_branch_ports(context)
     p = _props(context)
 
-    trunk_center, branch_dir, toe_dir, branch_width, run_depth, overlap, run_surface = _tap_geometry(context, api, run_a, run_b, branch)
+    trunk_center, branch_dir, toe_dir, branch_width, run_depth, overlap, run_surface = _tap_geometry(
+        context, api, run_a, run_b, branch
+    )
     tap_height = _positive(p.get("TapHeight"), 0.5 * branch_width)
     tap_top = run_surface + branch_dir * tap_height
     base_position = run_surface - branch_dir * overlap
 
     surface_port = api.copy_port(branch, position=run_surface)
     surface_profile = api.profile_from_port(surface_port)
-    trim_a, trim_b, trim_branch = _tap_trims(api, p, run_a, run_b, branch, trunk_center, branch_dir, tap_top, surface_profile, run_factor, branch_factor)
+    trim_a, trim_b, trim_branch = _tap_trims(
+        api, p, run_a, run_b, branch, trunk_center, branch_dir, tap_top, surface_profile, run_factor, branch_factor
+    )
 
     return {
-        "run_a": run_a, "run_b": run_b, "branch": branch,
-        "trunk_center": trunk_center, "branch_dir": branch_dir, "base_position": base_position,
-        "trim_a": trim_a, "trim_b": trim_b, "trim_branch": trim_branch,
+        "run_a": run_a,
+        "run_b": run_b,
+        "branch": branch,
+        "trunk_center": trunk_center,
+        "branch_dir": branch_dir,
+        "base_position": base_position,
+        "trim_a": trim_a,
+        "trim_b": trim_b,
+        "trim_branch": trim_branch,
     }
 
 
 def measure_straight_tap(context, run_factor, branch_factor):
     api = context["hvac_api"]
     layout = _straight_tap_layout(context, run_factor, branch_factor)
-    return api.build_trim_rec_from_port_lengths([
-        (layout["run_a"], layout["trim_a"]), (layout["run_b"], layout["trim_b"]),
-        (layout["branch"], layout["trim_branch"]),
-    ])
+    return api.build_trim_rec_from_port_lengths(
+        [
+            (layout["run_a"], layout["trim_a"]),
+            (layout["run_b"], layout["trim_b"]),
+            (layout["branch"], layout["trim_branch"]),
+        ]
+    )
 
 
 def _straight_tap(context, run_factor, branch_factor):
@@ -925,7 +925,9 @@ def _saddle_tap_layout(context, run_factor, branch_factor, flare_factor=0.6):
     run_a, run_b, branch = api.run_branch_ports(context)
     p = _props(context)
 
-    trunk_center, branch_dir, toe_dir, branch_width, run_depth, overlap, run_surface = _tap_geometry(context, api, run_a, run_b, branch)
+    trunk_center, branch_dir, toe_dir, branch_width, run_depth, overlap, run_surface = _tap_geometry(
+        context, api, run_a, run_b, branch
+    )
     tap_height = _positive(p.get("TapHeight"), 0.5 * branch_width)
     growth = _positive(p.get("SaddleGrowth"), flare_factor * branch_width)
     tap_top = run_surface + branch_dir * tap_height
@@ -934,25 +936,38 @@ def _saddle_tap_layout(context, run_factor, branch_factor, flare_factor=0.6):
     surface_port = api.copy_port(branch, position=run_surface)
     surface_profile = api.offset_profile(api.profile_from_port(surface_port), growth)
 
-    trim_a, trim_b, trim_branch = _tap_trims(api, p, run_a, run_b, branch, trunk_center, branch_dir, tap_top, surface_profile, run_factor, branch_factor)
+    trim_a, trim_b, trim_branch = _tap_trims(
+        api, p, run_a, run_b, branch, trunk_center, branch_dir, tap_top, surface_profile, run_factor, branch_factor
+    )
 
     return {
-        "run_a": run_a, "run_b": run_b, "branch": branch,
-        "trunk_center": trunk_center, "branch_dir": branch_dir,
-        "tap_top": tap_top, "base_position": base_position,
-        "growth": growth, "overlap": overlap, "tap_height": tap_height,
+        "run_a": run_a,
+        "run_b": run_b,
+        "branch": branch,
+        "trunk_center": trunk_center,
+        "branch_dir": branch_dir,
+        "tap_top": tap_top,
+        "base_position": base_position,
+        "growth": growth,
+        "overlap": overlap,
+        "tap_height": tap_height,
         "surface_profile": surface_profile,
-        "trim_a": trim_a, "trim_b": trim_b, "trim_branch": trim_branch,
+        "trim_a": trim_a,
+        "trim_b": trim_b,
+        "trim_branch": trim_branch,
     }
 
 
 def measure_saddle_tap(context, run_factor, branch_factor, flare_factor=0.6):
     api = context["hvac_api"]
     layout = _saddle_tap_layout(context, run_factor, branch_factor, flare_factor)
-    return api.build_trim_rec_from_port_lengths([
-        (layout["run_a"], layout["trim_a"]), (layout["run_b"], layout["trim_b"]),
-        (layout["branch"], layout["trim_branch"]),
-    ])
+    return api.build_trim_rec_from_port_lengths(
+        [
+            (layout["run_a"], layout["trim_a"]),
+            (layout["run_b"], layout["trim_b"]),
+            (layout["branch"], layout["trim_branch"]),
+        ]
+    )
 
 
 def _saddle_tap(context, run_factor, branch_factor, flare_factor=0.6):
@@ -999,7 +1014,9 @@ def _star_tee_layout(context, run_factor, branch_factor):
     center = api.center_from_context(context)
     tee_ports = [run_a, run_b, branch]
     minimums = _junction_minimums(api, center, tee_ports)
-    trims = _junction_trims(api, p, tee_ports, ("TrimRunA", "TrimRunB", "TrimBranch"), (run_factor, run_factor, branch_factor), minimums)
+    trims = _junction_trims(
+        api, p, tee_ports, ("TrimRunA", "TrimRunB", "TrimBranch"), (run_factor, run_factor, branch_factor), minimums
+    )
     return run_a, run_b, branch, center, minimums, trims
 
 
@@ -1013,14 +1030,7 @@ def _star_tee(context, run_factor, branch_factor):
     """Straight-legged tee with trims measured beyond the intrinsic junction body."""
     api = context["hvac_api"]
     run_a, run_b, branch, center, minimums, trims = _star_tee_layout(context, run_factor, branch_factor)
-    shape = _star_body(
-        api,
-        center,
-        [run_a, run_b, branch],
-        trims,
-        minimums,
-        branch=branch,
-    )
+    shape = _star_body(api, center, [run_a, run_b, branch], trims, minimums, branch=branch)
 
     return {
         "shape": api.refine(shape),
@@ -1053,7 +1063,7 @@ def _run_surface_along_branch(api, center, run_a, run_b, branch_dir):
     transverse = branch_dir - run_dir * branch_dir.dot(run_dir)
     sin_angle = transverse.Length
     if sin_angle <= api.EPS:
-        raise ValueError('Branch is parallel to the run; no run surface to meet')
+        raise ValueError("Branch is parallel to the run; no run surface to meet")
     surface_dir = api.unit(transverse)
 
     center_projection = center.dot(surface_dir)
@@ -1069,7 +1079,7 @@ def _run_surface_along_branch(api, center, run_a, run_b, branch_dir):
     normal_surface_depth = near_projection - center_projection
     normal_run_depth = near_projection - far_projection
     if normal_run_depth <= api.EPS:
-        raise ValueError('Run profile has zero depth')
+        raise ValueError("Run profile has zero depth")
 
     branch_surface_distance = normal_surface_depth / sin_angle
     run_depth_along_branch = normal_run_depth / sin_angle
@@ -1088,19 +1098,19 @@ def _radius_tee_layout(context, run_factor, branch_factor):
     TrimBranch is additional straight length beyond the intrinsic curved
     fitting body, not distance measured from the run surface.
     """
-    api = context['hvac_api']
+    api = context["hvac_api"]
     run_a, run_b, branch = api.run_branch_ports(context)
     p = _props(context)
     center = api.center_from_context(context)
     tee_ports = [run_a, run_b, branch]
-    if any(api.port_profile(port) != 'Rectangular' for port in tee_ports):
-        raise ValueError('Radius tee requires rectangular profiles on all three ports')
+    if any(api.port_profile(port) != "Rectangular" for port in tee_ports):
+        raise ValueError("Radius tee requires rectangular profiles on all three ports")
 
     branch_size = _size(api, branch)
-    radius = _positive(p.get('BranchRadius'), branch_factor * branch_size)
+    radius = _positive(p.get("BranchRadius"), branch_factor * branch_size)
     radius = max(radius, 0.5 * branch_size)
 
-    main = _lean_port(api, run_a, run_b, branch, reverse=bool(p.get('ReverseBranchBend', False)))
+    main = _lean_port(api, run_a, run_b, branch, reverse=bool(p.get("ReverseBranchBend", False)))
     minor = run_b if main is run_a else run_a
     # Cap only the internal sections; connected duct dimensions stay intact.
     main_width = api.port_width(main)
@@ -1108,13 +1118,11 @@ def _radius_tee_layout(context, run_factor, branch_factor):
     minor_width = min(api.port_width(minor), main_width)
     main_height = api.port_height(main)
     if min(branch_width, minor_width, main_height) <= api.EPS:
-        raise ValueError('Radius tee widths and main trunk height must be positive')
-    _, horizontal, _, run_dir = api.make_profile_frame(
-        api.port_direction(main), api.port_profile_x_axis(main), center,
-    )
+        raise ValueError("Radius tee widths and main trunk height must be positive")
+    _, horizontal, _, run_dir = api.make_profile_frame(api.port_direction(main), api.port_profile_x_axis(main), center)
     branch_dir = api.unit(api.port_direction(branch))
     if abs(branch_dir.dot(horizontal)) <= api.EPS:
-        raise ValueError('Radius tee branch must separate along the main trunk width')
+        raise ValueError("Radius tee branch must separate along the main trunk width")
     if branch_dir.dot(horizontal) < 0.0:
         horizontal = horizontal * -1.0
 
@@ -1122,9 +1130,7 @@ def _radius_tee_layout(context, run_factor, branch_factor):
     # must not change their height or the main profile's lateral position.
     inner_position = _port_axis_point(api, main, center)
     trunk_axis_port = api.copy_port(main, position=inner_position)
-    trunk_axis_port['section_params'] = dict(
-        api.port_section_params(main), Width=branch_width, Height=main_height,
-    )
+    trunk_axis_port["section_params"] = dict(api.port_section_params(main), Width=branch_width, Height=main_height)
 
     # Set the lateral position from the main profile edge. This only places
     # the section across the width; its axial shift follows the main trunk.
@@ -1133,49 +1139,36 @@ def _radius_tee_layout(context, run_factor, branch_factor):
     inner_profile = api.profile_from_port(trunk_axis_port)
     _, inner_edge = api.profile_projection_bounds(inner_profile, horizontal)
     shift = main_edge - inner_edge
-    trunk_axis_port = api.copy_port(
-        trunk_axis_port,
-        position=inner_position + horizontal * shift,
-    )
+    trunk_axis_port = api.copy_port(trunk_axis_port, position=inner_position + horizontal * shift)
 
     route = api.make_elbow_path(branch, trunk_axis_port, radius)
-    branch_route_trim = route['trim_lengths'][0]
+    branch_route_trim = route["trim_lengths"][0]
 
     # Use one main-axis shift for both generated ports and the main inner
     # port, keeping all three on the same tangent plane.
     base_position = api.port_position(trunk_axis_port)
-    tangent_position = api.port_position(route['ports'][1])
+    tangent_position = api.port_position(route["ports"][1])
     axial_shift = run_dir * (tangent_position - base_position).dot(run_dir)
-    branch_trunk_port = api.copy_port(
-        trunk_axis_port, position=base_position + axial_shift,
-    )
-    route['ports'][1] = branch_trunk_port
+    branch_trunk_port = api.copy_port(trunk_axis_port, position=base_position + axial_shift)
+    route["ports"][1] = branch_trunk_port
 
     # Anchor the minor section to the opposite edge. Overlap is allowed.
     minor_shift = opposite_edge + 0.5 * minor_width - base_position.dot(horizontal)
-    minor_trunk_port = api.copy_port(
-        trunk_axis_port,
-        position=base_position + horizontal * minor_shift + axial_shift,
-    )
-    minor_trunk_port['section_params'] = dict(
-        api.port_section_params(main), Width=minor_width, Height=main_height,
-    )
+    minor_trunk_port = api.copy_port(trunk_axis_port, position=base_position + horizontal * minor_shift + axial_shift)
+    minor_trunk_port["section_params"] = dict(api.port_section_params(main), Width=minor_width, Height=main_height)
     # The main body keeps its own full section, independent of overlap
     # or a gap between the two incoming sections. Keep the tangent's height
     # and axial position so all three sections share the same body frame.
     main_midpoint = 0.5 * (opposite_edge + main_edge)
     main_inner_port = api.copy_port(
-        main,
-        position=(base_position
-                  + horizontal * (main_midpoint - base_position.dot(horizontal))
-                  + axial_shift),
+        main, position=(base_position + horizontal * (main_midpoint - base_position.dot(horizontal)) + axial_shift)
     )
 
     # Size the layout from the actual path and connection sections, without
     # adding a guessed allowance for the swept body's intermediate sections.
     minimums = _junction_minimums(api, center, tee_ports)
-    inner_ports = [*route['ports'], minor_trunk_port, main_inner_port]
-    layout_shapes = [route['path']] + [api.profile_from_port(port) for port in inner_ports]
+    inner_ports = [*route["ports"], minor_trunk_port, main_inner_port]
+    layout_shapes = [route["path"]] + [api.profile_from_port(port) for port in inner_ports]
     for index, port in enumerate(tee_ports):
         direction = api.unit(api.port_direction(port))
         port_projection = api.port_position(port).dot(direction)
@@ -1191,62 +1184,53 @@ def _radius_tee_layout(context, run_factor, branch_factor):
     minimums[main_index] = max(minimums[main_index], main_reach + run_factor * _size(api, main))
 
     trims = _junction_trims(
-        api,
-        p,
-        tee_ports,
-        ('TrimRunA', 'TrimRunB', 'TrimBranch'),
-        (run_factor, run_factor, branch_factor),
-        minimums,
+        api, p, tee_ports, ("TrimRunA", "TrimRunB", "TrimBranch"), (run_factor, run_factor, branch_factor), minimums
     )
 
     return {
-        'run_a': run_a,
-        'run_b': run_b,
-        'branch': branch,
-        'center': center,
-        'main': main,
-        'minor': minor,
-        'minor_trunk_port': minor_trunk_port,
-        'main_inner_port': main_inner_port,
-        'route': route,
-        'trims': trims,
+        "run_a": run_a,
+        "run_b": run_b,
+        "branch": branch,
+        "center": center,
+        "main": main,
+        "minor": minor,
+        "minor_trunk_port": minor_trunk_port,
+        "main_inner_port": main_inner_port,
+        "route": route,
+        "trims": trims,
     }
 
 
 def measure_radius_tee(context, run_factor, branch_factor):
-    api = context['hvac_api']
+    api = context["hvac_api"]
     layout = _radius_tee_layout(context, run_factor, branch_factor)
 
     return api.build_trim_rec_from_port_lengths(
         [
-            (layout['run_a'], layout['trims'][0]),
-            (layout['run_b'], layout['trims'][1]),
-            (layout['branch'], layout['trims'][2]),
+            (layout["run_a"], layout["trims"][0]),
+            (layout["run_b"], layout["trims"][1]),
+            (layout["branch"], layout["trims"][2]),
         ]
     )
 
 
 def _radius_tee(context, run_factor, branch_factor):
-    api = context['hvac_api']
+    api = context["hvac_api"]
     layout = _radius_tee_layout(context, run_factor, branch_factor)
 
-    run_a = layout['run_a']
-    run_b = layout['run_b']
-    branch = layout['branch']
-    center = layout['center']
-    trims = layout['trims']
-    route = layout['route']
+    run_a = layout["run_a"]
+    run_b = layout["run_b"]
+    branch = layout["branch"]
+    center = layout["center"]
+    trims = layout["trims"]
+    route = layout["route"]
 
     # Build the curved body only here; measurement uses the shared layout.
-    stub = api.sweep(
-        [api.profile_from_port(port) for port in route['ports']],
-        route['path'],
-        solid=True,
-    )
+    stub = api.sweep([api.profile_from_port(port) for port in route["ports"]], route["path"], solid=True)
 
     # Start the branch extension at the sweep's actual end section. A trim
     # length can be clamped, so reconstructing that section can leave a gap.
-    branch_start = route['ports'][0]
+    branch_start = route["ports"][0]
     branch_end = _trimmed(api, branch, trims[2])
     branch_reach = api.port_position(branch_end) - api.port_position(branch_start)
     if branch_reach.Length > api.EPS:
@@ -1254,22 +1238,16 @@ def _radius_tee(context, run_factor, branch_factor):
 
     # Loft the minor trunk into its own section, then join both sections
     # to the full main trunk. The branch sweep keeps its entire profile.
-    main_index = 0 if layout['main'] is run_a else 1
+    main_index = 0 if layout["main"] is run_a else 1
     minor_index = 1 - main_index
-    minor_body = _loft(api, [
-        _trimmed(api, layout['minor'], trims[minor_index]),
-        layout['minor_trunk_port'],
-    ])
-    main_body = _loft(api, [
-        layout['main_inner_port'],
-        _trimmed(api, layout['main'], trims[main_index]),
-    ])
+    minor_body = _loft(api, [_trimmed(api, layout["minor"], trims[minor_index]), layout["minor_trunk_port"]])
+    main_body = _loft(api, [layout["main_inner_port"], _trimmed(api, layout["main"], trims[main_index])])
     shape = api.fuse(main_body, minor_body, stub)
     shape = _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
 
     return {
-        'shape': api.refine(shape),
-        'connection_lengths': api.build_trim_rec_from_port_lengths(
+        "shape": api.refine(shape),
+        "connection_lengths": api.build_trim_rec_from_port_lengths(
             [(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]
         ),
     }
@@ -1351,24 +1329,20 @@ def _tee_mitered_shoe_layout(context):
 
     TrimBranch is additional length beyond the intrinsic mitered body.
     """
-    api = context['hvac_api']
+    api = context["hvac_api"]
     run_a, run_b, branch = api.run_branch_ports(context)
     p = _props(context)
     center = api.center_from_context(context)
     tee_ports = [run_a, run_b, branch]
 
     branch_size = _size(api, branch)
-    radius = _positive(p.get('BranchRadius'), 0.6 * branch_size)
+    radius = _positive(p.get("BranchRadius"), 0.6 * branch_size)
     radius = max(radius, 0.5 * branch_size)
-    cuts = max(int(p.get('NumberOfCuts', 1) or 1), 1)
+    cuts = max(int(p.get("NumberOfCuts", 1) or 1), 1)
 
-    lean = _lean_port(api, run_a, run_b, branch, reverse=bool(p.get('ReverseBranchBend', False)))
+    lean = _lean_port(api, run_a, run_b, branch, reverse=bool(p.get("ReverseBranchBend", False)))
     inner_position = _port_axis_point(api, branch, center)
-    trunk_axis_port = api.copy_port(
-        branch,
-        position=inner_position,
-        direction=api.port_direction(lean),
-    )
+    trunk_axis_port = api.copy_port(branch, position=inner_position, direction=api.port_direction(lean))
 
     bend_shape, route_trims = _mitered_bend(api, branch, trunk_axis_port, radius, cuts)
     branch_route_trim, lean_route_trim = route_trims
@@ -1380,52 +1354,45 @@ def _tee_mitered_shoe_layout(context):
     lean_index = 0 if lean is run_a else 1
     minimums[lean_index] = max(minimums[lean_index], lean_route_trim)
 
-    trims = _junction_trims(
-        api,
-        p,
-        tee_ports,
-        ('TrimRunA', 'TrimRunB', 'TrimBranch'),
-        (0.4, 0.4, 0.6),
-        minimums,
-    )
+    trims = _junction_trims(api, p, tee_ports, ("TrimRunA", "TrimRunB", "TrimBranch"), (0.4, 0.4, 0.6), minimums)
 
     return {
-        'run_a': run_a,
-        'run_b': run_b,
-        'branch': branch,
-        'center': center,
-        'lean': lean,
-        'bend_shape': bend_shape,
-        'branch_route_trim': branch_route_trim,
-        'lean_route_trim': lean_route_trim,
-        'trims': trims,
+        "run_a": run_a,
+        "run_b": run_b,
+        "branch": branch,
+        "center": center,
+        "lean": lean,
+        "bend_shape": bend_shape,
+        "branch_route_trim": branch_route_trim,
+        "lean_route_trim": lean_route_trim,
+        "trims": trims,
     }
 
 
 def measure_tee_mitered_shoe(context):
-    api = context['hvac_api']
+    api = context["hvac_api"]
     layout = _tee_mitered_shoe_layout(context)
 
     return api.build_trim_rec_from_port_lengths(
         [
-            (layout['run_a'], layout['trims'][0]),
-            (layout['run_b'], layout['trims'][1]),
-            (layout['branch'], layout['trims'][2]),
+            (layout["run_a"], layout["trims"][0]),
+            (layout["run_b"], layout["trims"][1]),
+            (layout["branch"], layout["trims"][2]),
         ]
     )
 
 
 def build_tee_mitered_shoe(context):
-    api = context['hvac_api']
+    api = context["hvac_api"]
     layout = _tee_mitered_shoe_layout(context)
 
-    run_a = layout['run_a']
-    run_b = layout['run_b']
-    branch = layout['branch']
-    center = layout['center']
-    trims = layout['trims']
+    run_a = layout["run_a"]
+    run_b = layout["run_b"]
+    branch = layout["branch"]
+    center = layout["center"]
+    trims = layout["trims"]
 
-    bend_shape = _extend_leg(api, layout['bend_shape'], branch, layout['branch_route_trim'], trims[2])
+    bend_shape = _extend_leg(api, layout["bend_shape"], branch, layout["branch_route_trim"], trims[2])
     trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])])
 
     bend_shape = _clip_branch_at_trunk_center(api, bend_shape, center, branch)
@@ -1433,8 +1400,8 @@ def build_tee_mitered_shoe(context):
     shape = _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
 
     return {
-        'shape': api.refine(shape),
-        'connection_lengths': api.build_trim_rec_from_port_lengths(
+        "shape": api.refine(shape),
+        "connection_lengths": api.build_trim_rec_from_port_lengths(
             [(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]
         ),
     }
@@ -1488,19 +1455,29 @@ def _lateral_tee_layout(context):
     trim_branch = branch_min + _extra_trim(p.get("TrimBranch"), 0.65 * _size(api, branch))
 
     return {
-        "run_a": run_a, "run_b": run_b, "branch": branch, "center": center,
-        "branch_dir": branch_dir, "run_surface": run_surface, "surface_profile": surface_profile,
-        "trim_a": trim_a, "trim_b": trim_b, "trim_branch": trim_branch,
+        "run_a": run_a,
+        "run_b": run_b,
+        "branch": branch,
+        "center": center,
+        "branch_dir": branch_dir,
+        "run_surface": run_surface,
+        "surface_profile": surface_profile,
+        "trim_a": trim_a,
+        "trim_b": trim_b,
+        "trim_branch": trim_branch,
     }
 
 
 def measure_lateral_tee(context):
     api = context["hvac_api"]
     layout = _lateral_tee_layout(context)
-    return api.build_trim_rec_from_port_lengths([
-        (layout["run_a"], layout["trim_a"]), (layout["run_b"], layout["trim_b"]),
-        (layout["branch"], layout["trim_branch"]),
-    ])
+    return api.build_trim_rec_from_port_lengths(
+        [
+            (layout["run_a"], layout["trim_a"]),
+            (layout["run_b"], layout["trim_b"]),
+            (layout["branch"], layout["trim_branch"]),
+        ]
+    )
 
 
 def build_lateral_tee(context):
@@ -1543,9 +1520,9 @@ def build_lateral_tee(context):
 
 def _wye_mitered_layout(context):
     """Lay out two split-profile faceted bends entering one common leg."""
-    api = context['hvac_api']
+    api = context["hvac_api"]
     p = _props(context)
-    cuts = max(int(p.get('NumberOfCuts', 2) or 2), 1)
+    cuts = max(int(p.get("NumberOfCuts", 2) or 2), 1)
 
     # Reuse the same split plane and feasible elbow paths as the radius wye.
     ports, center, main_center, split_routes = _wye_split_route_layout(context)
@@ -1555,39 +1532,28 @@ def _wye_mitered_layout(context):
     intrinsic_shapes = []
 
     for branch, branch_index, split_face, route in split_routes:
-        split_port = api.copy_port(
-            main_center,
-            position=split_face.CenterOfMass,
-        )
-        main_tangent = route['ports'][1]
+        split_port = api.copy_port(main_center, position=split_face.CenterOfMass)
+        main_tangent = route["ports"][1]
         main_tangent_position = api.port_position(main_tangent)
         main_reach = main_tangent_position - split_face.CenterOfMass
         tangent_face = split_face
         split_shape = None
         if main_reach.Length > api.EPS:
             split_shape = api.extrude(split_face.OuterWire, main_reach, solid=True)
-            tangent_face = api.section_face(
-                split_shape,
-                (main_tangent_position, api.port_direction(main_tangent)),
-            )
+            tangent_face = api.section_face(split_shape, (main_tangent_position, api.port_direction(main_tangent)))
 
         bend_shape, route_trims = _mitered_bend(
-            api,
-            branch,
-            split_port,
-            route['radius'],
-            cuts,
-            profile1=tangent_face.OuterWire,
+            api, branch, split_port, route["radius"], cuts, profile1=tangent_face.OuterWire
         )
 
         routes.append(
             {
-                'branch': branch,
-                'branch_index': branch_index,
-                'split_shape': split_shape,
-                'bend_shape': bend_shape,
-                'branch_trim': route_trims[0],
-                'radius': route['radius'],
+                "branch": branch,
+                "branch_index": branch_index,
+                "split_shape": split_shape,
+                "bend_shape": bend_shape,
+                "branch_trim": route_trims[0],
+                "radius": route["radius"],
             }
         )
         intrinsic_shapes.extend((split_shape, bend_shape))
@@ -1596,52 +1562,41 @@ def _wye_mitered_layout(context):
 
     minimums = _junction_minimums(api, center, ports)
     minimums = _junction_shape_minimums(api, center, ports, intrinsic_shape, minimums)
-    main_split_trim = (
-        api.port_position(main_center) - api.port_position(main)
-    ).dot(main_direction)
+    main_split_trim = (api.port_position(main_center) - api.port_position(main)).dot(main_direction)
     minimums[0] = max(minimums[0], main_split_trim)
 
     for route in routes:
-        branch_index = route['branch_index']
-        minimums[branch_index] = max(minimums[branch_index], route['branch_trim'])
+        branch_index = route["branch_index"]
+        minimums[branch_index] = max(minimums[branch_index], route["branch_trim"])
 
-    trims = _junction_trims(
-        api,
-        p,
-        ports,
-        ('TrimMain', 'TrimBranchA', 'TrimBranchB'),
-        (0.70, 0.70, 0.70),
-        minimums,
-    )
+    trims = _junction_trims(api, p, ports, ("TrimMain", "TrimBranchA", "TrimBranchB"), (0.70, 0.70, 0.70), minimums)
 
     return {
-        'ports': ports,
-        'center': center,
-        'main': main,
-        'main_center': main_center,
-        'routes': routes,
-        'trims': trims,
+        "ports": ports,
+        "center": center,
+        "main": main,
+        "main_center": main_center,
+        "routes": routes,
+        "trims": trims,
     }
 
 
 def measure_wye_mitered(context):
-    api = context['hvac_api']
+    api = context["hvac_api"]
     layout = _wye_mitered_layout(context)
 
-    return api.build_trim_rec_from_port_lengths(
-        list(zip(layout['ports'], layout['trims']))
-    )
+    return api.build_trim_rec_from_port_lengths(list(zip(layout["ports"], layout["trims"])))
 
 
 def build_wye_mitered(context):
     """Mitered wye with each non-main branch entering the common leg through a faceted bend."""
-    api = context['hvac_api']
+    api = context["hvac_api"]
     layout = _wye_mitered_layout(context)
 
-    ports = layout['ports']
-    main = layout['main']
-    main_center = layout['main_center']
-    trims = layout['trims']
+    ports = layout["ports"]
+    main = layout["main"]
+    main_center = layout["main_center"]
+    trims = layout["trims"]
 
     main_end = _trimmed(api, main, trims[0])
     main_reach = api.port_position(main_end) - api.port_position(main_center)
@@ -1650,36 +1605,24 @@ def build_wye_mitered(context):
     if main_reach.Length > main_tolerance:
         shape = _loft(api, [main_end, main_center], 0.0, ruled=True)
 
-    for route in layout['routes']:
-        branch = route['branch']
-        branch_index = route['branch_index']
+    for route in layout["routes"]:
+        branch = route["branch"]
+        branch_index = route["branch_index"]
 
-        bend_shape = _extend_leg(
-            api,
-            route['bend_shape'],
-            branch,
-            route['branch_trim'],
-            trims[branch_index],
-        )
+        bend_shape = _extend_leg(api, route["bend_shape"], branch, route["branch_trim"], trims[branch_index])
 
-        shape = api.fuse(shape, route['split_shape'], bend_shape)
+        shape = api.fuse(shape, route["split_shape"], bend_shape)
 
     validation = api.validate(shape, require_solid=True)
-    if not validation['valid'] or validation['solid_count'] != 1:
+    if not validation["valid"] or validation["solid_count"] != 1:
         raise RuntimeError(
-            'Mitered wye geometry could not be fused into one valid solid '
-            '(requested radius {:.3f} mm; cuts {})'.format(
-                float(_props(context).get('BranchRadius') or 0.0),
-                max(int(_props(context).get('NumberOfCuts', 2) or 2), 1),
+            "Mitered wye geometry could not be fused into one valid solid (requested radius {:.3f} mm; cuts {})".format(
+                float(_props(context).get("BranchRadius") or 0.0),
+                max(int(_props(context).get("NumberOfCuts", 2) or 2), 1),
             )
         )
 
-    return {
-        'shape': shape,
-        'connection_lengths': api.build_trim_rec_from_port_lengths(
-            list(zip(ports, trims))
-        ),
-    }
+    return {"shape": shape, "connection_lengths": api.build_trim_rec_from_port_lengths(list(zip(ports, trims)))}
 
 
 def _wye_common_index(api, ports):
@@ -1710,10 +1653,10 @@ def _wye_branch_sort_key(api, main, branch):
         direction = api.unit(api.port_direction(branch))
         return round(direction.dot(x_axis), 12), round(direction.dot(y_axis), 12)
 
-    key = (str(branch.get('edge_key', '') or ''), str(branch.get('segment_end', '') or ''))
+    key = (str(branch.get("edge_key", "") or ""), str(branch.get("segment_end", "") or ""))
 
-    if key == ('', ''):
-        raise ValueError('Wye branch ordering requires profile_x_axis or stable branch edge keys')
+    if key == ("", ""):
+        raise ValueError("Wye branch ordering requires profile_x_axis or stable branch edge keys")
 
     return key
 
@@ -1721,7 +1664,7 @@ def _wye_branch_sort_key(api, main, branch):
 def _wye_port_roles(api, ports):
     """Return stable semantic ordering: common/main leg, branch A, branch B."""
     if len(ports) != 3:
-        raise ValueError('Wye requires exactly three ports')
+        raise ValueError("Wye requires exactly three ports")
 
     main_index = _wye_common_index(api, ports)
     main = ports[main_index]
@@ -1734,15 +1677,15 @@ def _wye_port_roles(api, ports):
 def _wye_horizontal_extent(api, port):
     """Return the branch profile dimension along its horizontal axis."""
     profile = api.port_profile(port)
-    if profile == 'Circular':
+    if profile == "Circular":
         extent = float(api.port_diameter(port))
-    elif profile in {'Rectangular', 'Oval'}:
+    elif profile in {"Rectangular", "Oval"}:
         extent = float(api.port_width(port))
     else:
         raise ValueError("Split-profile wye requires a circular, rectangular, or oval profile")
 
     if extent <= api.EPS:
-        raise ValueError('Wye branch horizontal extent must be positive')
+        raise ValueError("Wye branch horizontal extent must be positive")
     return extent
 
 
@@ -1750,30 +1693,22 @@ def _wye_main_split_faces(api, main_center, branch_a, branch_b):
     """Split the main profile horizontally in proportion to the branches."""
     main_profile = api.profile_from_port(main_center)
     _, horizontal, _vertical, main_dir = api.make_profile_frame(
-        api.port_direction(main_center),
-        api.port_profile_x_axis(main_center),
-        api.port_position(main_center),
+        api.port_direction(main_center), api.port_profile_x_axis(main_center), api.port_position(main_center)
     )
 
     # Keep the positive split face on branch A's side.
-    branch_delta = api.unit(api.port_direction(branch_a)) - api.unit(
-        api.port_direction(branch_b)
-    )
+    branch_delta = api.unit(api.port_direction(branch_a)) - api.unit(api.port_direction(branch_b))
     branch_delta = branch_delta - main_dir * branch_delta.dot(main_dir)
     side = branch_delta.dot(horizontal)
     if abs(side) <= api.EPS:
-        raise ValueError('Wye branches do not separate along the horizontal profile axis')
+        raise ValueError("Wye branches do not separate along the horizontal profile axis")
     if side < 0.0:
         horizontal = horizontal * -1.0
 
     branch_a_extent = _wye_horizontal_extent(api, branch_a)
     branch_b_extent = _wye_horizontal_extent(api, branch_b)
     ratio = branch_a_extent / (branch_a_extent + branch_b_extent)
-    positive, negative = api.split_profile_face_by_extent(
-        main_profile,
-        horizontal,
-        ratio,
-    )
+    positive, negative = api.split_profile_face_by_extent(main_profile, horizontal, ratio)
     return {id(branch_a): positive, id(branch_b): negative}
 
 
@@ -1795,36 +1730,31 @@ def _wye_elbow_route(api, branch, split_port, requested_radius):
     # An offset split profile can need more radius before both tangent points
     # lie beyond their source ports. The signed distances vary linearly with R.
     signed_trims = [
-        (
-            api.port_position(route_port) - api.port_position(source_port)
-        ).dot(api.unit(api.port_direction(source_port)))
-        for route_port, source_port in zip(route['ports'], (branch, split_port))
+        (api.port_position(route_port) - api.port_position(source_port)).dot(api.unit(api.port_direction(source_port)))
+        for route_port, source_port in zip(route["ports"], (branch, split_port))
     ]
     deficit = clearance - signed_trims[0]
     if deficit > 0.0:
-        theta = api.angle_between(
-            api.port_direction(branch),
-            api.port_direction(split_port),
-        )
+        theta = api.angle_between(api.port_direction(branch), api.port_direction(split_port))
         radius += deficit * math.tan(theta / 2.0)
         route = api.make_elbow_path(branch, split_port, radius)
 
-    route['radius'] = radius
+    route["radius"] = radius
     return route
 
 
 def _wye_split_route_layout(context):
     """Calculate shared port roles, split profiles, and feasible elbow paths."""
-    api = context['hvac_api']
+    api = context["hvac_api"]
     raw_ports = list(api.connected_ports(context))
     if len(raw_ports) != 3:
-        raise ValueError('Fitting requires exactly three connected ports')
+        raise ValueError("Fitting requires exactly three connected ports")
 
     main, branch_a, branch_b = _wye_port_roles(api, raw_ports)
     ports = [main, branch_a, branch_b]
     center = api.center_from_context(context)
     branch_legs = [(1, branch_a), (2, branch_b)]
-    radius = float(_props(context).get('BranchRadius') or 0.0)
+    radius = float(_props(context).get("BranchRadius") or 0.0)
 
     # Step 1: Build provisional paths at the junction center.
     main_direction = api.unit(api.port_direction(main))
@@ -1836,10 +1766,7 @@ def _wye_split_route_layout(context):
         result = []
         for branch_index, branch in branch_legs:
             split_face = split_faces[id(branch)]
-            split_port = api.copy_port(
-                split_center,
-                position=split_face.CenterOfMass,
-            )
+            split_port = api.copy_port(split_center, position=split_face.CenterOfMass)
             route = _wye_elbow_route(api, branch, split_port, radius)
             result.append((branch, branch_index, split_face, route))
         return result
@@ -1851,18 +1778,13 @@ def _wye_split_route_layout(context):
     main_shift = max(
         [0.0]
         + [
-            (
-                api.port_position(route['ports'][1]) - split_face.CenterOfMass
-            ).dot(main_direction)
+            (api.port_position(route["ports"][1]) - split_face.CenterOfMass).dot(main_direction)
             + _wye_route_clearance(api, branch)
             for branch, _, split_face, route in routes
         ]
     )
     if main_shift > api.EPS:
-        main_center = api.copy_port(
-            main_center,
-            position=api.port_position(main_center) + main_direction * main_shift,
-        )
+        main_center = api.copy_port(main_center, position=api.port_position(main_center) + main_direction * main_shift)
         routes = build_routes(main_center)
 
     return ports, center, main_center, routes
@@ -1870,7 +1792,7 @@ def _wye_split_route_layout(context):
 
 def _wye_radius_layout(context):
     """Calculate the split profiles, branch paths, and trims for a wye."""
-    api = context['hvac_api']
+    api = context["hvac_api"]
     p = _props(context)
     ports, center, main_center, routes = _wye_split_route_layout(context)
     main = ports[0]
@@ -1878,36 +1800,24 @@ def _wye_radius_layout(context):
 
     # Include the relocated split plane in the main-leg trim.
     minimums = _junction_minimums(api, center, ports)
-    main_split_trim = (
-        api.port_position(main_center) - api.port_position(main)
-    ).dot(main_direction)
+    main_split_trim = (api.port_position(main_center) - api.port_position(main)).dot(main_direction)
     minimums[0] = max(minimums[0], main_split_trim)
     for _branch, branch_index, _split_face, route in routes:
-        minimums[branch_index] = max(
-            minimums[branch_index],
-            route['trim_lengths'][0],
-        )
+        minimums[branch_index] = max(minimums[branch_index], route["trim_lengths"][0])
 
-    trims = _junction_trims(
-        api,
-        p,
-        ports,
-        ('TrimMain', 'TrimBranchA', 'TrimBranchB'),
-        (0.70, 0.70, 0.70),
-        minimums,
-    )
+    trims = _junction_trims(api, p, ports, ("TrimMain", "TrimBranchA", "TrimBranchB"), (0.70, 0.70, 0.70), minimums)
     return ports, main_center, routes, trims
 
 
 def measure_wye_radius(context):
-    api = context['hvac_api']
+    api = context["hvac_api"]
     ports, _main_center, _routes, trims = _wye_radius_layout(context)
     return api.build_trim_rec_from_port_lengths(list(zip(ports, trims)))
 
 
 def build_wye_radius(context):
     """Build a radiused wye from a horizontally divided main profile."""
-    api = context['hvac_api']
+    api = context["hvac_api"]
     ports, main_center, routes, trims = _wye_radius_layout(context)
 
     # Sweep each split half of the main profile into its branch tangent.
@@ -1915,57 +1825,43 @@ def build_wye_radius(context):
     split_touch_sweeps = []
     branch_sweeps = []
     for branch, _branch_index, split_face, route in routes:
-        main_tangent = route['ports'][1]
+        main_tangent = route["ports"][1]
         main_tangent_position = api.port_position(main_tangent)
         main_reach = main_tangent_position - split_face.CenterOfMass
         tangent_face = split_face
         if main_reach.Length > api.EPS:
             route_overlap = 0.1 * _wye_route_clearance(api, branch)
             section_probe = api.extrude(split_face.OuterWire, main_reach, solid=True)
-            probe = api.extrude(
-                split_face.OuterWire,
-                main_reach + api.unit(main_reach) * route_overlap,
-                solid=True,
-            )
-            tangent_face = api.section_face(
-                section_probe,
-                (main_tangent_position, api.port_direction(main_tangent)),
-            )
+            probe = api.extrude(split_face.OuterWire, main_reach + api.unit(main_reach) * route_overlap, solid=True)
+            tangent_face = api.section_face(section_probe, (main_tangent_position, api.port_direction(main_tangent)))
             split_sweeps.append(probe)
             split_touch_sweeps.append(section_probe)
         else:
             split_sweeps.append(None)
             split_touch_sweeps.append(None)
 
-        branch_tangent = route['ports'][0]
+        branch_tangent = route["ports"][0]
         try:
             branch_sweeps.append(
                 api.sweep(
                     [tangent_face.OuterWire, api.profile_from_port(branch_tangent)],
-                    api.reverse(route['path']),
+                    api.reverse(route["path"]),
                     solid=True,
                 )
             )
         except Exception as exc:
             raise RuntimeError(
-                'Wye branch sweep failed at effective radius {:.3f} mm: {}'.format(
-                    route['radius'], exc
-                )
+                "Wye branch sweep failed at effective radius {:.3f} mm: {}".format(route["radius"], exc)
             ) from exc
 
     # A small scaled overlap avoids a coplanar boolean at the split plane;
     # the full main profile still stops at the split approach itself.
-    main_overlap = 0.1 * min(
-        _wye_route_clearance(api, branch) for branch, _, _, _ in routes
-    )
+    main_overlap = 0.1 * min(_wye_route_clearance(api, branch) for branch, _, _, _ in routes)
     main_trim_start = api.copy_port(
         main_center,
-        position=(
-            api.port_position(main_center)
-            - api.unit(api.port_direction(main_center)) * main_overlap
-        ),
+        position=(api.port_position(main_center) - api.unit(api.port_direction(main_center)) * main_overlap),
     )
-    trim_starts = [main_trim_start] + [route['ports'][0] for _, _, _, route in routes]
+    trim_starts = [main_trim_start] + [route["ports"][0] for _, _, _, route in routes]
     trim_sweeps = []
     for port, trim_start, trim in zip(ports, trim_starts, trims):
         trim_end = _trimmed(api, port, trim)
@@ -1974,24 +1870,15 @@ def build_wye_radius(context):
         if trim_reach.Length <= trim_tolerance:
             trim_sweeps.append(None)
             continue
-        trim_path = api.make_line(
-            api.port_position(trim_start),
-            api.port_position(trim_end),
-        )
+        trim_path = api.make_line(api.port_position(trim_start), api.port_position(trim_end))
         try:
             trim_sweeps.append(
-                api.sweep(
-                    [api.profile_from_port(trim_start), api.profile_from_port(trim_end)],
-                    trim_path,
-                    solid=True,
-                )
+                api.sweep([api.profile_from_port(trim_start), api.profile_from_port(trim_end)], trim_path, solid=True)
             )
         except Exception as exc:
-            edge_key = str(port.get('edge_key', '') or '?')
+            edge_key = str(port.get("edge_key", "") or "?")
             raise RuntimeError(
-                "Wye trim sweep failed for port '{}' at {:.6f} mm: {}".format(
-                    edge_key, trim_reach.Length, exc
-                )
+                "Wye trim sweep failed for port '{}' at {:.6f} mm: {}".format(edge_key, trim_reach.Length, exc)
             ) from exc
 
     main_trim = trim_sweeps[0]
@@ -1999,13 +1886,15 @@ def build_wye_radius(context):
     for connector_sweeps in (split_sweeps, split_touch_sweeps):
         leg_a = (connector_sweeps[0], branch_sweeps[0], trim_sweeps[1])
         leg_b = (connector_sweeps[1], branch_sweeps[1], trim_sweeps[2])
-        fuse_orders.extend((
-            (main_trim, *leg_a, *leg_b),
-            (main_trim, leg_a[0], leg_a[1], leg_b[0], leg_b[1], leg_a[2], leg_b[2]),
-            (*leg_a, main_trim, *leg_b),
-            (main_trim, *leg_b, *leg_a),
-            (*connector_sweeps, *branch_sweeps, *trim_sweeps),
-        ))
+        fuse_orders.extend(
+            (
+                (main_trim, *leg_a, *leg_b),
+                (main_trim, leg_a[0], leg_a[1], leg_b[0], leg_b[1], leg_a[2], leg_b[2]),
+                (*leg_a, main_trim, *leg_b),
+                (main_trim, *leg_b, *leg_a),
+                (*connector_sweeps, *branch_sweeps, *trim_sweeps),
+            )
+        )
 
     # OCC booleans are order-sensitive when several swept solids share seams.
     # Keep the first sequence that produces exactly one valid solid.
@@ -2016,25 +1905,18 @@ def build_wye_radius(context):
         except Exception:
             continue
         validation = api.validate(candidate, require_solid=True)
-        if validation['valid'] and validation['solid_count'] == 1:
+        if validation["valid"] and validation["solid_count"] == 1:
             shape = candidate
             break
     if shape is None:
-        requested_radius = float(_props(context).get('BranchRadius') or 0.0)
-        effective_radii = ', '.join(
-            '{:.3f}'.format(route['radius']) for _, _, _, route in routes
-        )
+        requested_radius = float(_props(context).get("BranchRadius") or 0.0)
+        effective_radii = ", ".join("{:.3f}".format(route["radius"]) for _, _, _, route in routes)
         raise RuntimeError(
-            'Wye geometry could not be fused into one valid solid '
-            '(requested radius {:.3f} mm; effective branch radii {} mm)'.format(
-                requested_radius, effective_radii
-            )
+            "Wye geometry could not be fused into one valid solid "
+            "(requested radius {:.3f} mm; effective branch radii {} mm)".format(requested_radius, effective_radii)
         )
 
-    return {
-        'shape': shape,
-        'connection_lengths': api.build_trim_rec_from_port_lengths(list(zip(ports, trims))),
-    }
+    return {"shape": shape, "connection_lengths": api.build_trim_rec_from_port_lengths(list(zip(ports, trims)))}
 
 
 def measure_tap_straight(context):
@@ -2058,7 +1940,9 @@ def _tap_shoe_layout(context):
     run_a, run_b, branch = api.run_branch_ports(context)
     p = _props(context)
 
-    trunk_center, branch_dir, toe_dir, branch_width, run_depth, overlap, run_surface = _tap_geometry(context, api, run_a, run_b, branch)
+    trunk_center, branch_dir, toe_dir, branch_width, run_depth, overlap, run_surface = _tap_geometry(
+        context, api, run_a, run_b, branch
+    )
     tap_height = _positive(p.get("TapHeight"), 0.5 * branch_width)
     tap_top = run_surface + branch_dir * tap_height
     base_position = run_surface - branch_dir * overlap
@@ -2066,24 +1950,38 @@ def _tap_shoe_layout(context):
     surface_port = api.copy_port(branch, position=run_surface)
     surface_profile = api.stretch_profile_one_sided(api.profile_from_port(surface_port), toe_dir, tap_height)
 
-    trim_a, trim_b, trim_branch = _tap_trims(api, p, run_a, run_b, branch, trunk_center, branch_dir, tap_top, surface_profile, 0.3, 0.5)
+    trim_a, trim_b, trim_branch = _tap_trims(
+        api, p, run_a, run_b, branch, trunk_center, branch_dir, tap_top, surface_profile, 0.3, 0.5
+    )
 
     return {
-        "run_a": run_a, "run_b": run_b, "branch": branch,
-        "trunk_center": trunk_center, "branch_dir": branch_dir, "toe_dir": toe_dir,
-        "tap_top": tap_top, "base_position": base_position, "overlap": overlap, "tap_height": tap_height,
+        "run_a": run_a,
+        "run_b": run_b,
+        "branch": branch,
+        "trunk_center": trunk_center,
+        "branch_dir": branch_dir,
+        "toe_dir": toe_dir,
+        "tap_top": tap_top,
+        "base_position": base_position,
+        "overlap": overlap,
+        "tap_height": tap_height,
         "surface_profile": surface_profile,
-        "trim_a": trim_a, "trim_b": trim_b, "trim_branch": trim_branch,
+        "trim_a": trim_a,
+        "trim_b": trim_b,
+        "trim_branch": trim_branch,
     }
 
 
 def measure_tap_shoe(context):
     api = context["hvac_api"]
     layout = _tap_shoe_layout(context)
-    return api.build_trim_rec_from_port_lengths([
-        (layout["run_a"], layout["trim_a"]), (layout["run_b"], layout["trim_b"]),
-        (layout["branch"], layout["trim_branch"]),
-    ])
+    return api.build_trim_rec_from_port_lengths(
+        [
+            (layout["run_a"], layout["trim_a"]),
+            (layout["run_b"], layout["trim_b"]),
+            (layout["branch"], layout["trim_branch"]),
+        ]
+    )
 
 
 def build_tap_shoe(context):

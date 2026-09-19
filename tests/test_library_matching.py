@@ -5,11 +5,11 @@ selection (select_type), compatibility checks (matches_type), and the sticky
 current-selection policy (resolve_sticky_type) -- see
 freecad/HVAC/library/Library.py and freecad/HVAC/libraries/README.md.
 """
+
 import json
 import os
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
-
 from freecad.HVAC.library.Library import (
     HVACLibrary,
     HVACLibraryRegistry,
@@ -72,16 +72,21 @@ def _segment_request(family, profile):
 # Descriptor loading
 # ----------------------------------------------------------------------
 
+
 def test_selection_defaults_when_missing_from_json(tmp_path):
     type_file = tmp_path / "through_generic.json"
-    type_file.write_text(json.dumps({
-        "id": "through_generic",
-        "label": "Through Generic",
-        "category": "junction",
-        "topology": "through",
-        "family": ["through.straight"],
-        "profiles": ["Generic"],
-    }))
+    type_file.write_text(
+        json.dumps(
+            {
+                "id": "through_generic",
+                "label": "Through Generic",
+                "category": "junction",
+                "topology": "through",
+                "family": ["through.straight"],
+                "profiles": ["Generic"],
+            }
+        )
+    )
 
     reg = HVACLibraryRegistry()
     type_def = reg._load_type_def_file(str(type_file))
@@ -92,15 +97,19 @@ def test_selection_defaults_when_missing_from_json(tmp_path):
 
 def test_selection_explicit_model_metadata_loads(tmp_path):
     type_file = tmp_path / "branch_tee_generic.json"
-    type_file.write_text(json.dumps({
-        "id": "branch_tee_generic",
-        "label": "Tee",
-        "category": "junction",
-        "topology": "branch",
-        "family": ["branch.tee"],
-        "profiles": ["Circular"],
-        "selection": {"kind": "model", "priority": 50},
-    }))
+    type_file.write_text(
+        json.dumps(
+            {
+                "id": "branch_tee_generic",
+                "label": "Tee",
+                "category": "junction",
+                "topology": "branch",
+                "family": ["branch.tee"],
+                "profiles": ["Circular"],
+                "selection": {"kind": "model", "priority": 50},
+            }
+        )
+    )
 
     reg = HVACLibraryRegistry()
     type_def = reg._load_type_def_file(str(type_file))
@@ -111,15 +120,19 @@ def test_selection_explicit_model_metadata_loads(tmp_path):
 
 def test_selection_explicit_placeholder_metadata_loads(tmp_path):
     type_file = tmp_path / "branch_marker.json"
-    type_file.write_text(json.dumps({
-        "id": "branch_marker",
-        "label": "Marker",
-        "category": "junction",
-        "topology": "branch",
-        "family": ["branch.tee"],
-        "profiles": ["Generic"],
-        "selection": {"kind": "placeholder", "priority": 0},
-    }))
+    type_file.write_text(
+        json.dumps(
+            {
+                "id": "branch_marker",
+                "label": "Marker",
+                "category": "junction",
+                "topology": "branch",
+                "family": ["branch.tee"],
+                "profiles": ["Generic"],
+                "selection": {"kind": "placeholder", "priority": 0},
+            }
+        )
+    )
 
     reg = HVACLibraryRegistry()
     type_def = reg._load_type_def_file(str(type_file))
@@ -129,14 +142,18 @@ def test_selection_explicit_placeholder_metadata_loads(tmp_path):
 
 def test_invalid_selection_kind_raises(tmp_path):
     type_file = tmp_path / "bad.json"
-    type_file.write_text(json.dumps({
-        "id": "bad",
-        "label": "Bad",
-        "category": "junction",
-        "topology": "branch",
-        "family": ["branch.tee"],
-        "selection": {"kind": "not_a_real_kind"},
-    }))
+    type_file.write_text(
+        json.dumps(
+            {
+                "id": "bad",
+                "label": "Bad",
+                "category": "junction",
+                "topology": "branch",
+                "family": ["branch.tee"],
+                "selection": {"kind": "not_a_real_kind"},
+            }
+        )
+    )
 
     reg = HVACLibraryRegistry()
     try:
@@ -151,13 +168,15 @@ def test_invalid_selection_kind_raises(tmp_path):
 # Indexing
 # ----------------------------------------------------------------------
 
+
 def test_model_match_index_expands_multiple_families_not_profiles():
     # The index key is (category, topology, family) only -- see
     # HVACMatchKey. A type with several declared profiles is indexed once
     # per family entry, not once per (family, profile) pair; profile
     # compatibility is checked later, per-candidate, by select_type().
     t = _type_def(
-        "branch_tee_generic", "junction",
+        "branch_tee_generic",
+        "junction",
         family=["branch.tee", "branch.tee.3d"],
         topology="branch",
         profiles=["Circular", "Rectangular"],
@@ -175,7 +194,14 @@ def test_generic_profile_type_is_indexed_by_structure_only():
     # A Generic-profile placeholder is indexed the same way as any other
     # type -- by (category, topology, family) -- profile plays no part in
     # the index itself, only in select_type()'s later ranking.
-    t = _type_def("through_marker", "junction", family=["through.bend"], topology="through", profiles=["Generic"], kind="placeholder")
+    t = _type_def(
+        "through_marker",
+        "junction",
+        family=["through.bend"],
+        topology="through",
+        profiles=["Generic"],
+        kind="placeholder",
+    )
     lib = _library_with(t)
 
     index = lib.placeholder_match_index
@@ -229,6 +255,7 @@ def test_reindex_after_add_type_reflects_new_type_not_stale():
 # profiles into one "Mixed" label that no type ever literally declares.
 # ----------------------------------------------------------------------
 
+
 def test_list_types_plain_profile_still_filters_by_membership():
     # No connected_ports given -- unchanged, pre-existing behavior.
     circular = _type_def("circular_straight", "segment", family=["straight_segment"], profiles=["Circular"])
@@ -245,12 +272,20 @@ def test_list_types_mixed_profile_connected_ports_does_not_exclude_every_type():
     # old membership check dropped every candidate, including the Generic
     # fallback -- leaving the manual "change type" dropdown empty.
     concrete = _type_def(
-        "through_transition_angled", "junction", family=["through.transition"], topology="through",
-        profiles=["Circular", "Rectangular", "Oval"], priority=50,
+        "through_transition_angled",
+        "junction",
+        family=["through.transition"],
+        topology="through",
+        profiles=["Circular", "Rectangular", "Oval"],
+        priority=50,
     )
     generic = _type_def(
-        "through_generic", "junction", family=["through.transition"], topology="through",
-        profiles=["Generic"], priority=10,
+        "through_generic",
+        "junction",
+        family=["through.transition"],
+        topology="through",
+        profiles=["Generic"],
+        priority=10,
     )
     lib = _library_with(concrete, generic)
 
@@ -266,12 +301,15 @@ def test_list_types_connected_ports_drops_types_that_cannot_cover_the_ports():
     # filters, it just checks each port's real profile instead of a single
     # collapsed string.
     rectangular_only = _type_def(
-        "through_elbow_rectangular", "junction", family=["through.bend"], topology="through",
-        profiles=["Rectangular"], priority=100,
+        "through_elbow_rectangular",
+        "junction",
+        family=["through.bend"],
+        topology="through",
+        profiles=["Rectangular"],
+        priority=100,
     )
     generic = _type_def(
-        "through_generic", "junction", family=["through.bend"], topology="through",
-        profiles=["Generic"], priority=10,
+        "through_generic", "junction", family=["through.bend"], topology="through", profiles=["Generic"], priority=10
     )
     lib = _library_with(rectangular_only, generic)
 
@@ -291,12 +329,22 @@ def test_list_types_includes_inline_kind_types_for_manual_primary_selection():
     # ancestor match for a requested family of "through.straight" (see
     # _family_match), so it shows up alongside the ordinary model.
     damper = _type_def(
-        "through_damper_generic", "junction", family=["through.straight.damper"], topology="through",
-        profiles=["Circular"], kind="inline", priority=999,
+        "through_damper_generic",
+        "junction",
+        family=["through.straight.damper"],
+        topology="through",
+        profiles=["Circular"],
+        kind="inline",
+        priority=999,
     )
     model = _type_def(
-        "through_straight_generic", "junction", family=["through.straight"], topology="through",
-        profiles=["Circular"], kind="model", priority=50,
+        "through_straight_generic",
+        "junction",
+        family=["through.straight"],
+        topology="through",
+        profiles=["Circular"],
+        kind="model",
+        priority=50,
     )
     lib = _library_with(damper, model)
 
@@ -307,6 +355,7 @@ def test_list_types_includes_inline_kind_types_for_manual_primary_selection():
 # ----------------------------------------------------------------------
 # Automatic selection (select_type)
 # ----------------------------------------------------------------------
+
 
 def test_select_type_exact_family_and_profile_match():
     t = _type_def("circular_straight", "segment", family=["straight_segment"], profiles=["Circular"])
@@ -327,8 +376,17 @@ def test_select_type_generic_profile_fallback():
 
 
 def test_select_type_prefers_exact_profile_over_generic():
-    generic = _type_def("through_generic", "junction", family=["through.bend"], topology="through", profiles=["Generic"], priority=999)
-    exact = _type_def("through_elbow_generic", "junction", family=["through.bend"], topology="through", profiles=["Circular"], priority=0)
+    generic = _type_def(
+        "through_generic", "junction", family=["through.bend"], topology="through", profiles=["Generic"], priority=999
+    )
+    exact = _type_def(
+        "through_elbow_generic",
+        "junction",
+        family=["through.bend"],
+        topology="through",
+        profiles=["Circular"],
+        priority=0,
+    )
     lib = _library_with(generic, exact)
 
     selection = lib.select_type(_junction_request("through", "through.bend", "Circular", _ports(2, "Circular")))
@@ -337,8 +395,23 @@ def test_select_type_prefers_exact_profile_over_generic():
 
 
 def test_select_type_prefers_model_over_placeholder():
-    marker = _type_def("through_marker", "junction", family=["through.bend"], topology="through", profiles=["Generic"], kind="placeholder", priority=999)
-    model = _type_def("through_elbow_generic", "junction", family=["through.bend"], topology="through", profiles=["Circular"], priority=0)
+    marker = _type_def(
+        "through_marker",
+        "junction",
+        family=["through.bend"],
+        topology="through",
+        profiles=["Generic"],
+        kind="placeholder",
+        priority=999,
+    )
+    model = _type_def(
+        "through_elbow_generic",
+        "junction",
+        family=["through.bend"],
+        topology="through",
+        profiles=["Circular"],
+        priority=0,
+    )
     lib = _library_with(marker, model)
 
     selection = lib.select_type(_junction_request("through", "through.bend", "Circular", _ports(2, "Circular")))
@@ -347,8 +420,17 @@ def test_select_type_prefers_model_over_placeholder():
 
 
 def test_select_type_priority_resolves_overlapping_candidates():
-    broad = _type_def("branch_generic", "junction", family=["branch.tee", "branch.wye"], topology="branch", profiles=["Circular"], priority=10)
-    specific = _type_def("branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50)
+    broad = _type_def(
+        "branch_generic",
+        "junction",
+        family=["branch.tee", "branch.wye"],
+        topology="branch",
+        profiles=["Circular"],
+        priority=10,
+    )
+    specific = _type_def(
+        "branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50
+    )
     lib = _library_with(broad, specific)
 
     selection = lib.select_type(_junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular")))
@@ -360,7 +442,9 @@ def test_select_type_tied_candidates_are_reported_ambiguous_not_insertion_order(
     b = _type_def("a_type", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50)
     lib = _library_with(a, b)
 
-    selection = lib.select_type(_junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular")), strict=True)
+    selection = lib.select_type(
+        _junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular")), strict=True
+    )
     assert selection.status == "ambiguous"
     assert set(selection.candidates) == {"a_type", "b_type"}
 
@@ -368,16 +452,27 @@ def test_select_type_tied_candidates_are_reported_ambiguous_not_insertion_order(
 def test_select_type_ambiguous_falls_through_to_placeholder_when_not_strict():
     a = _type_def("b_type", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50)
     b = _type_def("a_type", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50)
-    marker = _type_def("branch_marker", "junction", family=["branch.tee"], topology="branch", profiles=["Generic"], kind="placeholder")
+    marker = _type_def(
+        "branch_marker", "junction", family=["branch.tee"], topology="branch", profiles=["Generic"], kind="placeholder"
+    )
     lib = _library_with(a, b, marker)
 
-    selection = lib.select_type(_junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular")), strict=False)
+    selection = lib.select_type(
+        _junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular")), strict=False
+    )
     assert selection.status == "placeholder"
     assert selection.type_def.id == "branch_marker"
 
 
 def test_select_type_no_model_falls_back_to_placeholder():
-    marker = _type_def("through_marker", "junction", family=["through.bend"], topology="through", profiles=["Generic"], kind="placeholder")
+    marker = _type_def(
+        "through_marker",
+        "junction",
+        family=["through.bend"],
+        topology="through",
+        profiles=["Generic"],
+        kind="placeholder",
+    )
     lib = _library_with(marker)
 
     selection = lib.select_type(_junction_request("through", "through.bend", "Circular", _ports(2, "Circular")))
@@ -407,8 +502,13 @@ def test_automatic_primary_selection_never_selects_kind_inline():
     that could ever run this matching logic in the first place.
     """
     inline_damper = _type_def(
-        "through_damper_generic", "junction", family=["through.bend"], topology="through",
-        profiles=["Circular"], kind="inline", priority=999,
+        "through_damper_generic",
+        "junction",
+        family=["through.bend"],
+        topology="through",
+        profiles=["Circular"],
+        kind="inline",
+        priority=999,
     )
     lib = _library_with(inline_damper)
 
@@ -420,7 +520,7 @@ def test_automatic_primary_selection_never_selects_kind_inline():
     registry = HVACLibraryRegistry()
     registry.register_library(lib)
     sticky = registry.resolve_sticky_type(
-        "lib", "", _junction_request("through", "through.bend", "Circular", _ports(2, "Circular")),
+        "lib", "", _junction_request("through", "through.bend", "Circular", _ports(2, "Circular"))
     )
     assert sticky.type_def is None
 
@@ -433,8 +533,16 @@ def test_automatic_primary_selection_never_selects_kind_inline():
 # Constraints
 # ----------------------------------------------------------------------
 
+
 def test_select_type_rejects_degree_mismatch():
-    t = _type_def("branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], constraints={"degree": 3})
+    t = _type_def(
+        "branch_tee_generic",
+        "junction",
+        family=["branch.tee"],
+        topology="branch",
+        profiles=["Circular"],
+        constraints={"degree": 3},
+    )
     lib = _library_with(t)
 
     # Only 2 connected ports -- degree constraint requires 3.
@@ -443,7 +551,14 @@ def test_select_type_rejects_degree_mismatch():
 
 
 def test_select_type_rejects_topology_mismatch():
-    t = _type_def("branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], constraints={"degree": 3})
+    t = _type_def(
+        "branch_tee_generic",
+        "junction",
+        family=["branch.tee"],
+        topology="branch",
+        profiles=["Circular"],
+        constraints={"degree": 3},
+    )
     lib = _library_with(t)
 
     selection = lib.select_type(_junction_request("through", "branch.tee", "Circular", _ports(3, "Circular")))
@@ -451,7 +566,14 @@ def test_select_type_rejects_topology_mismatch():
 
 
 def test_select_type_rejects_connected_port_profile_mismatch():
-    t = _type_def("branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], constraints={"degree": 3})
+    t = _type_def(
+        "branch_tee_generic",
+        "junction",
+        family=["branch.tee"],
+        topology="branch",
+        profiles=["Circular"],
+        constraints={"degree": 3},
+    )
     lib = _library_with(t)
 
     ports = _ports(2, "Circular") + [{"profile": "Rectangular"}]
@@ -463,17 +585,19 @@ def test_select_type_filters_by_flow_class_constraint():
     # Only wins the tier when the classifier's flow_class matches -- see
     # NetworkParser.classify_flow / TOPOLOGY_CLASSIFICATION.md.
     t = _type_def(
-        "through_transition_expansion", "junction", family=["through.transition"], topology="through",
-        profiles=["Circular"], constraints={"flow_class": {"enum": ["expansion"]}},
+        "through_transition_expansion",
+        "junction",
+        family=["through.transition"],
+        topology="through",
+        profiles=["Circular"],
+        constraints={"flow_class": {"enum": ["expansion"]}},
     )
     lib = _library_with(t)
 
     contraction = _junction_request_ctx(
-        "through", "through.transition", "Circular", _ports(2), flow_class="contraction",
+        "through", "through.transition", "Circular", _ports(2), flow_class="contraction"
     )
-    expansion = _junction_request_ctx(
-        "through", "through.transition", "Circular", _ports(2), flow_class="expansion",
-    )
+    expansion = _junction_request_ctx("through", "through.transition", "Circular", _ports(2), flow_class="expansion")
 
     assert lib.select_type(contraction).type_def is None
     assert lib.select_type(expansion).type_def is t
@@ -483,18 +607,23 @@ def test_select_type_filters_by_qualifier_constraint():
     # A single-plane eccentric reducer should only be offered when the
     # classifier's own qualifiers dict says so.
     t = _type_def(
-        "through_transition_eccentric", "junction", family=["through.transition"], topology="through",
+        "through_transition_eccentric",
+        "junction",
+        family=["through.transition"],
+        topology="through",
         profiles=["Rectangular"],
         constraints={"qualifiers": {"alignment": {"enum": ["eccentric"]}}},
     )
     lib = _library_with(t)
 
     concentric = _junction_request_ctx(
-        "through", "through.transition", "Rectangular", _ports(2, "Rectangular"),
-        qualifiers={"alignment": "concentric"},
+        "through", "through.transition", "Rectangular", _ports(2, "Rectangular"), qualifiers={"alignment": "concentric"}
     )
     eccentric = _junction_request_ctx(
-        "through", "through.transition", "Rectangular", _ports(2, "Rectangular"),
+        "through",
+        "through.transition",
+        "Rectangular",
+        _ports(2, "Rectangular"),
         qualifiers={"alignment": "eccentric", "aligned_side": "top"},
     )
 
@@ -507,16 +636,20 @@ def test_select_type_filters_by_numeric_derived_value_constraint():
     # plain minimum/maximum, exactly like the JSON example in
     # freecad/HVAC/libraries/README.md.
     t = _type_def(
-        "through_transition_moderate", "junction", family=["through.transition"], topology="through",
-        profiles=["Circular"], constraints={"area_ratio": {"minimum": 1.0, "maximum": 4.0}},
+        "through_transition_moderate",
+        "junction",
+        family=["through.transition"],
+        topology="through",
+        profiles=["Circular"],
+        constraints={"area_ratio": {"minimum": 1.0, "maximum": 4.0}},
     )
     lib = _library_with(t)
 
     too_large = _junction_request_ctx(
-        "through", "through.transition", "Circular", _ports(2), derived_values={"area_ratio": 5.0},
+        "through", "through.transition", "Circular", _ports(2), derived_values={"area_ratio": 5.0}
     )
     in_range = _junction_request_ctx(
-        "through", "through.transition", "Circular", _ports(2), derived_values={"area_ratio": 2.25},
+        "through", "through.transition", "Circular", _ports(2), derived_values={"area_ratio": 2.25}
     )
 
     assert lib.select_type(too_large).type_def is None
@@ -529,8 +662,12 @@ def test_select_type_missing_flow_context_does_not_reject_candidate():
     # constraint violation -- absence of data is not the same as a mismatch,
     # matching how the existing profile check only applies "if profile".
     t = _type_def(
-        "through_transition_expansion", "junction", family=["through.transition"], topology="through",
-        profiles=["Circular"], constraints={"flow_class": {"enum": ["expansion"]}},
+        "through_transition_expansion",
+        "junction",
+        family=["through.transition"],
+        topology="through",
+        profiles=["Circular"],
+        constraints={"flow_class": {"enum": ["expansion"]}},
     )
     lib = _library_with(t)
 
@@ -540,7 +677,14 @@ def test_select_type_missing_flow_context_does_not_reject_candidate():
 
 
 def test_matches_type_and_select_type_agree_on_compatibility():
-    t = _type_def("branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], constraints={"degree": 3})
+    t = _type_def(
+        "branch_tee_generic",
+        "junction",
+        family=["branch.tee"],
+        topology="branch",
+        profiles=["Circular"],
+        constraints={"degree": 3},
+    )
     lib = _library_with(t)
 
     compatible_request = _junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular"))
@@ -556,6 +700,7 @@ def test_matches_type_and_select_type_agree_on_compatibility():
 # Sticky current-selection policy (resolve_sticky_type)
 # ----------------------------------------------------------------------
 
+
 def _registry_with(*type_defs):
     lib = _library_with(*type_defs)
     reg = HVACLibraryRegistry()
@@ -564,8 +709,12 @@ def _registry_with(*type_defs):
 
 
 def test_resolve_sticky_type_retains_compatible_current_model():
-    preferred = _type_def("tee_smacna", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50)
-    current = _type_def("tee_long_radius", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=10)
+    preferred = _type_def(
+        "tee_smacna", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50
+    )
+    current = _type_def(
+        "tee_long_radius", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=10
+    )
     reg = _registry_with(preferred, current)
 
     request = _junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular"))
@@ -576,8 +725,17 @@ def test_resolve_sticky_type_retains_compatible_current_model():
 
 
 def test_resolve_sticky_type_reselects_on_topology_conflict():
-    tee = _type_def("branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50)
-    elbow = _type_def("through_elbow_generic", "junction", family=["through.bend_90"], topology="through", profiles=["Circular"], priority=50)
+    tee = _type_def(
+        "branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50
+    )
+    elbow = _type_def(
+        "through_elbow_generic",
+        "junction",
+        family=["through.bend_90"],
+        topology="through",
+        profiles=["Circular"],
+        priority=50,
+    )
     reg = _registry_with(tee, elbow)
 
     request = _junction_request("through", "through.bend_90", "Circular", _ports(2, "Circular"))
@@ -588,8 +746,12 @@ def test_resolve_sticky_type_reselects_on_topology_conflict():
 
 
 def test_resolve_sticky_type_reselects_on_family_conflict():
-    tee = _type_def("branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50)
-    wye = _type_def("branch_wye_generic", "junction", family=["branch.wye"], topology="branch", profiles=["Circular"], priority=10)
+    tee = _type_def(
+        "branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50
+    )
+    wye = _type_def(
+        "branch_wye_generic", "junction", family=["branch.wye"], topology="branch", profiles=["Circular"], priority=10
+    )
     reg = _registry_with(tee, wye)
 
     request = _junction_request("branch", "branch.wye", "Circular", _ports(3, "Circular"))
@@ -612,8 +774,17 @@ def test_resolve_sticky_type_reselects_on_profile_conflict():
 
 
 def test_resolve_sticky_type_reselects_on_constraint_conflict():
-    tee = _type_def("branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], constraints={"degree": 3})
-    marker = _type_def("branch_marker", "junction", family=["branch.tee"], topology="branch", profiles=["Generic"], kind="placeholder")
+    tee = _type_def(
+        "branch_tee_generic",
+        "junction",
+        family=["branch.tee"],
+        topology="branch",
+        profiles=["Circular"],
+        constraints={"degree": 3},
+    )
+    marker = _type_def(
+        "branch_marker", "junction", family=["branch.tee"], topology="branch", profiles=["Generic"], kind="placeholder"
+    )
     reg = _registry_with(tee, marker)
 
     # Degree drops to 2 (no longer a real 3-port tee) -- current tee type
@@ -625,8 +796,12 @@ def test_resolve_sticky_type_reselects_on_constraint_conflict():
 
 
 def test_resolve_sticky_type_reevaluates_current_placeholder():
-    marker = _type_def("branch_marker", "junction", family=["branch.tee"], topology="branch", profiles=["Generic"], kind="placeholder")
-    model = _type_def("branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50)
+    marker = _type_def(
+        "branch_marker", "junction", family=["branch.tee"], topology="branch", profiles=["Generic"], kind="placeholder"
+    )
+    model = _type_def(
+        "branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50
+    )
     reg = _registry_with(marker, model)
 
     request = _junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular"))
@@ -639,7 +814,9 @@ def test_resolve_sticky_type_reevaluates_current_placeholder():
 
 
 def test_resolve_sticky_type_no_current_type_runs_automatic_selection():
-    model = _type_def("branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50)
+    model = _type_def(
+        "branch_tee_generic", "junction", family=["branch.tee"], topology="branch", profiles=["Circular"], priority=50
+    )
     reg = _registry_with(model)
 
     request = _junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular"))
@@ -652,6 +829,7 @@ def test_resolve_sticky_type_no_current_type_runs_automatic_selection():
 # ----------------------------------------------------------------------
 # Segments: straight vs curved family
 # ----------------------------------------------------------------------
+
 
 def test_select_type_segment_straight_family():
     straight = _type_def("circular_straight", "segment", family=["straight_segment"], profiles=["Circular"])
@@ -675,8 +853,12 @@ def test_resolve_sticky_type_segment_manual_selection_remains_sticky():
     # Two compatible circular-straight models; user manually picked the
     # lower-priority one -- it must not be replaced by the higher-priority
     # default on normal sync.
-    default_model = _type_def("circular_straight_smacna", "segment", family=["straight_segment"], profiles=["Circular"], priority=50)
-    manual_model = _type_def("circular_straight_custom", "segment", family=["straight_segment"], profiles=["Circular"], priority=10)
+    default_model = _type_def(
+        "circular_straight_smacna", "segment", family=["straight_segment"], profiles=["Circular"], priority=50
+    )
+    manual_model = _type_def(
+        "circular_straight_custom", "segment", family=["straight_segment"], profiles=["Circular"], priority=10
+    )
     reg = _registry_with(default_model, manual_model)
 
     request = _segment_request("straight_segment", "Circular")
@@ -689,6 +871,7 @@ def test_resolve_sticky_type_segment_manual_selection_remains_sticky():
 # ----------------------------------------------------------------------
 # hvaclib.HVACLibraryService.match_profile_from_ports
 # ----------------------------------------------------------------------
+
 
 def test_match_profile_from_ports_homogeneous_circular():
     ports = _ports(3, "Circular")
@@ -714,6 +897,7 @@ def test_match_profile_from_ports_empty_list():
 # real overlaps identified during descriptor priority auditing resolve to
 # the intended winner (see freecad/HVAC/libraries/README.md).
 # ----------------------------------------------------------------------
+
 
 def _load_bundled_registry():
     reg = HVACLibraryRegistry()
@@ -851,6 +1035,7 @@ def test_bundled_manual_end_diffuser_selection_stays_sticky():
 # type-specific loss coefficient.
 # ----------------------------------------------------------------------
 
+
 def _mixed_ports(n, extra_profile="Rectangular"):
     return _ports(n - 1, "Circular") + [{"profile": extra_profile}]
 
@@ -897,6 +1082,7 @@ def test_bundled_builtin_basic_mixed_profile_multiport_uses_generic_model_not_ma
 # dedicated transition model instead of being routed past it straight to the
 # broad through_generic fallback -- see HVACMatchKey/select_type().
 # ----------------------------------------------------------------------
+
 
 def test_bundled_smacna_circular_to_rectangular_transition_reaches_dedicated_model():
     reg = _load_bundled_registry()
@@ -976,11 +1162,14 @@ def test_bundled_mixed_profile_fix_does_not_disturb_exact_profile_ranking():
 # UI action. See freecad/HVAC/library/Library.py and libraries/README.md.
 # ----------------------------------------------------------------------
 
+
 def test_selection_kind_inline_excluded_from_match_indexes():
-    model = _type_def("m1", "junction", ["through.straight.damper"], topology="through",
-                       profiles=["Circular"], kind="model")
-    inline = _type_def("i1", "junction", ["through.straight.damper"], topology="through",
-                        profiles=["Circular"], kind="inline")
+    model = _type_def(
+        "m1", "junction", ["through.straight.damper"], topology="through", profiles=["Circular"], kind="model"
+    )
+    inline = _type_def(
+        "i1", "junction", ["through.straight.damper"], topology="through", profiles=["Circular"], kind="inline"
+    )
     lib = _library_with(model, inline)
     lib.reindex()
 
@@ -994,10 +1183,24 @@ def test_selection_kind_inline_excluded_from_match_indexes():
 
 
 def test_select_type_never_returns_an_inline_type():
-    model = _type_def("m1", "junction", ["through.straight.damper"], topology="through",
-                       profiles=["Circular"], kind="model", priority=0)
-    inline = _type_def("i1", "junction", ["through.straight.damper"], topology="through",
-                        profiles=["Circular"], kind="inline", priority=1000)
+    model = _type_def(
+        "m1",
+        "junction",
+        ["through.straight.damper"],
+        topology="through",
+        profiles=["Circular"],
+        kind="model",
+        priority=0,
+    )
+    inline = _type_def(
+        "i1",
+        "junction",
+        ["through.straight.damper"],
+        topology="through",
+        profiles=["Circular"],
+        kind="inline",
+        priority=1000,
+    )
     lib = _library_with(model, inline)
     request = _junction_request("through", "through.straight.damper", "Circular", _ports(2))
 
@@ -1015,10 +1218,10 @@ def test_resolve_sticky_type_retains_manually_chosen_inline_current_type():
     # select_type() would auto-pick -- resolve_sticky_type() retains a
     # compatible inline current type exactly like any other non-placeholder
     # type.
-    inline = _type_def("i1", "junction", ["through.straight"], topology="through",
-                        profiles=["Circular"], kind="inline")
-    fallback = _type_def("m1", "junction", ["through.straight"], topology="through",
-                          profiles=["Circular"], kind="model")
+    inline = _type_def("i1", "junction", ["through.straight"], topology="through", profiles=["Circular"], kind="inline")
+    fallback = _type_def(
+        "m1", "junction", ["through.straight"], topology="through", profiles=["Circular"], kind="model"
+    )
     lib = _library_with(inline, fallback)
     reg = HVACLibraryRegistry()
     reg.register_library(lib)
@@ -1034,10 +1237,10 @@ def test_resolve_sticky_type_reselects_when_inline_current_type_no_longer_compat
     # type that no longer matches the request re-runs automatic selection
     # exactly like a model would, and (per select_type()'s own inline
     # exclusion) can never land back on another inline type.
-    inline = _type_def("i1", "junction", ["through.straight"], topology="through",
-                        profiles=["Circular"], kind="inline")
-    fallback = _type_def("m1", "junction", ["through.straight"], topology="through",
-                          profiles=["Circular"], kind="model")
+    inline = _type_def("i1", "junction", ["through.straight"], topology="through", profiles=["Circular"], kind="inline")
+    fallback = _type_def(
+        "m1", "junction", ["through.straight"], topology="through", profiles=["Circular"], kind="model"
+    )
     lib = _library_with(inline, fallback)
     reg = HVACLibraryRegistry()
     reg.register_library(lib)
@@ -1050,12 +1253,18 @@ def test_resolve_sticky_type_reselects_when_inline_current_type_no_longer_compat
 
 
 def test_list_inline_types_filters_by_topology_and_profile():
-    damper = _type_def("through_damper", "junction", ["through.straight.damper"], topology="through",
-                        profiles=["Circular", "Rectangular"], kind="inline")
-    vav = _type_def("through_vav", "junction", ["through.straight.vav"], topology="through",
-                     profiles=["Oval"], kind="inline")
-    model = _type_def("m1", "junction", ["through.straight"], topology="through",
-                       profiles=["Circular"], kind="model")
+    damper = _type_def(
+        "through_damper",
+        "junction",
+        ["through.straight.damper"],
+        topology="through",
+        profiles=["Circular", "Rectangular"],
+        kind="inline",
+    )
+    vav = _type_def(
+        "through_vav", "junction", ["through.straight.vav"], topology="through", profiles=["Oval"], kind="inline"
+    )
+    model = _type_def("m1", "junction", ["through.straight"], topology="through", profiles=["Circular"], kind="model")
     lib = _library_with(damper, vav, model)
 
     all_inline = lib.list_inline_types()
