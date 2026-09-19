@@ -1079,11 +1079,11 @@ def _run_surface_along_branch(api, center, run_a, run_b, branch_dir):
 
 
 def _radius_tee_layout(context, run_factor, branch_factor):
-    """Layout for a radiused tee.
+    """Layout for a rectangular tee with sections flush to opposite edges.
 
-    The branch bend is a complete elbow whose virtual corner lies on the
-    branch axis. Its buried portion is limited at the trunk center plane
-    before the stub and trunk are fused.
+    The branch sweeps into one section; the minor trunk lofts into the other.
+    Both sections use the main trunk's full height and their source widths,
+    capped at the main trunk width.
 
     TrimBranch is additional straight length beyond the intrinsic curved
     fitting body, not distance measured from the run surface.
@@ -1093,41 +1093,102 @@ def _radius_tee_layout(context, run_factor, branch_factor):
     p = _props(context)
     center = api.center_from_context(context)
     tee_ports = [run_a, run_b, branch]
+    if any(api.port_profile(port) != 'Rectangular' for port in tee_ports):
+        raise ValueError('Radius tee requires rectangular profiles on all three ports')
 
     branch_size = _size(api, branch)
     radius = _positive(p.get('BranchRadius'), branch_factor * branch_size)
     radius = max(radius, 0.5 * branch_size)
 
-    lean = _lean_port(api, run_a, run_b, branch, reverse=bool(p.get('ReverseBranchBend', False)))
+    main = _lean_port(api, run_a, run_b, branch, reverse=bool(p.get('ReverseBranchBend', False)))
+    minor = run_b if main is run_a else run_a
+    # Cap only the internal sections; connected duct dimensions stay intact.
+    main_width = api.port_width(main)
+    branch_width = min(api.port_width(branch), main_width)
+    minor_width = min(api.port_width(minor), main_width)
+    main_height = api.port_height(main)
+    if min(branch_width, minor_width, main_height) <= api.EPS:
+        raise ValueError('Radius tee widths and main trunk height must be positive')
+    _, horizontal, _, run_dir = api.make_profile_frame(
+        api.port_direction(main), api.port_profile_x_axis(main), center,
+    )
+    branch_dir = api.unit(api.port_direction(branch))
+    if abs(branch_dir.dot(horizontal)) <= api.EPS:
+        raise ValueError('Radius tee branch must separate along the main trunk width')
+    if branch_dir.dot(horizontal) < 0.0:
+        horizontal = horizontal * -1.0
 
-    # Place the inner port on the branch axis. The junction center can be
-    # offset from that axis, which would skew the generated bend stub.
-    inner_position = _port_axis_point(api, branch, center)
+    # Anchor all inner sections to the main trunk axis. Branch alignment
+    # must not change their height or the main profile's lateral position.
+    inner_position = _port_axis_point(api, main, center)
+    trunk_axis_port = api.copy_port(main, position=inner_position)
+    trunk_axis_port['section_params'] = dict(
+        api.port_section_params(main), Width=branch_width, Height=main_height,
+    )
+
+    # Set the lateral position from the main profile edge. This only places
+    # the section across the width; its axial shift follows the main trunk.
+    main_profile = api.profile_from_port(api.copy_port(main, position=inner_position))
+    opposite_edge, main_edge = api.profile_projection_bounds(main_profile, horizontal)
+    inner_profile = api.profile_from_port(trunk_axis_port)
+    _, inner_edge = api.profile_projection_bounds(inner_profile, horizontal)
+    shift = main_edge - inner_edge
     trunk_axis_port = api.copy_port(
-        branch,
-        position=inner_position,
-        direction=api.port_direction(lean),
+        trunk_axis_port,
+        position=inner_position + horizontal * shift,
     )
 
     route = api.make_elbow_path(branch, trunk_axis_port, radius)
-    branch_route_trim, lean_route_trim = route['trim_lengths']
+    branch_route_trim = route['trim_lengths'][0]
 
-    stub = api.sweep(
-        [
-            api.profile_from_port(route['ports'][0]),
-            api.profile_from_port(route['ports'][1]),
-        ],
-        route['path'],
-        solid=True,
+    # Use one main-axis shift for both generated ports and the main inner
+    # port, keeping all three on the same tangent plane.
+    base_position = api.port_position(trunk_axis_port)
+    tangent_position = api.port_position(route['ports'][1])
+    axial_shift = run_dir * (tangent_position - base_position).dot(run_dir)
+    branch_trunk_port = api.copy_port(
+        trunk_axis_port, position=base_position + axial_shift,
+    )
+    route['ports'][1] = branch_trunk_port
+
+    # Anchor the minor section to the opposite edge. Overlap is allowed.
+    minor_shift = opposite_edge + 0.5 * minor_width - base_position.dot(horizontal)
+    minor_trunk_port = api.copy_port(
+        trunk_axis_port,
+        position=base_position + horizontal * minor_shift + axial_shift,
+    )
+    minor_trunk_port['section_params'] = dict(
+        api.port_section_params(main), Width=minor_width, Height=main_height,
+    )
+    # The main body keeps its own full section, independent of overlap
+    # or a gap between the two incoming sections. Keep the tangent's height
+    # and axial position so all three sections share the same body frame.
+    main_midpoint = 0.5 * (opposite_edge + main_edge)
+    main_inner_port = api.copy_port(
+        main,
+        position=(base_position
+                  + horizontal * (main_midpoint - base_position.dot(horizontal))
+                  + axial_shift),
     )
 
-    # Intrinsic fitting body determines the minimum run/branch extents.
+    # Size the layout from the actual path and connection sections, without
+    # adding a guessed allowance for the swept body's intermediate sections.
     minimums = _junction_minimums(api, center, tee_ports)
-    minimums = _junction_shape_minimums(api, center, tee_ports, stub, minimums)
+    inner_ports = [*route['ports'], minor_trunk_port, main_inner_port]
+    layout_shapes = [route['path']] + [api.profile_from_port(port) for port in inner_ports]
+    for index, port in enumerate(tee_ports):
+        direction = api.unit(api.port_direction(port))
+        port_projection = api.port_position(port).dot(direction)
+        for shape in layout_shapes:
+            _, extent = api.profile_projection_bounds(shape, direction)
+            minimums[index] = max(minimums[index], extent - port_projection)
     minimums[2] = max(minimums[2], branch_route_trim)
 
-    lean_index = 0 if lean is run_a else 1
-    minimums[lean_index] = max(minimums[lean_index], lean_route_trim)
+    main_index = 0 if main is run_a else 1
+    # Leave space for the inner section to transition into the main port,
+    # even when the requested extra trim is zero.
+    main_reach = (api.port_position(main_inner_port) - api.port_position(main)).dot(run_dir)
+    minimums[main_index] = max(minimums[main_index], main_reach + run_factor * _size(api, main))
 
     trims = _junction_trims(
         api,
@@ -1143,12 +1204,11 @@ def _radius_tee_layout(context, run_factor, branch_factor):
         'run_b': run_b,
         'branch': branch,
         'center': center,
-        'lean': lean,
-        'radius': radius,
+        'main': main,
+        'minor': minor,
+        'minor_trunk_port': minor_trunk_port,
+        'main_inner_port': main_inner_port,
         'route': route,
-        'stub': stub,
-        'branch_route_trim': branch_route_trim,
-        'lean_route_trim': lean_route_trim,
         'trims': trims,
     }
 
@@ -1175,18 +1235,36 @@ def _radius_tee(context, run_factor, branch_factor):
     branch = layout['branch']
     center = layout['center']
     trims = layout['trims']
-    stub = layout['stub']
+    route = layout['route']
 
-    # Add only the straight branch extension required beyond the
-    # intrinsic curved fitting body.
-    stub = _extend_leg(api, stub, branch, layout['branch_route_trim'], trims[2])
+    # Build the curved body only here; measurement uses the shared layout.
+    stub = api.sweep(
+        [api.profile_from_port(port) for port in route['ports']],
+        route['path'],
+        solid=True,
+    )
 
-    trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])])
+    # Start the branch extension at the sweep's actual end section. A trim
+    # length can be clamped, so reconstructing that section can leave a gap.
+    branch_start = route['ports'][0]
+    branch_end = _trimmed(api, branch, trims[2])
+    branch_reach = api.port_position(branch_end) - api.port_position(branch_start)
+    if branch_reach.Length > api.EPS:
+        stub = api.fuse(stub, _loft(api, [branch_start, branch_end]))
 
-    # Discard anything extending beyond the trunk center toward the
-    # opposite side before fusion.
-    stub = _clip_branch_at_trunk_center(api, stub, center, branch)
-    shape = api.fuse(trunk, stub)
+    # Loft the minor trunk into its own section, then join both sections
+    # to the full main trunk. The branch sweep keeps its entire profile.
+    main_index = 0 if layout['main'] is run_a else 1
+    minor_index = 1 - main_index
+    minor_body = _loft(api, [
+        _trimmed(api, layout['minor'], trims[minor_index]),
+        layout['minor_trunk_port'],
+    ])
+    main_body = _loft(api, [
+        layout['main_inner_port'],
+        _trimmed(api, layout['main'], trims[main_index]),
+    ])
+    shape = api.fuse(main_body, minor_body, stub)
     shape = _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
 
     return {
