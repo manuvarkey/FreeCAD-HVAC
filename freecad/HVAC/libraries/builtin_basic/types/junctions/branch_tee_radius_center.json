@@ -1,13 +1,13 @@
 {
-  "id": "branch_tee_radius",
-  "label": "Tee - Radius",
+  "id": "branch_tee_radius_center",
+  "label": "Tee - Radius (Center aligned)",
   "category": "junction",
   "topology": "branch",
   "family": ["branch.tee", "branch.tee.3d"],
-  "profiles": ["Rectangular"],
+  "profiles": ["Circular", "Rectangular", "Oval"],
   "selection": {
     "kind": "model",
-    "priority": 50
+    "priority": 45
   },
   "constraints": {
     "degree": 3
@@ -51,11 +51,11 @@
   ],
   "generator": {
     "module": "junctions",
-    "function": "build_tee_radius"
+    "function": "build_tee_radius_center"
   },
   "connection_lengths": {
     "module": "junctions",
-    "function": "measure_tee_radius"
+    "function": "measure_tee_radius_center"
   },
   "loss": {
     "module": "junction_losses",

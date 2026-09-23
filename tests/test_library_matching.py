@@ -954,12 +954,12 @@ def test_bundled_libraries_have_no_unresolved_priority_ties():
 
 
 def test_bundled_builtin_basic_branch_tee_prefers_specific_tee_model():
-    # Rectangular tees prefer the radius model over the straight model
-    # and the broad branch_generic fallback.
+    # Rectangular tees keep the edge-aligned radius model as the automatic
+    # default over the center, straight, and broad generic alternatives.
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.tee", "Rectangular", _ports(3, "Rectangular"))
     selection = reg.select_type("builtin_basic", request, strict=True)
-    assert selection.type_def.id == "branch_tee_radius"
+    assert selection.type_def.id == "branch_tee_radius_edge"
 
 
 def test_bundled_builtin_basic_branch_wye_prefers_specific_wye_model():
@@ -1041,21 +1041,22 @@ def _mixed_ports(n, extra_profile="Rectangular"):
 
 
 def test_bundled_builtin_basic_mixed_profile_branch_reaches_dedicated_tee_model():
-    # The radius tee is rectangular-only; mixed profiles use the straight tee.
+    # The center-aligned radius tee accepts each built-in profile, including
+    # a mixed set of connected ports.
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.tee", "Mixed", _mixed_ports(3))
     selection = reg.select_type("builtin_basic", request, strict=True)
     assert selection.status == "exact"
-    assert selection.type_def.id == "branch_tee_straight"
+    assert selection.type_def.id == "branch_tee_radius_center"
 
 
-def test_bundled_builtin_basic_radius_tee_requires_rectangular_ports():
+def test_bundled_builtin_basic_radius_tee_selects_alignment_by_profile():
     reg = _load_bundled_registry()
     for profile in ("Rectangular", "Circular", "Oval"):
         request = _junction_request("branch", "branch.tee", profile, _ports(3, profile))
         selection = reg.select_type("builtin_basic", request, strict=True)
         assert selection.status == "exact"
-        expected = "branch_tee_radius" if profile == "Rectangular" else "branch_tee_straight"
+        expected = "branch_tee_radius_edge" if profile == "Rectangular" else "branch_tee_radius_center"
         assert selection.type_def.id == expected
 
 
@@ -1149,7 +1150,7 @@ def test_bundled_mixed_profile_fix_does_not_disturb_exact_profile_ranking():
     # capable broad model for a real, single-profile Circular tee.
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular"))
-    for lib_id, expected in (("builtin_basic", "branch_tee_straight"), ("smacna", "branch_tee_generic")):
+    for lib_id, expected in (("builtin_basic", "branch_tee_radius_center"), ("smacna", "branch_tee_generic")):
         selection = reg.select_type(lib_id, request, strict=True)
         assert selection.status == "exact"
         assert selection.type_def.id == expected

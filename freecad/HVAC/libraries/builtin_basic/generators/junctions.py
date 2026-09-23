@@ -1088,12 +1088,11 @@ def _run_surface_along_branch(api, center, run_a, run_b, branch_dir):
     return run_surface, branch_surface_distance, run_depth_along_branch
 
 
-def _radius_tee_layout(context, run_factor, branch_factor):
-    """Layout for a rectangular tee with sections flush to opposite edges.
+def _radius_tee_layout(context, run_factor, branch_factor, branch_alignment):
+    """Layout for a radius tee with an edge- or center-aligned branch.
 
-    The branch sweeps into one section; the minor trunk lofts into the other.
-    Both sections use the main trunk's full height and their source widths,
-    capped at the main trunk width.
+    Edge alignment splits a rectangular main profile between the branch and
+    minor run. Center alignment brings both paths into the full main profile.
 
     TrimBranch is additional straight length beyond the intrinsic curved
     fitting body, not distance measured from the run surface.
@@ -1103,43 +1102,57 @@ def _radius_tee_layout(context, run_factor, branch_factor):
     p = _props(context)
     center = api.center_from_context(context)
     tee_ports = [run_a, run_b, branch]
-    if any(api.port_profile(port) != "Rectangular" for port in tee_ports):
+    if branch_alignment not in {"edge", "center"}:
+        raise ValueError("Radius tee branch alignment must be 'edge' or 'center'")
+
+    all_rectangular = all(api.port_profile(port) == "Rectangular" for port in tee_ports)
+    if branch_alignment == "edge" and not all_rectangular:
         raise ValueError("Radius tee requires rectangular profiles on all three ports")
 
     branch_size = _size(api, branch)
     radius = _positive(p.get("BranchRadius"), branch_factor * branch_size)
-    radius = max(radius, 0.5 * branch_size)
 
     main = _lean_port(api, run_a, run_b, branch, reverse=bool(p.get("ReverseBranchBend", False)))
     minor = run_b if main is run_a else run_a
-    # Cap only the internal sections; connected duct dimensions stay intact.
-    main_width = api.port_width(main)
-    branch_width = min(api.port_width(branch), main_width)
-    minor_width = min(api.port_width(minor), main_width)
-    main_height = api.port_height(main)
-    if min(branch_width, minor_width, main_height) <= api.EPS:
-        raise ValueError("Radius tee widths and main trunk height must be positive")
-    _, horizontal, _, run_dir = api.make_profile_frame(api.port_direction(main), api.port_profile_x_axis(main), center)
-    branch_dir = api.unit(api.port_direction(branch))
-    if abs(branch_dir.dot(horizontal)) <= api.EPS:
-        raise ValueError("Radius tee branch must separate along the main trunk width")
-    if branch_dir.dot(horizontal) < 0.0:
-        horizontal = horizontal * -1.0
-
-    # Anchor all inner sections to the main trunk axis. Branch alignment
-    # must not change their height or the main profile's lateral position.
+    if branch_alignment == "center":
+        # The full destination profile needs non-zero clearance around the
+        # inner bend; an exact half-size radius produces degenerate sweeps.
+        bend_size = max(branch_size, _size(api, main))
+        radius = max(radius, 0.5 * bend_size + max(1.0, 0.001 * bend_size))
+    else:
+        radius = max(radius, 0.5 * branch_size)
     inner_position = _port_axis_point(api, main, center)
-    trunk_axis_port = api.copy_port(main, position=inner_position)
-    trunk_axis_port["section_params"] = dict(api.port_section_params(main), Width=branch_width, Height=main_height)
+    run_dir = api.unit(api.port_direction(main))
 
-    # Set the lateral position from the main profile edge. This only places
-    # the section across the width; its axial shift follows the main trunk.
-    main_profile = api.profile_from_port(api.copy_port(main, position=inner_position))
-    opposite_edge, main_edge = api.profile_projection_bounds(main_profile, horizontal)
-    inner_profile = api.profile_from_port(trunk_axis_port)
-    _, inner_edge = api.profile_projection_bounds(inner_profile, horizontal)
-    shift = main_edge - inner_edge
-    trunk_axis_port = api.copy_port(trunk_axis_port, position=inner_position + horizontal * shift)
+    if branch_alignment == "edge":
+        # Cap only the internal sections; connected duct dimensions stay intact.
+        main_width = api.port_width(main)
+        branch_width = min(api.port_width(branch), main_width)
+        minor_width = min(api.port_width(minor), main_width)
+        main_height = api.port_height(main)
+        if min(branch_width, minor_width, main_height) <= api.EPS:
+            raise ValueError("Radius tee widths and main trunk height must be positive")
+
+        _, horizontal, _, _ = api.make_profile_frame(api.port_direction(main), api.port_profile_x_axis(main), center)
+        branch_dir = api.unit(api.port_direction(branch))
+        if abs(branch_dir.dot(horizontal)) <= api.EPS:
+            raise ValueError("Radius tee branch must separate along the main trunk width")
+        if branch_dir.dot(horizontal) < 0.0:
+            horizontal = horizontal * -1.0
+
+        # Anchor the inner sections to opposite main-profile edges.
+        trunk_axis_port = api.copy_port(main, position=inner_position)
+        trunk_axis_port["section_params"] = dict(api.port_section_params(main), Width=branch_width, Height=main_height)
+        main_profile = api.profile_from_port(api.copy_port(main, position=inner_position))
+        opposite_edge, main_edge = api.profile_projection_bounds(main_profile, horizontal)
+        main_midpoint = 0.5 * (opposite_edge + main_edge)
+        inner_profile = api.profile_from_port(trunk_axis_port)
+        _, inner_edge = api.profile_projection_bounds(inner_profile, horizontal)
+        shift = main_edge - inner_edge
+        trunk_axis_port = api.copy_port(trunk_axis_port, position=inner_position + horizontal * shift)
+    else:
+        # The branch sweep ends at the centered, full main profile.
+        trunk_axis_port = api.copy_port(main, position=inner_position)
 
     route = api.make_elbow_path(branch, trunk_axis_port, radius)
     branch_route_trim = route["trim_lengths"][0]
@@ -1152,17 +1165,22 @@ def _radius_tee_layout(context, run_factor, branch_factor):
     branch_trunk_port = api.copy_port(trunk_axis_port, position=base_position + axial_shift)
     route["ports"][1] = branch_trunk_port
 
-    # Anchor the minor section to the opposite edge. Overlap is allowed.
-    minor_shift = opposite_edge + 0.5 * minor_width - base_position.dot(horizontal)
-    minor_trunk_port = api.copy_port(trunk_axis_port, position=base_position + horizontal * minor_shift + axial_shift)
-    minor_trunk_port["section_params"] = dict(api.port_section_params(main), Width=minor_width, Height=main_height)
-    # The main body keeps its own full section, independent of overlap
-    # or a gap between the two incoming sections. Keep the tangent's height
-    # and axial position so all three sections share the same body frame.
-    main_midpoint = 0.5 * (opposite_edge + main_edge)
-    main_inner_port = api.copy_port(
-        main, position=(base_position + horizontal * (main_midpoint - base_position.dot(horizontal)) + axial_shift)
-    )
+    if branch_alignment == "edge":
+        # Anchor the minor section to the opposite edge. Overlap is allowed.
+        minor_shift = opposite_edge + 0.5 * minor_width - base_position.dot(horizontal)
+        minor_trunk_port = api.copy_port(
+            trunk_axis_port, position=base_position + horizontal * minor_shift + axial_shift
+        )
+        minor_trunk_port["section_params"] = dict(api.port_section_params(main), Width=minor_width, Height=main_height)
+        # Keep the main body centered and on the same tangent plane.
+        main_inner_port = api.copy_port(
+            main, position=base_position + horizontal * (main_midpoint - base_position.dot(horizontal)) + axial_shift
+        )
+    else:
+        # The minor run also lofts into the centered, full main profile.
+        tangent_center = base_position + axial_shift
+        minor_trunk_port = api.copy_port(main, position=tangent_center)
+        main_inner_port = api.copy_port(main, position=tangent_center)
 
     # Size the layout from the actual path and connection sections, without
     # adding a guessed allowance for the swept body's intermediate sections.
@@ -1201,10 +1219,7 @@ def _radius_tee_layout(context, run_factor, branch_factor):
     }
 
 
-def measure_radius_tee(context, run_factor, branch_factor):
-    api = context["hvac_api"]
-    layout = _radius_tee_layout(context, run_factor, branch_factor)
-
+def _radius_tee_connection_lengths(api, layout):
     return api.build_trim_rec_from_port_lengths(
         [
             (layout["run_a"], layout["trims"][0]),
@@ -1214,9 +1229,15 @@ def measure_radius_tee(context, run_factor, branch_factor):
     )
 
 
-def _radius_tee(context, run_factor, branch_factor):
+def _measure_radius_tee(context, run_factor, branch_factor, branch_alignment):
     api = context["hvac_api"]
-    layout = _radius_tee_layout(context, run_factor, branch_factor)
+    layout = _radius_tee_layout(context, run_factor, branch_factor, branch_alignment)
+    return _radius_tee_connection_lengths(api, layout)
+
+
+def _radius_tee(context, run_factor, branch_factor, branch_alignment):
+    api = context["hvac_api"]
+    layout = _radius_tee_layout(context, run_factor, branch_factor, branch_alignment)
 
     run_a = layout["run_a"]
     run_b = layout["run_b"]
@@ -1241,16 +1262,36 @@ def _radius_tee(context, run_factor, branch_factor):
     main_index = 0 if layout["main"] is run_a else 1
     minor_index = 1 - main_index
     minor_body = _loft(api, [_trimmed(api, layout["minor"], trims[minor_index]), layout["minor_trunk_port"]])
-    main_body = _loft(api, [layout["main_inner_port"], _trimmed(api, layout["main"], trims[main_index])])
+    main_inner_port = layout["main_inner_port"]
+    if branch_alignment == "center":
+        # Cross the shared tangent plane slightly so OCC fuses the three
+        # full-profile bodies by volume instead of a coincident face.
+        overlap = max(1.0, 0.01 * _size(api, layout["main"]))
+        main_inner_port = api.copy_port(
+            main_inner_port,
+            position=api.port_position(main_inner_port) - api.unit(api.port_direction(layout["main"])) * overlap,
+        )
+    main_body = _loft(api, [main_inner_port, _trimmed(api, layout["main"], trims[main_index])])
     shape = api.fuse(main_body, minor_body, stub)
     shape = _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
 
-    return {
-        "shape": api.refine(shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(
-            [(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]
-        ),
-    }
+    return {"shape": api.refine(shape), "connection_lengths": _radius_tee_connection_lengths(api, layout)}
+
+
+def measure_radius_tee_edge(context, run_factor, branch_factor):
+    return _measure_radius_tee(context, run_factor, branch_factor, "edge")
+
+
+def _radius_tee_edge(context, run_factor, branch_factor):
+    return _radius_tee(context, run_factor, branch_factor, "edge")
+
+
+def measure_radius_tee_center(context, run_factor, branch_factor):
+    return _measure_radius_tee(context, run_factor, branch_factor, "center")
+
+
+def _radius_tee_center(context, run_factor, branch_factor):
+    return _radius_tee(context, run_factor, branch_factor, "center")
 
 
 def _star_wye_layout(context, factor=0.70):
@@ -1285,12 +1326,20 @@ def _star_wye(context, factor=0.70):
     }
 
 
-def measure_tee_radius(context):
-    return measure_radius_tee(context, 0.4, 0.6)
+def measure_tee_radius_edge(context):
+    return measure_radius_tee_edge(context, 0.4, 0.6)
 
 
-def build_tee_radius(context):
-    return _radius_tee(context, 0.4, 0.6)
+def build_tee_radius_edge(context):
+    return _radius_tee_edge(context, 0.4, 0.6)
+
+
+def measure_tee_radius_center(context):
+    return measure_radius_tee_center(context, 0.4, 0.6)
+
+
+def build_tee_radius_center(context):
+    return _radius_tee_center(context, 0.4, 0.6)
 
 
 def measure_tee_straight(context):
