@@ -1,6 +1,6 @@
 {
-  "id": "branch_tee_mitered",
-  "label": "Tee - Mitered",
+  "id": "branch_tee_mitered_shoe",
+  "label": "Tee - Mitered Shoe",
   "category": "junction",
   "topology": "branch",
   "family": ["branch.tee", "branch.tee.3d"],
@@ -58,11 +58,11 @@
   ],
   "generator": {
     "module": "junctions",
-    "function": "build_tee_mitered"
+    "function": "build_tee_mitered_shoe"
   },
   "connection_lengths": {
     "module": "junctions",
-    "function": "measure_tee_mitered"
+    "function": "measure_tee_mitered_shoe"
   },
   "loss": {
     "module": "junction_losses",
