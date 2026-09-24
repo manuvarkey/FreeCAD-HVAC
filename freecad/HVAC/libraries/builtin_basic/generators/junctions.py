@@ -236,16 +236,17 @@ def _profile_extent(profile):
     return max(bb.DiagonalLength, bb.XLength, bb.YLength, bb.ZLength, 1.0)
 
 
-def _mitered_bend(api, port0, port1, radius, cuts, profile0=None, profile1=None):
+def _mitered_bend(api, port0, port1, radius, cuts, profile0=None, profile1=None, extension0=0.0):
     """Build a faceted bend between two arbitrary ports.
 
-    Used by through mitered elbows, the mitered-shoe tee, and mitered wye.
+    Used by through mitered elbows, the mitered tee, and mitered wye.
     The tangent-arc route defines the fitting-end positions and the reference
     radius; the actual body between those ends is constructed from straight
     gores separated by mitre planes.
 
     ``profile0``/``profile1`` optionally replace the exact tangent-end
     sections, allowing a split wye profile to transition through the gores.
+    ``extension0`` grows the first gore outward without a separate boolean.
     Returns ``(shape, [trim0, trim1])``.
     """
     u0 = api.port_direction(port0)
@@ -323,6 +324,13 @@ def _mitered_bend(api, port0, port1, radius, cuts, profile0=None, profile1=None)
         return solid, cut_face.OuterWire
 
     # Actual fitting-end profiles. These may be geometrically different.
+    extension0 = max(float(extension0), 0.0)
+    profile0_origin = s0
+    if extension0 > _EPS:
+        if profile0 is not None:
+            raise ValueError("extension0 cannot be combined with a custom profile0")
+        profile0_origin = s0 + api.unit(u0) * extension0
+        route_port0 = api.copy_port(route_port0, position=profile0_origin)
     if profile0 is None:
         profile0 = api.profile_from_port(route_port0)
     if profile1 is None:
@@ -335,7 +343,7 @@ def _mitered_bend(api, port0, port1, radius, cuts, profile0=None, profile1=None)
 
     # PORT 0 -> FORWARD
     left_section = profile0
-    left_axis_point = s0
+    left_axis_point = profile0_origin
     for i in range(transition_gore):
         solid, next_section = extrude_to_plane(left_section, left_axis_point, leg_dirs[i], joint_planes[i])
         pieces.append(solid)
@@ -1370,11 +1378,11 @@ def build_tee_straight(context):
     }
 
 
-def _tee_mitered_shoe_layout(context):
-    """Layout for a mitered-shoe tee.
+def _tee_mitered_layout(context):
+    """Layout for a mitered tee that ends at the full main-run profile.
 
-    The theoretical bend corner lies on the branch axis. The mitered bend
-    is limited at the trunk center plane before it is fused with the run.
+    The branch gores transition into the selected main leg's complete
+    profile. The minor run lofts into that same terminal section.
 
     TrimBranch is additional length beyond the intrinsic mitered body.
     """
@@ -1386,22 +1394,31 @@ def _tee_mitered_shoe_layout(context):
 
     branch_size = _size(api, branch)
     radius = _positive(p.get("BranchRadius"), 0.6 * branch_size)
-    radius = max(radius, 0.5 * branch_size)
     cuts = max(int(p.get("NumberOfCuts", 1) or 1), 1)
 
-    lean = _lean_port(api, run_a, run_b, branch, reverse=bool(p.get("ReverseBranchBend", False)))
-    inner_position = _port_axis_point(api, branch, center)
-    trunk_axis_port = api.copy_port(branch, position=inner_position, direction=api.port_direction(lean))
+    main = _lean_port(api, run_a, run_b, branch, reverse=bool(p.get("ReverseBranchBend", False)))
+    minor = run_b if main is run_a else run_a
+    # The full destination profile needs non-zero inner-bend clearance.
+    bend_size = max(branch_size, _size(api, main))
+    radius = max(radius, 0.5 * bend_size + max(1.0, 0.001 * bend_size))
 
-    bend_shape, route_trims = _mitered_bend(api, branch, trunk_axis_port, radius, cuts)
+    inner_position = _port_axis_point(api, main, center)
+    trunk_axis_port = api.copy_port(main, position=inner_position)
+    route = api.make_elbow_path(branch, trunk_axis_port, radius)
+    main_trunk_port = api.copy_port(trunk_axis_port, position=api.port_position(route["ports"][1]))
+
+    # Give the last gore the same full profile used by both run lofts.
+    bend_shape, route_trims = _mitered_bend(
+        api, branch, trunk_axis_port, radius, cuts, profile1=api.profile_from_port(main_trunk_port)
+    )
     branch_route_trim, lean_route_trim = route_trims
 
     minimums = _junction_minimums(api, center, tee_ports)
     minimums = _junction_shape_minimums(api, center, tee_ports, bend_shape, minimums)
     minimums[2] = max(minimums[2], branch_route_trim)
 
-    lean_index = 0 if lean is run_a else 1
-    minimums[lean_index] = max(minimums[lean_index], lean_route_trim)
+    main_index = 0 if main is run_a else 1
+    minimums[main_index] = max(minimums[main_index], lean_route_trim)
 
     trims = _junction_trims(api, p, tee_ports, ("TrimRunA", "TrimRunB", "TrimBranch"), (0.4, 0.4, 0.6), minimums)
 
@@ -1410,7 +1427,12 @@ def _tee_mitered_shoe_layout(context):
         "run_b": run_b,
         "branch": branch,
         "center": center,
-        "lean": lean,
+        "main": main,
+        "minor": minor,
+        "radius": radius,
+        "cuts": cuts,
+        "trunk_axis_port": trunk_axis_port,
+        "main_trunk_port": main_trunk_port,
         "bend_shape": bend_shape,
         "branch_route_trim": branch_route_trim,
         "lean_route_trim": lean_route_trim,
@@ -1418,9 +1440,9 @@ def _tee_mitered_shoe_layout(context):
     }
 
 
-def measure_tee_mitered_shoe(context):
+def measure_tee_mitered(context):
     api = context["hvac_api"]
-    layout = _tee_mitered_shoe_layout(context)
+    layout = _tee_mitered_layout(context)
 
     return api.build_trim_rec_from_port_lengths(
         [
@@ -1431,9 +1453,9 @@ def measure_tee_mitered_shoe(context):
     )
 
 
-def build_tee_mitered_shoe(context):
+def build_tee_mitered(context):
     api = context["hvac_api"]
-    layout = _tee_mitered_shoe_layout(context)
+    layout = _tee_mitered_layout(context)
 
     run_a = layout["run_a"]
     run_b = layout["run_b"]
@@ -1441,11 +1463,34 @@ def build_tee_mitered_shoe(context):
     center = layout["center"]
     trims = layout["trims"]
 
-    bend_shape = _extend_leg(api, layout["bend_shape"], branch, layout["branch_route_trim"], trims[2])
-    trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])])
+    branch_extension = max(0.0, trims[2] - layout["branch_route_trim"])
+    if branch_extension > _EPS:
+        bend_shape, _ = _mitered_bend(
+            api,
+            branch,
+            layout["trunk_axis_port"],
+            layout["radius"],
+            layout["cuts"],
+            profile1=api.profile_from_port(layout["main_trunk_port"]),
+            extension0=branch_extension,
+        )
+    else:
+        bend_shape = layout["bend_shape"]
 
-    bend_shape = _clip_branch_at_trunk_center(api, bend_shape, center, branch)
-    shape = api.fuse(trunk, bend_shape)
+    # Make one continuous run loft through the bend's full main-profile
+    # terminal. This avoids a three-body fuse at one shared profile plane.
+    main_index = 0 if layout["main"] is run_a else 1
+    minor_index = 1 - main_index
+    run_body = _loft(
+        api,
+        [
+            _trimmed(api, layout["minor"], trims[minor_index]),
+            layout["main_trunk_port"],
+            _trimmed(api, layout["main"], trims[main_index]),
+        ],
+    )
+
+    shape = api.fuse(run_body, bend_shape)
     shape = _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
 
     return {
