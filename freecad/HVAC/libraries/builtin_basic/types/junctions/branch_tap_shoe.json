@@ -3,11 +3,11 @@
   "label": "Tap - Shoe",
   "category": "junction",
   "topology": "branch",
-  "family": ["branch.tee"],
+  "family": ["branch.tee", "branch.tee.3d"],
   "profiles": ["Circular", "Rectangular", "Oval"],
   "selection": {
     "kind": "model",
-    "priority": 15
+    "priority": 35
   },
   "constraints": {
     "degree": 3

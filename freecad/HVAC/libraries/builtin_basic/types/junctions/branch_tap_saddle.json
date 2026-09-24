@@ -3,11 +3,11 @@
   "label": "Tap - Saddle",
   "category": "junction",
   "topology": "branch",
-  "family": ["branch.tee"],
+  "family": ["branch.tee", "branch.tee.3d"],
   "profiles": ["Circular", "Rectangular", "Oval"],
   "selection": {
     "kind": "model",
-    "priority": 20
+    "priority": 30
   },
   "constraints": {
     "degree": 3

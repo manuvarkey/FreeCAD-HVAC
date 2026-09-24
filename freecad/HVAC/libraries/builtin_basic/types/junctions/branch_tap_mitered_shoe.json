@@ -1,13 +1,13 @@
 {
-  "id": "branch_tee_mitered_shoe",
-  "label": "Tee - Mitered Shoe",
+  "id": "branch_tap_mitered_shoe",
+  "label": "Tap - Mitered Shoe",
   "category": "junction",
   "topology": "branch",
   "family": ["branch.tee", "branch.tee.3d"],
   "profiles": ["Circular", "Rectangular", "Oval"],
   "selection": {
     "kind": "model",
-    "priority": 35
+    "priority": 25
   },
   "constraints": {
     "degree": 3
