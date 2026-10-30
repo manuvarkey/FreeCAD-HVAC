@@ -149,10 +149,13 @@ def velocity_from_flow(flow_m3_s, area_m2):
 
 def reynolds_number(velocity_m_s, hydraulic_diameter_m, kinematic_viscosity_m2_s):
     """Reynolds number for duct flow."""
+    dh = float(hydraulic_diameter_m)
     nu = float(kinematic_viscosity_m2_s)
+    if dh <= 0.0:
+        raise ValueError("hydraulic_diameter_m must be positive")
     if nu <= 0.0:
         raise ValueError("kinematic_viscosity_m2_s must be positive")
-    return abs(float(velocity_m_s)) * float(hydraulic_diameter_m) / nu
+    return abs(float(velocity_m_s)) * dh / nu
 
 
 # ----------------------------------------------------------------------------

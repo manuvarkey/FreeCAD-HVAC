@@ -97,6 +97,16 @@ def test_reynolds_number_uses_absolute_velocity():
     assert re > 0.0
 
 
+@pytest.mark.parametrize("diameter", [0.0, -0.2])
+def test_reynolds_number_rejects_nonpositive_hydraulic_diameter(diameter):
+    with pytest.raises(ValueError, match="hydraulic_diameter_m must be positive"):
+        airflow.reynolds_number(
+            velocity_m_s=10.0,
+            hydraulic_diameter_m=diameter,
+            kinematic_viscosity_m2_s=1.51e-5,
+        )
+
+
 # ----------------------------------------------------------------------------
 # Friction factor
 # ----------------------------------------------------------------------------
