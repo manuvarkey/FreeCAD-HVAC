@@ -43,11 +43,11 @@
     }
   ],
   "generator": {
-    "module": "junctions",
+    "module": "shared:stars",
     "function": "build_cross"
   },
   "connection_lengths": {
-    "module": "junctions",
+    "module": "shared:stars",
     "function": "measure_cross"
   },
   "loss": {

@@ -83,9 +83,11 @@ Example here: `types/junctions/end_diffuser_static.json` ->
 ## 3. Legacy generator function (`"generator": {"module": "...", "function": "..."}`)
 
 A Python function `func(context) -> {"shape": ..., "connection_lengths": ...}`
-in `<library>/generators/<module>.py`. This is the original, fully-general
-mechanism -- most procedural types in `builtin_basic`/`smacna`
-(`generators/segments.py`, `generators/junctions.py`) use it directly.
+in `<library>/generators/<module>.py`, or in one of the addon's shared
+fitting modules (`freecad/HVAC/library/fittings/`, named with the `shared:`
+module prefix -- see `libraries/README.md`). This is the original,
+fully-general mechanism -- every procedural type in `builtin_basic` uses the
+shared modules, and `smacna` uses its own `generators/junctions.py`.
 
 It's also how a type loads an entire parametric **FreeCAD document** as its
 shape: the generator function itself is a thin wrapper that calls

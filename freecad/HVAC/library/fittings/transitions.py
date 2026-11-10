@@ -1,0 +1,149 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# SPDX-FileNotice: Part of the HVAC addon.
+
+"""
+Transitions and offsets between two collinear ports: angled (straight loft),
+radiussed (S-curve) and mitered.
+"""
+
+from ._common import _loft, _positive, _props, _size, _trimmed
+
+
+def _transition_layout(context):
+    api = context["hvac_api"]
+    ports = list(api.connected_ports(context))
+    if len(ports) != 2:
+        raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
+    p = _props(context)
+    size = max(_size(api, ports[0]), _size(api, ports[1]))
+    total = _positive(p.get("TransitionLength"), max(size, 100.0))
+    trim = total / 2.0
+    return ports, trim
+
+
+def measure_transition(context):
+    api = context["hvac_api"]
+    ports, trim = _transition_layout(context)
+    return api.build_trim_rec_from_port_lengths([(ports[0], trim), (ports[1], trim)])
+
+
+def build_transition(context):
+    api = context["hvac_api"]
+    ports, trim = _transition_layout(context)
+    a, b = _trimmed(api, ports[0], trim), _trimmed(api, ports[1], trim)
+    return {
+        "shape": api.refine(_loft(api, [a, b], 0.0, ruled=True)),
+        "connection_lengths": api.build_trim_rec_from_port_lengths([(ports[0], trim), (ports[1], trim)]),
+    }
+
+
+def _transition_radiussed_route(context):
+    api = context["hvac_api"]
+    ports = list(api.connected_ports(context))
+    if len(ports) != 2:
+        raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
+    p = _props(context)
+    size = max(_size(api, ports[0]), _size(api, ports[1]))
+    total = _positive(p.get("TransitionLength"), max(size, 100.0))
+    radius = _positive(p.get("TransitionRadius"), max(size, 10.0))
+    # A bend radius smaller than the duct's own half-width folds the swept
+    # surface back on itself on the inside of the bend (same minimum
+    # build_elbow enforces on CenterlineRadius).
+    radius = max(radius, 0.5 * size)
+    route = api.make_radiussed_path(ports[0], ports[1], total, radius)
+    return ports, route
+
+
+def measure_transition_radiussed(context):
+    api = context["hvac_api"]
+    ports, route = _transition_radiussed_route(context)
+    return api.build_trim_rec_from_port_lengths(
+        [(ports[0], route["trim_lengths"][0]), (ports[1], route["trim_lengths"][1])]
+    )
+
+
+def build_transition_radiussed(context):
+    api = context["hvac_api"]
+    ports, route = _transition_radiussed_route(context)
+    shape = api.sweep(
+        [api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])], route["path"], solid=True
+    )
+    return {
+        "shape": api.refine(shape),
+        "connection_lengths": api.build_trim_rec_from_port_lengths(
+            [(ports[0], route["trim_lengths"][0]), (ports[1], route["trim_lengths"][1])]
+        ),
+    }
+
+
+def _transition_mitered_layout(context):
+    api = context["hvac_api"]
+    ports = list(api.connected_ports(context))
+    if len(ports) != 2:
+        raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
+    p = _props(context)
+    size = max(_size(api, ports[0]), _size(api, ports[1]))
+    total = _positive(p.get("TransitionLength"), max(size, 100.0))
+
+    # Shared axis geometry with the radiussed transition -- same end
+    # points and theoretical sharp turn points, only the corner treatment
+    # differs (a flat mitre cut here, an arc there).
+    axis = api.offset_transition_axis(ports[0], ports[1], total)
+    trim0 = max(0.0, (axis["s0"] - api.port_position(ports[0])).dot(api.port_direction(ports[0])))
+    trim1 = max(0.0, (axis["s1"] - api.port_position(ports[1])).dot(api.port_direction(ports[1])))
+    return ports, size, total, axis, trim0, trim1
+
+
+def measure_transition_mitered(context):
+    api = context["hvac_api"]
+    ports, size, total, axis, trim0, trim1 = _transition_mitered_layout(context)
+    return api.build_trim_rec_from_port_lengths([(ports[0], trim0), (ports[1], trim1)])
+
+
+def build_transition_mitered(context):
+    api = context["hvac_api"]
+    ports, size, total, axis, trim0, trim1 = _transition_mitered_layout(context)
+    d = axis["d"]
+    s0, s1 = axis["s0"], axis["s1"]
+    corner0, corner1 = axis["corner0"], axis["corner1"]
+    diagonal, turn_angle = axis["diagonal"], axis["turn_angle"]
+
+    end_a = api.copy_port(ports[0], position=s0)
+    end_b = api.copy_port(ports[1], position=s1)
+
+    if turn_angle <= 1e-6:
+        # No actual lateral offset: an ordinary straight loft, there is no
+        # corner to mitre.
+        shape = _loft(api, [end_a, end_b], 0.0, ruled=True)
+    else:
+        # The mitre plane bisects the straight-run direction and the
+        # diagonal, so a straight stub and the diagonal middle piece meet
+        # flush -- both turn points share this same bisector as their
+        # plane normal, only the plane's own origin differs.
+        normal = api.unit(d + diagonal)
+
+        # Extend each port's own profile from its end point toward the
+        # transition's centre, then clip it back at its own turn point
+        # with the mitre plane.
+        reach = total / 2.0 + size
+        stub_a = api.extrude(api.profile_from_port(end_a), d * reach, solid=True)
+        stub_a = api.clip_plane(stub_a, (corner0, normal), side="negative")
+        stub_b = api.extrude(api.profile_from_port(end_b), d * -reach, solid=True)
+        stub_b = api.clip_plane(stub_b, (corner1, normal), side="positive")
+
+        # Sweep between the stubs' own cut faces at the turn points -- not
+        # a fresh, idealised profile wire, which sits on a different plane
+        # than the mitre cut and would not line up with it once clipped.
+        # Reading the real cut face back off each already-trimmed stub
+        # guarantees the middle piece meets them exactly, and needs no
+        # further clipping of its own.
+        face_a = api.section_face(stub_a, (corner0, normal))
+        face_b = api.section_face(stub_b, (corner1, normal))
+        middle = api.loft([face_a.OuterWire, face_b.OuterWire], solid=True, ruled=True)
+
+        shape = api.fuse(stub_a, stub_b, middle)
+
+    return {
+        "shape": api.refine(shape),
+        "connection_lengths": api.build_trim_rec_from_port_lengths([(ports[0], trim0), (ports[1], trim1)]),
+    }

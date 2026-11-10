@@ -3,3 +3,4 @@
 /.zed
 reference/
 __pycache__/
+tools/.smoke/

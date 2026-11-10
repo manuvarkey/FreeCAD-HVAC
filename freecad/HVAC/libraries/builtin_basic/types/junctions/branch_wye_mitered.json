@@ -50,11 +50,11 @@
     }
   ],
   "generator": {
-    "module": "junctions",
+    "module": "shared:wyes",
     "function": "build_wye_mitered"
   },
   "connection_lengths": {
-    "module": "junctions",
+    "module": "shared:wyes",
     "function": "measure_wye_mitered"
   },
   "loss": {

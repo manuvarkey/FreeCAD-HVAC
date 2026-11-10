@@ -3,12 +3,12 @@
 
 """
 Focused regression tests for four concrete defects fixed in
-builtin_basic/generators/junctions.py: the radiussed/mitered transition's
+library/fittings/: the radiussed/mitered transition's
 wrong "Length" property alias, the lateral tee's doubled branch trim, the
 radius wye's size-dependent main-leg selection, and the generic terminal's
 missing connection_lengths/unused Length property.
 
-builtin_basic/generators/*.py is otherwise out of scope for unit tests (see
+library/fittings/*.py is otherwise out of scope for unit tests (see
 AGENTS.md) since it normally requires real FreeCAD/Part geometry this
 sandbox doesn't have -- these tests only reach the specific code paths
 that are pure vector/dict arithmetic (no BREP/BoundBox needed), or (for
@@ -22,7 +22,7 @@ import os
 import pytest
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
-from freecad.HVAC.libraries.builtin_basic.generators import junctions as gen
+from freecad.HVAC.library.fittings import _common, stars, tees, terminals, transitions, wyes
 from freecad.HVAC.library.Library import HVACLibraryRegistry
 from freecad.HVAC.library.library_api import HVACLibraryAPI
 
@@ -68,7 +68,7 @@ def test_transition_radiussed_uses_transition_radius_not_length():
         "params": {"TransitionLength": 300.0, "TransitionRadius": 500.0, "Length": 999999.0},
         "connected_ports": _transition_ports(),
     }
-    ports, route = gen._transition_radiussed_route(ctx)
+    ports, route = transitions._transition_radiussed_route(ctx)
     # A radius of 500 (much larger than TransitionLength=300) pushes the
     # tangent points out beyond the straight run -- if "Length" (999999)
     # had leaked into either total or radius, this would raise or produce
@@ -108,10 +108,10 @@ def test_transition_radiussed_radius_actually_used_not_a_dead_parameter():
         "connected_ports": ports,
     }
 
-    gen._transition_radiussed_route(small_radius_ctx)  # must not raise
+    transitions._transition_radiussed_route(small_radius_ctx)  # must not raise
 
     with pytest.raises(ValueError):
-        gen._transition_radiussed_route(large_radius_ctx)
+        transitions._transition_radiussed_route(large_radius_ctx)
 
 
 def test_transition_length_not_read_from_legacy_length_key():
@@ -120,12 +120,12 @@ def test_transition_length_not_read_from_legacy_length_key():
     # aliasing); the function must fall back to its own size-based default
     # instead of picking up the bogus "Length" value.
     ports = _transition_ports()
-    size = max(gen._size(HVACLibraryAPI, ports[0]), gen._size(HVACLibraryAPI, ports[1]))
+    size = max(_common._size(HVACLibraryAPI, ports[0]), _common._size(HVACLibraryAPI, ports[1]))
     ctx_with_bogus_length = {"hvac_api": HVACLibraryAPI, "params": {"Length": 999999.0}, "connected_ports": ports}
     ctx_without_any = {"hvac_api": HVACLibraryAPI, "params": {}, "connected_ports": ports}
 
-    _, trim_with_bogus = gen._transition_layout(ctx_with_bogus_length)
-    _, trim_without_any = gen._transition_layout(ctx_without_any)
+    _, trim_with_bogus = transitions._transition_layout(ctx_with_bogus_length)
+    _, trim_without_any = transitions._transition_layout(ctx_without_any)
 
     assert trim_with_bogus == trim_without_any == max(size, 100.0) / 2.0
 
@@ -135,8 +135,8 @@ def test_transition_mitered_uses_transition_length_not_legacy_length_key():
     ctx_with_bogus_length = {"hvac_api": HVACLibraryAPI, "params": {"Length": 999999.0}, "connected_ports": ports}
     ctx_without_any = {"hvac_api": HVACLibraryAPI, "params": {}, "connected_ports": ports}
 
-    _, _, total_with_bogus, _, _, _ = gen._transition_mitered_layout(ctx_with_bogus_length)
-    _, _, total_without_any, _, _, _ = gen._transition_mitered_layout(ctx_without_any)
+    _, _, total_with_bogus, _, _, _ = transitions._transition_mitered_layout(ctx_with_bogus_length)
+    _, _, total_without_any, _, _, _ = transitions._transition_mitered_layout(ctx_without_any)
 
     assert total_with_bogus == total_without_any
 
@@ -195,7 +195,7 @@ def _lateral_tee_context(trim_branch=None):
 
 def test_lateral_tee_branch_min_matches_run_surface_distance_not_double():
     context, run_a, run_b, branch = _lateral_tee_context(trim_branch=50.0)
-    layout = gen._lateral_tee_layout(context)
+    layout = tees._lateral_tee_layout(context)
 
     expected_branch_min = max(
         0.0, (layout["run_surface"] - HVACLibraryAPI.vec(branch["position"])).dot(layout["branch_dir"])
@@ -212,8 +212,8 @@ def test_lateral_tee_trim_branch_grows_by_exactly_the_extra_trim_property():
     context_a, *_ = _lateral_tee_context(trim_branch=0.0)
     context_b, *_ = _lateral_tee_context(trim_branch=75.0)
 
-    layout_a = gen._lateral_tee_layout(context_a)
-    layout_b = gen._lateral_tee_layout(context_b)
+    layout_a = tees._lateral_tee_layout(context_a)
+    layout_b = tees._lateral_tee_layout(context_b)
 
     assert layout_b["trim_branch"] - layout_a["trim_branch"] == 75.0
 
@@ -243,9 +243,9 @@ def test_wye_common_index_unaffected_by_which_leg_has_the_largest_duct():
     branch_largest = _wye_ports(common_diameter=50.0, branch1_diameter=900.0, branch2_diameter=100.0)
     all_equal = _wye_ports(common_diameter=200.0, branch1_diameter=200.0, branch2_diameter=200.0)
 
-    assert gen._wye_common_index(HVACLibraryAPI, common_largest) == 0
-    assert gen._wye_common_index(HVACLibraryAPI, branch_largest) == 0
-    assert gen._wye_common_index(HVACLibraryAPI, all_equal) == 0
+    assert wyes._wye_common_index(HVACLibraryAPI, common_largest) == 0
+    assert wyes._wye_common_index(HVACLibraryAPI, branch_largest) == 0
+    assert wyes._wye_common_index(HVACLibraryAPI, all_equal) == 0
 
 
 def test_wye_common_index_follows_port_order_not_a_fixed_slot():
@@ -256,7 +256,7 @@ def test_wye_common_index_follows_port_order_not_a_fixed_slot():
         _port("B", (-0.6, -0.8, 0.0), 100.0),
         _port("C", (1.0, 0.0, 0.0), 500.0),
     ]
-    assert gen._wye_common_index(HVACLibraryAPI, ports) == 2
+    assert wyes._wye_common_index(HVACLibraryAPI, ports) == 2
 
 
 # ----------------------------------------------------------------------
@@ -270,7 +270,7 @@ def test_measure_terminal_body_generic_equals_body_length():
         "params": {"BodyLength": 175.0},
         "connected_ports": [_port("A", (1.0, 0.0, 0.0), 250.0)],
     }
-    records = gen.measure_terminal_body_generic(ctx)
+    records = terminals.measure_terminal_body_generic(ctx)
     assert records == [{"edge_key": "A", "segment_end": "start", "length": 175.0}]
 
 
@@ -280,16 +280,16 @@ def test_build_terminal_body_generic_reports_matching_connection_length():
         "params": {"BodyLength": 175.0},
         "connected_ports": [_port("A", (1.0, 0.0, 0.0), 250.0)],
     }
-    measured = gen.measure_terminal_body_generic(ctx)
-    built = gen.build_terminal_body_generic(ctx)
+    measured = terminals.measure_terminal_body_generic(ctx)
+    built = terminals.build_terminal_body_generic(ctx)
     assert built["connection_lengths"] == measured == [{"edge_key": "A", "segment_end": "start", "length": 175.0}]
 
 
 def test_terminal_body_generic_falls_back_to_size_based_default_without_body_length():
     port = _port("A", (1.0, 0.0, 0.0), 300.0)
     ctx = {"hvac_api": HVACLibraryAPI, "params": {}, "connected_ports": [port]}
-    records = gen.measure_terminal_body_generic(ctx)
-    expected = 0.35 * gen._size(HVACLibraryAPI, port)
+    records = terminals.measure_terminal_body_generic(ctx)
+    expected = 0.35 * _common._size(HVACLibraryAPI, port)
     assert records == [{"edge_key": "A", "segment_end": "start", "length": expected}]
 
 
@@ -301,7 +301,7 @@ def test_generic_terminal_descriptors_declare_measurement_function():
     for type_id in ("end_diffuser_generic", "end_fan_source_generic", "end_intake_exhaust_generic"):
         type_def = lib.get_type(type_id)
         assert type_def.generator_function == "build_terminal_body_generic", type_id
-        assert type_def.lengths_module == "junctions", type_id
+        assert type_def.lengths_module == "shared:terminals", type_id
         assert type_def.lengths_function == "measure_terminal_body_generic", type_id
         assert any(p.name == "BodyLength" for p in type_def.properties), type_id
 
@@ -328,20 +328,20 @@ def _lengths_by_edge(records):
 
 def test_star_cross_uses_each_ports_own_trim():
     params = {"TrimPortA": 110.0, "TrimPortB": 120.0, "TrimPortC": 130.0, "TrimPortD": 140.0}
-    lengths = _lengths_by_edge(gen.measure_cross(_cross_context(params)))
+    lengths = _lengths_by_edge(stars.measure_cross(_cross_context(params)))
     assert lengths == pytest.approx({"A": 110.0, "B": 120.0, "C": 130.0, "D": 140.0})
 
 
 def test_star_cross_unset_port_trim_falls_back_to_size_based_default():
     # 0.6 x the largest port size (200) is the built-in default for a cross.
-    lengths = _lengths_by_edge(gen.measure_cross(_cross_context({"TrimPortA": 90.0, "TrimPortB": 0.0})))
+    lengths = _lengths_by_edge(stars.measure_cross(_cross_context({"TrimPortA": 90.0, "TrimPortB": 0.0})))
     assert lengths == pytest.approx({"A": 90.0, "B": 120.0, "C": 120.0, "D": 120.0})
 
 
 def test_star_port_trim_names_stop_after_four_ports():
     # A multiport's 5th+ port has no named trim; it only has the shared TrimLength.
-    assert gen._port_trim_names(5) == ["TrimPortA", "TrimPortB", "TrimPortC", "TrimPortD", None]
-    assert gen._star_trims({"TrimLength": 75.0, "TrimPortA": 50.0}, gen._port_trim_names(5), 999.0) == [
+    assert stars._port_trim_names(5) == ["TrimPortA", "TrimPortB", "TrimPortC", "TrimPortD", None]
+    assert stars._star_trims({"TrimLength": 75.0, "TrimPortA": 50.0}, stars._port_trim_names(5), 999.0) == [
         50.0,
         75.0,
         75.0,

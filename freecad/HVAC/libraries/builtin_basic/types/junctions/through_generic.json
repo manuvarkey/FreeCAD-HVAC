@@ -29,11 +29,11 @@
     }
   ],
   "generator": {
-    "module": "junctions",
+    "module": "shared:through",
     "function": "build_through_generic"
   },
   "connection_lengths": {
-    "module": "junctions",
+    "module": "shared:through",
     "function": "measure_through_generic"
   },
   "loss": {

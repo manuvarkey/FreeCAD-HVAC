@@ -36,11 +36,11 @@
     }
   ],
   "generator": {
-    "module": "junctions",
+    "module": "shared:tees",
     "function": "build_tee_straight"
   },
   "connection_lengths": {
-    "module": "junctions",
+    "module": "shared:tees",
     "function": "measure_tee_straight"
   },
   "loss": {

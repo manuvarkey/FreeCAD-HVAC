@@ -22,11 +22,11 @@
     }
   ],
   "generator": {
-    "module": "junctions",
+    "module": "shared:elbows",
     "function": "build_elbow"
   },
   "connection_lengths": {
-    "module": "junctions",
+    "module": "shared:elbows",
     "function": "measure_elbow"
   },
   "loss": {

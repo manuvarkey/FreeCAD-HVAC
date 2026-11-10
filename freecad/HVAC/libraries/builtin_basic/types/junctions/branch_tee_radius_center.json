@@ -50,11 +50,11 @@
     }
   ],
   "generator": {
-    "module": "junctions",
+    "module": "shared:tees",
     "function": "build_tee_radius_center"
   },
   "connection_lengths": {
-    "module": "junctions",
+    "module": "shared:tees",
     "function": "measure_tee_radius_center"
   },
   "loss": {

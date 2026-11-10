@@ -1,4 +1,7 @@
-"""Builtin segment generators using HVACLibraryAPI geometry v2."""
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# SPDX-FileNotice: Part of the HVAC addon.
+
+"""Straight duct segments: one profile extruded (or swept along a path edge) from start to end."""
 
 
 def _properties(context):
@@ -13,13 +16,7 @@ def _build(context, profile, section):
     direction = context.get("start_direction") or (end - start)
     x_axis = context.get("profile_x_axis")
 
-    p0 = api.make_profile(
-        profile,
-        section,
-        center=start,
-        direction=direction,
-        profile_x_axis=x_axis,
-    )
+    p0 = api.make_profile(profile, section, center=start, direction=direction, profile_x_axis=x_axis)
     shape = api.sweep(p0, path, solid=True) if path is not None else api.extrude(p0, end - start, solid=True)
     return {"shape": api.refine(shape)}
 

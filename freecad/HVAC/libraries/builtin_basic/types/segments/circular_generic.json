@@ -22,7 +22,7 @@
     }
   ],
   "generator": {
-    "module": "segments",
+    "module": "shared:segments",
     "function": "build_circular_curved"
   }
 }

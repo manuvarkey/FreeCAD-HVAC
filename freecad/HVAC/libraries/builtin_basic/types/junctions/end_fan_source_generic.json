@@ -43,11 +43,11 @@
     }
   ],
   "generator": {
-    "module": "junctions",
+    "module": "shared:terminals",
     "function": "build_terminal_body_generic"
   },
   "connection_lengths": {
-    "module": "junctions",
+    "module": "shared:terminals",
     "function": "measure_terminal_body_generic"
   },
   "loss": {

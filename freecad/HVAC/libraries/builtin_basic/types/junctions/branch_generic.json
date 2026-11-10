@@ -36,11 +36,11 @@
     }
   ],
   "generator": {
-    "module": "junctions",
+    "module": "shared:stars",
     "function": "build_branch_generic"
   },
   "connection_lengths": {
-    "module": "junctions",
+    "module": "shared:stars",
     "function": "measure_branch_generic"
   },
   "loss": {

@@ -43,11 +43,11 @@
     }
   ],
   "generator": {
-    "module": "junctions",
+    "module": "shared:wyes",
     "function": "build_wye_radius"
   },
   "connection_lengths": {
-    "module": "junctions",
+    "module": "shared:wyes",
     "function": "measure_wye_radius"
   },
   "loss": {

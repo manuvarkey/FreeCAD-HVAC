@@ -51,11 +51,11 @@
     }
   ],
   "generator": {
-    "module": "junctions",
+    "module": "shared:taps",
     "function": "build_tap_saddle"
   },
   "connection_lengths": {
-    "module": "junctions",
+    "module": "shared:taps",
     "function": "measure_tap_saddle"
   },
   "loss": {

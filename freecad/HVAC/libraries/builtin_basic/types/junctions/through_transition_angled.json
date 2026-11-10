@@ -22,11 +22,11 @@
     }
   ],
   "generator": {
-    "module": "junctions",
+    "module": "shared:transitions",
     "function": "build_transition"
   },
   "connection_lengths": {
-    "module": "junctions",
+    "module": "shared:transitions",
     "function": "measure_transition"
   },
   "loss": {
