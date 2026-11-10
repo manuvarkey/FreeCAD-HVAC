@@ -46,16 +46,16 @@ from dataclasses import dataclass, field
 
 import FreeCAD
 
+from . import geometry_result, validation
+from .construction import ConstructionFeatureDef, ConstructionLayerDef, FeatureContext
 from .library_api import HVACLibraryAPI
 from .loss_api import HVACLossAPI
-from . import validation
-from . import geometry_result
-from .construction import ConstructionLayerDef, ConstructionFeatureDef, FeatureContext
 
 
 @dataclass
 class HVACPropertyDef:
     """One user-facing property a type-def declares (name, FreeCAD property type, default, ...)."""
+
     name: str
     prop_type: str
     group: str = "HVAC"
@@ -69,6 +69,7 @@ class HVACPropertyDef:
 @dataclass
 class HVACGeometryDef:
     """Which geometry backend a type-def uses and where to find it (PartScript file / static descriptor)."""
+
     backend: str = ""
     file: str = ""
     descriptor: str = ""
@@ -88,6 +89,7 @@ class HVACLossVariantDef:
     uses, just scoped to "which loss function" instead of "which TypeId".
     See `HVACLibraryRegistry.call_loss()`/`validation.resolve_loss_variant()`.
     """
+
     constraints: dict = field(default_factory=dict)
     module: str = ""
     function: str = ""
@@ -138,6 +140,7 @@ class HVACSelectionDef:
         replace an already-selected compatible type -- see
         HVACLibraryRegistry.resolve_sticky_type().
     """
+
     kind: str = SELECTION_KIND_MODEL
     priority: int = 0
 
@@ -145,6 +148,7 @@ class HVACSelectionDef:
 @dataclass
 class HVACTypeDef:
     """One loaded type-def -- the in-memory form of a library type's JSON file."""
+
     id: str
     label: str
     category: str
@@ -203,6 +207,7 @@ class HVACMatchKey:
     validation.context_violations() -- the same connected-port-profile
     check used everywhere else). See HVACLibrary.select_type().
     """
+
     category: str
     topology: str
     family: str
@@ -229,6 +234,7 @@ class HVACTypeMatchRequest:
     here as a plain convenience default for that case; junction profile
     compatibility is authoritative from context["connected_ports"] alone.
     """
+
     category: str
     topology: str
     family: str
@@ -239,6 +245,7 @@ class HVACTypeMatchRequest:
 @dataclass
 class HVACTypeSelection:
     """Result of HVACLibrary/HVACLibraryRegistry.select_type()."""
+
     library_id: str
     type_def: "HVACTypeDef | None"
     status: str  # "exact" | "generic_profile" | "placeholder" | "retained" | "ambiguous" | "not_found"
@@ -277,6 +284,7 @@ class HVACLibrary:
     One loaded library: its types, plus the indexes and matching logic used
     to pick the best type for a given topology/family/profile request.
     """
+
     id: str
     label: str
     root_path: str
@@ -297,7 +305,9 @@ class HVACLibrary:
     def _family_match(self, parent, child):
         return child == parent or child.startswith(parent + ".")
 
-    def list_types(self, category=None, topology=None, family=None, profile=None, connected_ports=None, include_placeholders=True):
+    def list_types(
+        self, category=None, topology=None, family=None, profile=None, connected_ports=None, include_placeholders=True
+    ):
         """Types matching the given filters, best-suited first.
 
         Ordered by the same ranking `select_type` uses (see
@@ -335,7 +345,10 @@ class HVACLibrary:
                     continue
             elif profile and t.profiles and profile not in t.profiles:
                 continue
-            if not include_placeholders and getattr(t.selection, "kind", SELECTION_KIND_MODEL) == SELECTION_KIND_PLACEHOLDER:
+            if (
+                not include_placeholders
+                and getattr(t.selection, "kind", SELECTION_KIND_MODEL) == SELECTION_KIND_PLACEHOLDER
+            ):
                 continue
             out.append(t)
 
@@ -360,7 +373,7 @@ class HVACLibrary:
                 continue
             if family and not any(self._family_match(family, candidate) for candidate in t.family):
                 continue
-            for p in (t.profiles or []):
+            for p in t.profiles or []:
                 profiles.add(p)
         return sorted(profiles)
 
@@ -416,11 +429,7 @@ class HVACLibrary:
             kind = getattr(t.selection, "kind", SELECTION_KIND_MODEL)
             if kind == SELECTION_KIND_INLINE:
                 continue
-            target = (
-                self._model_match_index
-                if kind == SELECTION_KIND_MODEL
-                else self._placeholder_match_index
-            )
+            target = self._model_match_index if kind == SELECTION_KIND_MODEL else self._placeholder_match_index
             for fam in t.family:
                 key = HVACMatchKey(category=t.category, topology=t.topology, family=fam)
                 target.setdefault(key, []).append(t)
@@ -530,11 +539,11 @@ class HVACLibrary:
         self._ensure_match_index()
 
         model_compatible = [
-            t for t in self._structural_candidates(self.model_match_index, request)
-            if self._compatible(t, request)
+            t for t in self._structural_candidates(self.model_match_index, request) if self._compatible(t, request)
         ]
         ph_compatible = [
-            t for t in self._structural_candidates(self.placeholder_match_index, request)
+            t
+            for t in self._structural_candidates(self.placeholder_match_index, request)
             if self._compatible(t, request)
         ]
 
@@ -548,9 +557,7 @@ class HVACLibrary:
         for candidates, status in tiers:
             winner, ambiguous, ids = self._rank_tier(candidates)
             if winner is not None:
-                return HVACTypeSelection(
-                    library_id=self.id, type_def=winner, status=status, reason="", candidates=ids
-                )
+                return HVACTypeSelection(library_id=self.id, type_def=winner, status=status, reason="", candidates=ids)
             if ambiguous:
                 reason = (
                     "Ambiguous type selection in library '{}' for category={!r} topology={!r} "
@@ -735,11 +742,7 @@ class HVACLibraryRegistry:
 
         params = prepared.get("params")
         if params is None:
-            params = self.resolve_params(
-                type_def,
-                obj=prepared.get("obj"),
-                supplied=prepared.get("properties"),
-            )
+            params = self.resolve_params(type_def, obj=prepared.get("obj"), supplied=prepared.get("properties"))
         prepared["params"] = dict(params or {})
 
         # Backward compatibility for existing generators/loss helpers.
@@ -770,16 +773,16 @@ class HVACLibraryRegistry:
 
         if backend == "partscript":
             from . import partscript_shapes
+
             script_path = self.resolve_library_file(library_id, geometry.file)
             raw = partscript_shapes.execute_partscript(script_path, context)
         elif backend == "static":
             from . import static_shapes
+
             descriptor_path = self.resolve_library_file(library_id, geometry.descriptor)
             raw = static_shapes.build_static_geometry(descriptor_path, context)
         elif backend:
-            raise ValueError(
-                "Type '{}' uses unsupported geometry backend '{}'".format(type_def.id, backend)
-            )
+            raise ValueError("Type '{}' uses unsupported geometry backend '{}'".format(type_def.id, backend))
         elif type_def.generator_module and type_def.generator_function:
             # Legacy generator backend.
             module = self.import_generator(library_id, type_def.generator_module)
@@ -842,9 +845,7 @@ class HVACLibraryRegistry:
             if host_layer_geometry is None:
                 raise ValueError(
                     "Feature '{}' on type '{}' references host_layer '{}', which this "
-                    "type's geometry backend never returned".format(
-                        feature_def.id, type_def.id, feature_def.host_layer
-                    )
+                    "type's geometry backend never returned".format(feature_def.id, type_def.id, feature_def.host_layer)
                 )
 
             visible = True
@@ -853,11 +854,7 @@ class HVACLibraryRegistry:
 
             feature_params = {name: params.get(name) for name in feature_def.parameters}
 
-            ctx = FeatureContext(
-                parameters=feature_params,
-                host_layer=host_layer_geometry,
-                context=context,
-            )
+            ctx = FeatureContext(parameters=feature_params, host_layer=host_layer_geometry, context=context)
 
             module_name = feature_def.module or "features"
             features_module = modules_by_name.get(module_name)
@@ -869,9 +866,7 @@ class HVACLibraryRegistry:
             shape = generator_func(HVACLibraryAPI, ctx)
 
             result.features[feature_def.id] = geometry_result.FeatureGeometry(
-                shape=shape,
-                role=feature_def.role,
-                visible=visible,
+                shape=shape, role=feature_def.role, visible=visible
             )
 
     def call_generator(self, library_id: str, type_def: HVACTypeDef, context: dict):
@@ -912,8 +907,9 @@ class HVACLibraryRegistry:
         func = getattr(module, type_def.lengths_function, None)
         if func is None:
             raise ValueError(
-                "Type '{}' declares connection_lengths function '{}' in module '{}', but it "
-                "wasn't found there".format(type_def.id, type_def.lengths_function, type_def.lengths_module)
+                "Type '{}' declares connection_lengths function '{}' in module '{}', but it wasn't found there".format(
+                    type_def.id, type_def.lengths_function, type_def.lengths_module
+                )
             )
         raw = func(context)
         return self.normalize_connection_lengths(raw, type_def.id)
@@ -953,9 +949,7 @@ class HVACLibraryRegistry:
         for entry in entries:
             edge_key = entry.get("edge_key") if hasattr(entry, "get") else None
             if not edge_key:
-                raise ValueError(
-                    "Type '{}': a connection-length record is missing 'edge_key'".format(type_id)
-                )
+                raise ValueError("Type '{}': a connection-length record is missing 'edge_key'".format(type_id))
             segment_end = entry.get("segment_end")
             raw_length = entry.get("length", 0.0)
             try:
@@ -969,8 +963,9 @@ class HVACLibraryRegistry:
             if length < 0.0:
                 if length < -cls._NEGATIVE_LENGTH_TOLERANCE_MM:
                     raise ValueError(
-                        "Type '{}': connection-length record for '{}' is materially negative "
-                        "({} mm)".format(type_id, edge_key, length)
+                        "Type '{}': connection-length record for '{}' is materially negative ({} mm)".format(
+                            type_id, edge_key, length
+                        )
                     )
                 length = 0.0
             out.append({"edge_key": str(edge_key), "segment_end": segment_end, "length": length})
@@ -1025,9 +1020,7 @@ class HVACLibraryRegistry:
         self.scan_paths()
 
         if not self._libraries:
-            FreeCAD.Console.PrintError(
-                "HVAC - No HVAC libraries found in configured search paths.\n"
-            )
+            FreeCAD.Console.PrintError("HVAC - No HVAC libraries found in configured search paths.\n")
 
         self._loaded = True
 
@@ -1054,9 +1047,7 @@ class HVACLibraryRegistry:
                     self.register_library(lib)
             except Exception as e:
                 # One bad library shouldn't block the others from loading.
-                FreeCAD.Console.PrintWarning(
-                    "HVAC - Failed to load library from '{}': {}\n".format(lib_dir, e)
-                )
+                FreeCAD.Console.PrintWarning("HVAC - Failed to load library from '{}': {}\n".format(lib_dir, e))
 
     def reload(self):
         self._loaded = False
@@ -1136,9 +1127,7 @@ class HVACLibraryRegistry:
         if unknown_top_level:
             parts.append("unknown constraint key(s) {}".format(unknown_top_level))
         raise ValueError(
-            "Type '{}' in '{}' has {} in its own '{}'".format(
-                type_id, filepath, " and ".join(parts), label
-            )
+            "Type '{}' in '{}' has {} in its own '{}'".format(type_id, filepath, " and ".join(parts), label)
         )
 
     @staticmethod
@@ -1195,20 +1184,14 @@ class HVACLibraryRegistry:
             variant_function = variant_raw.get("function", "")
             if not variant_module or not variant_function:
                 raise ValueError(
-                    "Type '{}' in '{}' has a loss variant with no module/function".format(
-                        raw.get("id", "?"), filepath
-                    )
+                    "Type '{}' in '{}' has a loss variant with no module/function".format(raw.get("id", "?"), filepath)
                 )
             variant_constraints = dict(variant_raw.get("constraints", {}) or {})
             self._check_known_constraint_keys(
                 variant_constraints, raw.get("id", "?"), filepath, "loss.variants[{}].constraints".format(index)
             )
             loss_variants.append(
-                HVACLossVariantDef(
-                    constraints=variant_constraints,
-                    module=variant_module,
-                    function=variant_function,
-                )
+                HVACLossVariantDef(constraints=variant_constraints, module=variant_module, function=variant_function)
             )
 
         geometry_raw = raw.get("geometry", {}) or {}
@@ -1230,10 +1213,7 @@ class HVACLibraryRegistry:
                     raw.get("id", "?"), filepath, selection_kind, sorted(VALID_SELECTION_KINDS)
                 )
             )
-        selection = HVACSelectionDef(
-            kind=selection_kind,
-            priority=int(selection_raw.get("priority", 0) or 0),
-        )
+        selection = HVACSelectionDef(kind=selection_kind, priority=int(selection_raw.get("priority", 0) or 0))
 
         flow_boundary = str(raw.get("flow_boundary", "") or "")
         if flow_boundary not in VALID_FLOW_BOUNDARIES:

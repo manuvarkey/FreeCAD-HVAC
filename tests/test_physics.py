@@ -4,10 +4,10 @@ import pytest
 
 from freecad.HVAC.analysis import physics as airflow
 
-
 # ----------------------------------------------------------------------------
 # Unit conversion
 # ----------------------------------------------------------------------------
+
 
 def test_mm_to_m():
     assert airflow.mm_to_m(1000.0) == pytest.approx(1.0)
@@ -21,6 +21,7 @@ def test_lps_to_m3s_roundtrip():
 # ----------------------------------------------------------------------------
 # Area
 # ----------------------------------------------------------------------------
+
 
 def test_circular_area():
     # d=1m -> A = pi/4
@@ -41,7 +42,7 @@ def test_oval_area_degenerates_to_circle_when_square():
 def test_oval_area_rectangle_plus_circle():
     # width=0.5, height=0.2 -> straight rectangle (0.3 x 0.2) + full circle r=0.1
     got = airflow.oval_area(0.5, 0.2)
-    expected = 0.3 * 0.2 + math.pi * (0.1 ** 2)
+    expected = 0.3 * 0.2 + math.pi * (0.1**2)
     assert got == pytest.approx(expected)
 
 
@@ -53,6 +54,7 @@ def test_oval_area_rejects_non_positive_extent():
 # ----------------------------------------------------------------------------
 # Hydraulic diameter
 # ----------------------------------------------------------------------------
+
 
 def test_hydraulic_diameter_circular_equals_diameter():
     assert airflow.hydraulic_diameter_circular(0.25) == pytest.approx(0.25)
@@ -78,6 +80,7 @@ def test_hydraulic_diameter_oval_degenerates_to_circle_when_square():
 # Velocity / Reynolds number
 # ----------------------------------------------------------------------------
 
+
 def test_velocity_from_flow():
     # 1 m3/s through 1 m2 -> 1 m/s
     assert airflow.velocity_from_flow(1.0, 1.0) == pytest.approx(1.0)
@@ -86,20 +89,19 @@ def test_velocity_from_flow():
 
 def test_reynolds_number_known_value():
     # Re = V*Dh/nu
-    re = airflow.reynolds_number(velocity_m_s=10.0, hydraulic_diameter_m=0.2,
-                                  kinematic_viscosity_m2_s=1.51e-5)
+    re = airflow.reynolds_number(velocity_m_s=10.0, hydraulic_diameter_m=0.2, kinematic_viscosity_m2_s=1.51e-5)
     assert re == pytest.approx(10.0 * 0.2 / 1.51e-5)
 
 
 def test_reynolds_number_uses_absolute_velocity():
-    re = airflow.reynolds_number(velocity_m_s=-10.0, hydraulic_diameter_m=0.2,
-                                  kinematic_viscosity_m2_s=1.51e-5)
+    re = airflow.reynolds_number(velocity_m_s=-10.0, hydraulic_diameter_m=0.2, kinematic_viscosity_m2_s=1.51e-5)
     assert re > 0.0
 
 
 # ----------------------------------------------------------------------------
 # Friction factor
 # ----------------------------------------------------------------------------
+
 
 def test_friction_factor_altshul_tsal_typical_duct_case():
     # Typical HVAC duct: Re ~ 1.3e5, smooth-ish galvanized steel relative roughness ~ 0.0005
@@ -132,6 +134,7 @@ def test_friction_factor_rejects_nonpositive_reynolds():
 # Pressure loss
 # ----------------------------------------------------------------------------
 
+
 def test_velocity_pressure_known_value():
     # rho=1.204, V=10 -> Pv = 1.204*100/2 = 60.2
     assert airflow.velocity_pressure(1.204, 10.0) == pytest.approx(60.2)
@@ -140,22 +143,23 @@ def test_velocity_pressure_known_value():
 def test_darcy_weisbach_pressure_loss_known_value():
     # f=0.02, L=10m, Dh=0.2m, rho=1.2, V=5m/s
     # dP = f*(L/Dh)*(rho*V^2/2) = 0.02*(10/0.2)*(1.2*25/2) = 0.02*50*15 = 15
-    dp = airflow.darcy_weisbach_pressure_loss(friction_factor=0.02, length_m=10.0,
-                                               hydraulic_diameter_m=0.2,
-                                               air_density_kg_m3=1.2, velocity_m_s=5.0)
+    dp = airflow.darcy_weisbach_pressure_loss(
+        friction_factor=0.02, length_m=10.0, hydraulic_diameter_m=0.2, air_density_kg_m3=1.2, velocity_m_s=5.0
+    )
     assert dp == pytest.approx(15.0)
 
 
 def test_darcy_weisbach_pressure_loss_zero_length_is_zero():
-    dp = airflow.darcy_weisbach_pressure_loss(friction_factor=0.02, length_m=0.0,
-                                               hydraulic_diameter_m=0.2,
-                                               air_density_kg_m3=1.2, velocity_m_s=5.0)
+    dp = airflow.darcy_weisbach_pressure_loss(
+        friction_factor=0.02, length_m=0.0, hydraulic_diameter_m=0.2, air_density_kg_m3=1.2, velocity_m_s=5.0
+    )
     assert dp == pytest.approx(0.0)
 
 
 # ----------------------------------------------------------------------------
 # Duct sizing: constant velocity
 # ----------------------------------------------------------------------------
+
 
 def test_circular_diameter_for_velocity_round_trip():
     flow, v = 0.5, 6.0
@@ -169,11 +173,14 @@ def test_circular_diameter_for_velocity_rejects_nonpositive_velocity():
         airflow.circular_diameter_for_velocity(0.5, 0.0)
 
 
-@pytest.mark.parametrize("mode,kwargs", [
-    ("aspect_ratio", {"aspect_ratio": 2.0}),
-    ("fixed_height", {"fixed_dim_m": 0.3}),
-    ("fixed_width", {"fixed_dim_m": 0.5}),
-])
+@pytest.mark.parametrize(
+    "mode,kwargs",
+    [
+        ("aspect_ratio", {"aspect_ratio": 2.0}),
+        ("fixed_height", {"fixed_dim_m": 0.3}),
+        ("fixed_width", {"fixed_dim_m": 0.5}),
+    ],
+)
 def test_rect_dims_for_velocity_round_trip(mode, kwargs):
     flow, v = 0.5, 6.0
     w, h = airflow.rect_dims_for_velocity(flow, v, mode, **kwargs)
@@ -201,11 +208,14 @@ def test_rect_dims_for_velocity_unknown_mode_raises():
         airflow.rect_dims_for_velocity(0.5, 6.0, "bogus")
 
 
-@pytest.mark.parametrize("mode,kwargs", [
-    ("aspect_ratio", {"aspect_ratio": 2.0}),
-    ("fixed_height", {"fixed_dim_m": 0.25}),
-    ("fixed_width", {"fixed_dim_m": 0.6}),
-])
+@pytest.mark.parametrize(
+    "mode,kwargs",
+    [
+        ("aspect_ratio", {"aspect_ratio": 2.0}),
+        ("fixed_height", {"fixed_dim_m": 0.25}),
+        ("fixed_width", {"fixed_dim_m": 0.6}),
+    ],
+)
 def test_oval_dims_for_velocity_round_trip(mode, kwargs):
     flow, v = 0.4, 6.0
     w, h = airflow.oval_dims_for_velocity(flow, v, mode, **kwargs)
@@ -263,14 +273,22 @@ def test_oval_dims_for_friction_rate_tall_fixed_height():
     w, h = airflow.oval_dims_for_friction_rate(*args, "fixed_height", fixed_dim_m=0.6)
     assert h == pytest.approx(0.6)
     assert w < h
-    rate = airflow._friction_rate_pa_per_m(airflow.oval_area(w, h), airflow.hydraulic_diameter_oval(w, h), *args[:1], *args[2:])
+    rate = airflow._friction_rate_pa_per_m(
+        airflow.oval_area(w, h), airflow.hydraulic_diameter_oval(w, h), *args[:1], *args[2:]
+    )
     assert rate == pytest.approx(1.0, rel=1e-3)
 
 
 def test_oval_dims_for_static_regain_accepts_tall_aspect_ratio():
     kwargs = dict(
-        flow_m3_s=0.3, upstream_velocity_pressure_pa=40.0, regain_factor=0.75, length_m=5.0, roughness_m=0.00009,
-        kinematic_viscosity_m2_s=1.5e-5, air_density_kg_m3=1.2, min_velocity_m_s=2.0,
+        flow_m3_s=0.3,
+        upstream_velocity_pressure_pa=40.0,
+        regain_factor=0.75,
+        length_m=5.0,
+        roughness_m=0.00009,
+        kinematic_viscosity_m2_s=1.5e-5,
+        air_density_kg_m3=1.2,
+        min_velocity_m_s=2.0,
     )
     tall = airflow.oval_dims_for_static_regain(mode="aspect_ratio", aspect_ratio=0.5, **kwargs)
     wide = airflow.oval_dims_for_static_regain(mode="aspect_ratio", aspect_ratio=2.0, **kwargs)
@@ -312,11 +330,14 @@ def test_circular_diameter_for_friction_rate_round_trip():
     assert got_rate == pytest.approx(target, rel=1e-3)
 
 
-@pytest.mark.parametrize("mode,kwargs", [
-    ("aspect_ratio", {"aspect_ratio": 2.0}),
-    ("fixed_height", {"fixed_dim_m": 0.3}),
-    ("fixed_width", {"fixed_dim_m": 0.5}),
-])
+@pytest.mark.parametrize(
+    "mode,kwargs",
+    [
+        ("aspect_ratio", {"aspect_ratio": 2.0}),
+        ("fixed_height", {"fixed_dim_m": 0.3}),
+        ("fixed_width", {"fixed_dim_m": 0.5}),
+    ],
+)
 def test_rect_dims_for_friction_rate_round_trip(mode, kwargs):
     flow, target = 0.5, 1.0
     w, h = airflow.rect_dims_for_friction_rate(flow, target, ROUGHNESS_M, VISCOSITY, DENSITY, mode, **kwargs)
@@ -324,11 +345,14 @@ def test_rect_dims_for_friction_rate_round_trip(mode, kwargs):
     assert got_rate == pytest.approx(target, rel=1e-3)
 
 
-@pytest.mark.parametrize("mode,kwargs", [
-    ("aspect_ratio", {"aspect_ratio": 2.0}),
-    ("fixed_height", {"fixed_dim_m": 0.25}),
-    ("fixed_width", {"fixed_dim_m": 0.6}),
-])
+@pytest.mark.parametrize(
+    "mode,kwargs",
+    [
+        ("aspect_ratio", {"aspect_ratio": 2.0}),
+        ("fixed_height", {"fixed_dim_m": 0.25}),
+        ("fixed_width", {"fixed_dim_m": 0.6}),
+    ],
+)
 def test_oval_dims_for_friction_rate_round_trip(mode, kwargs):
     flow, target = 0.4, 1.0
     w, h = airflow.oval_dims_for_friction_rate(flow, target, ROUGHNESS_M, VISCOSITY, DENSITY, mode, **kwargs)
@@ -388,8 +412,12 @@ def test_circular_static_regain_round_trip_balances_when_not_floor_clamped():
     assert d < floor_d - 1e-9  # sanity: this case must not be floor-clamped
 
     regain, friction, _v = _regain_balance(
-        airflow.circular_area(d), airflow.hydraulic_diameter_circular(d),
-        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH
+        airflow.circular_area(d),
+        airflow.hydraulic_diameter_circular(d),
+        flow,
+        upstream_vp,
+        REGAIN_FACTOR,
+        ROUND_TRIP_LENGTH,
     )
     assert regain == pytest.approx(friction, rel=1e-3)
 
@@ -410,8 +438,7 @@ def test_circular_static_regain_not_clamped_when_faster_than_floor():
     assert d < floor_d - 1e-9
 
     regain, friction, _v = _regain_balance(
-        airflow.circular_area(d), airflow.hydraulic_diameter_circular(d),
-        flow, upstream_vp, REGAIN_FACTOR, length
+        airflow.circular_area(d), airflow.hydraulic_diameter_circular(d), flow, upstream_vp, REGAIN_FACTOR, length
     )
     assert regain == pytest.approx(friction, rel=1e-3)
 
@@ -452,13 +479,24 @@ def test_circular_static_regain_fitting_loss_pa_round_trip_balances():
     upstream_vp = airflow.velocity_pressure(DENSITY, ROUND_TRIP_UPSTREAM_V)
     fitting_loss_pa = 2.0
     d, balanced = airflow.circular_diameter_for_static_regain(
-        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY,
+        flow,
+        upstream_vp,
+        REGAIN_FACTOR,
+        ROUND_TRIP_LENGTH,
+        ROUGHNESS_M,
+        VISCOSITY,
+        DENSITY,
+        MIN_VELOCITY,
         fitting_loss_pa=fitting_loss_pa,
     )
     assert balanced is True
     regain, friction, _v = _regain_balance(
-        airflow.circular_area(d), airflow.hydraulic_diameter_circular(d),
-        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH
+        airflow.circular_area(d),
+        airflow.hydraulic_diameter_circular(d),
+        flow,
+        upstream_vp,
+        REGAIN_FACTOR,
+        ROUND_TRIP_LENGTH,
     )
     assert regain == pytest.approx(friction + fitting_loss_pa, rel=1e-3)
 
@@ -473,50 +511,87 @@ def test_circular_static_regain_fitting_loss_pa_gives_bigger_duct():
         flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY
     )
     d_with_loss, _balanced = airflow.circular_diameter_for_static_regain(
-        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY,
+        flow,
+        upstream_vp,
+        REGAIN_FACTOR,
+        ROUND_TRIP_LENGTH,
+        ROUGHNESS_M,
+        VISCOSITY,
+        DENSITY,
+        MIN_VELOCITY,
         fitting_loss_pa=2.0,
     )
     assert d_with_loss > d_no_loss
 
 
-@pytest.mark.parametrize("mode,kwargs", [
-    ("aspect_ratio", {"aspect_ratio": 2.0}),
-    ("fixed_height", {"fixed_dim_m": 0.3}),
-    ("fixed_width", {"fixed_dim_m": 0.5}),
-])
+@pytest.mark.parametrize(
+    "mode,kwargs",
+    [
+        ("aspect_ratio", {"aspect_ratio": 2.0}),
+        ("fixed_height", {"fixed_dim_m": 0.3}),
+        ("fixed_width", {"fixed_dim_m": 0.5}),
+    ],
+)
 def test_rect_dims_for_static_regain_round_trip(mode, kwargs):
     flow = 0.3
     upstream_vp = airflow.velocity_pressure(DENSITY, ROUND_TRIP_UPSTREAM_V)
     w, h, balanced = airflow.rect_dims_for_static_regain(
-        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH, ROUGHNESS_M, VISCOSITY, DENSITY,
-        MIN_VELOCITY, mode, **kwargs
+        flow,
+        upstream_vp,
+        REGAIN_FACTOR,
+        ROUND_TRIP_LENGTH,
+        ROUGHNESS_M,
+        VISCOSITY,
+        DENSITY,
+        MIN_VELOCITY,
+        mode,
+        **kwargs,
     )
     assert balanced is True
     assert w > 0.0 and h > 0.0
     regain, friction, _v = _regain_balance(
-        airflow.rectangular_area(w, h), airflow.hydraulic_diameter_rectangular(w, h),
-        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH
+        airflow.rectangular_area(w, h),
+        airflow.hydraulic_diameter_rectangular(w, h),
+        flow,
+        upstream_vp,
+        REGAIN_FACTOR,
+        ROUND_TRIP_LENGTH,
     )
     assert regain == pytest.approx(friction, rel=1e-3)
 
 
-@pytest.mark.parametrize("mode,kwargs", [
-    ("aspect_ratio", {"aspect_ratio": 2.0}),
-    ("fixed_height", {"fixed_dim_m": 0.25}),
-    ("fixed_width", {"fixed_dim_m": 0.6}),
-])
+@pytest.mark.parametrize(
+    "mode,kwargs",
+    [
+        ("aspect_ratio", {"aspect_ratio": 2.0}),
+        ("fixed_height", {"fixed_dim_m": 0.25}),
+        ("fixed_width", {"fixed_dim_m": 0.6}),
+    ],
+)
 def test_oval_dims_for_static_regain_round_trip(mode, kwargs):
     flow = 0.3
     upstream_vp = airflow.velocity_pressure(DENSITY, ROUND_TRIP_UPSTREAM_V)
     w, h, balanced = airflow.oval_dims_for_static_regain(
-        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH, ROUGHNESS_M, VISCOSITY, DENSITY,
-        MIN_VELOCITY, mode, **kwargs
+        flow,
+        upstream_vp,
+        REGAIN_FACTOR,
+        ROUND_TRIP_LENGTH,
+        ROUGHNESS_M,
+        VISCOSITY,
+        DENSITY,
+        MIN_VELOCITY,
+        mode,
+        **kwargs,
     )
     assert balanced is True
     assert w >= h > 0.0
     regain, friction, _v = _regain_balance(
-        airflow.oval_area(w, h), airflow.hydraulic_diameter_oval(w, h),
-        flow, upstream_vp, REGAIN_FACTOR, ROUND_TRIP_LENGTH
+        airflow.oval_area(w, h),
+        airflow.hydraulic_diameter_oval(w, h),
+        flow,
+        upstream_vp,
+        REGAIN_FACTOR,
+        ROUND_TRIP_LENGTH,
     )
     assert regain == pytest.approx(friction, rel=1e-3)
 
@@ -525,8 +600,16 @@ def test_rect_dims_for_static_regain_fixed_height_keeps_height_exact():
     flow, length = 0.3, 10.0
     upstream_vp = airflow.velocity_pressure(DENSITY, 8.0)
     w, h, _balanced = airflow.rect_dims_for_static_regain(
-        flow, upstream_vp, REGAIN_FACTOR, length, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY,
-        "fixed_height", fixed_dim_m=0.3
+        flow,
+        upstream_vp,
+        REGAIN_FACTOR,
+        length,
+        ROUGHNESS_M,
+        VISCOSITY,
+        DENSITY,
+        MIN_VELOCITY,
+        "fixed_height",
+        fixed_dim_m=0.3,
     )
     assert h == pytest.approx(0.3)
 
@@ -535,8 +618,16 @@ def test_rect_dims_for_static_regain_not_clamped_when_faster_than_floor():
     flow, length = 0.05, 0.5
     upstream_vp = airflow.velocity_pressure(DENSITY, 8.0)
     w, h, balanced = airflow.rect_dims_for_static_regain(
-        flow, upstream_vp, REGAIN_FACTOR, length, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY,
-        "aspect_ratio", aspect_ratio=2.0
+        flow,
+        upstream_vp,
+        REGAIN_FACTOR,
+        length,
+        ROUGHNESS_M,
+        VISCOSITY,
+        DENSITY,
+        MIN_VELOCITY,
+        "aspect_ratio",
+        aspect_ratio=2.0,
     )
     assert balanced is True
     floor_w, floor_h = airflow.rect_dims_for_velocity(flow, MIN_VELOCITY, "aspect_ratio", aspect_ratio=2.0)
@@ -548,8 +639,16 @@ def test_rect_dims_for_static_regain_reports_unbalanced_when_floor_clamped():
     flow, length = 0.3, 40.0
     upstream_vp = airflow.velocity_pressure(DENSITY, 3.5)
     w, h, balanced = airflow.rect_dims_for_static_regain(
-        flow, upstream_vp, REGAIN_FACTOR, length, ROUGHNESS_M, VISCOSITY, DENSITY, MIN_VELOCITY,
-        "aspect_ratio", aspect_ratio=2.0
+        flow,
+        upstream_vp,
+        REGAIN_FACTOR,
+        length,
+        ROUGHNESS_M,
+        VISCOSITY,
+        DENSITY,
+        MIN_VELOCITY,
+        "aspect_ratio",
+        aspect_ratio=2.0,
     )
     assert balanced is False
     floor_w, floor_h = airflow.rect_dims_for_velocity(flow, MIN_VELOCITY, "aspect_ratio", aspect_ratio=2.0)

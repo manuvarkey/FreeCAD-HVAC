@@ -9,7 +9,6 @@ than a full validation library.
 
 import math
 
-
 # Standardized qualifier/derived_values key vocabulary (NetworkParser.
 # classify_flow -- see core/TOPOLOGY_CLASSIFICATION.md) that "constraints"
 # (a type-def's own, or a loss variant's) may reference. Kept here, next
@@ -18,26 +17,42 @@ import math
 # reject a typo'd key instead of letting it silently become a permanent
 # no-op constraint) can never drift out of sync with what's actually
 # checked.
-KNOWN_QUALIFIER_KEYS = frozenset({
-    "alignment", "aligned_side", "aligned_corner", "transition_form",
-    "common_leg", "profile_relation", "inlet_profile", "outlet_profile",
-})
+KNOWN_QUALIFIER_KEYS = frozenset(
+    {
+        "alignment",
+        "aligned_side",
+        "aligned_corner",
+        "transition_form",
+        "common_leg",
+        "profile_relation",
+        "inlet_profile",
+        "outlet_profile",
+    }
+)
 # NOTE: this is deliberately only the vocabulary NetworkParser.classify_flow
 # itself produces. A value like "transition_angle" that depends on a
 # *selected fitting's own* properties (e.g. TransitionLength) is a
 # fitting/type-derived value, not a parser-derived one -- it belongs in a
 # separate vocabulary exposed by the library layer once that's needed, never
 # pretended to be parser output here.
-KNOWN_DERIVED_VALUE_KEYS = frozenset({
-    "area_ratio", "aspect_ratio_in", "aspect_ratio_out", "offset_ratio", "branch_angle",
-})
+KNOWN_DERIVED_VALUE_KEYS = frozenset(
+    {"area_ratio", "aspect_ratio_in", "aspect_ratio_out", "offset_ratio", "branch_angle"}
+)
 # Top-level constraint keys flow_classification_violations()/context_violations()
 # already give dedicated handling -- never checked against
 # KNOWN_DERIVED_VALUE_KEYS as a "derived value" typo.
-_RESERVED_CONSTRAINT_KEYS = frozenset({
-    "degree", "degree_min", "degree_max",
-    "flow_class", "qualifiers", "profile_relation", "inlet_profile", "outlet_profile",
-})
+_RESERVED_CONSTRAINT_KEYS = frozenset(
+    {
+        "degree",
+        "degree_min",
+        "degree_max",
+        "flow_class",
+        "qualifiers",
+        "profile_relation",
+        "inlet_profile",
+        "outlet_profile",
+    }
+)
 
 
 def unknown_flow_constraint_keys(constraints):
@@ -54,12 +69,8 @@ def unknown_flow_constraint_keys(constraints):
     ever checks a key that's actually present in `derived_values`.
     """
     constraints = dict(constraints or {})
-    unknown_qualifiers = sorted(
-        set(dict(constraints.get("qualifiers", {}) or {}).keys()) - KNOWN_QUALIFIER_KEYS
-    )
-    unknown_top_level = sorted(
-        (set(constraints.keys()) - _RESERVED_CONSTRAINT_KEYS) - KNOWN_DERIVED_VALUE_KEYS
-    )
+    unknown_qualifiers = sorted(set(dict(constraints.get("qualifiers", {}) or {}).keys()) - KNOWN_QUALIFIER_KEYS)
+    unknown_top_level = sorted((set(constraints.keys()) - _RESERVED_CONSTRAINT_KEYS) - KNOWN_DERIVED_VALUE_KEYS)
     return unknown_qualifiers, unknown_top_level
 
 
@@ -70,12 +81,7 @@ _QUANTITY_TYPES = {
     "App::PropertyFloatConstraint",
     "App::PropertyPressure",
 }
-_STRING_TYPES = {
-    "App::PropertyString",
-    "App::PropertyEnumeration",
-    "App::PropertyPath",
-    "App::PropertyFile",
-}
+_STRING_TYPES = {"App::PropertyString", "App::PropertyEnumeration", "App::PropertyPath", "App::PropertyFile"}
 
 
 def normalize_property_value(prop_type, value):
@@ -184,9 +190,7 @@ def resolve_params(type_def, obj=None, supplied=None):
 
         value = normalize_property_value(pdef.prop_type, raw)
         if bool(getattr(pdef, "required", True)) and value is None:
-            raise ValueError(
-                "Type '{}': required property '{}' has no value".format(type_def.id, pdef.name)
-            )
+            raise ValueError("Type '{}': required property '{}' has no value".format(type_def.id, pdef.name))
 
         validate_value(type_def.id, pdef.name, value, getattr(pdef, "validation", {}))
         params[pdef.name] = value
@@ -248,7 +252,11 @@ def flow_classification_violations(type_def, constraints, context, strict_missin
 
     if "flow_class" in constraints:
         _check_rule(
-            violations, type_def, "flow_class", context.get("flow_class"), constraints["flow_class"],
+            violations,
+            type_def,
+            "flow_class",
+            context.get("flow_class"),
+            constraints["flow_class"],
             strict_missing=strict_missing,
         )
 
@@ -261,7 +269,11 @@ def flow_classification_violations(type_def, constraints, context, strict_missin
     if "qualifiers" in constraints:
         for key, rule in dict(constraints["qualifiers"] or {}).items():
             _check_rule(
-                violations, type_def, "qualifiers.{}".format(key), qualifiers.get(key), rule,
+                violations,
+                type_def,
+                "qualifiers.{}".format(key),
+                qualifiers.get(key),
+                rule,
                 strict_missing=strict_missing,
             )
 
@@ -340,8 +352,7 @@ def resolve_loss_variant(type_def, context):
         return type_def.loss_module, type_def.loss_function
 
     matches = [
-        v for v in variants
-        if not flow_classification_violations(type_def, v.constraints, context, strict_missing=True)
+        v for v in variants if not flow_classification_violations(type_def, v.constraints, context, strict_missing=True)
     ]
 
     if not matches:
@@ -384,22 +395,14 @@ def context_violations(type_def, context):
 
         # Degree: how many ducts connect here.
         if "degree" in constraints and degree != int(constraints["degree"]):
-            violations.append(
-                "Type '{}' requires degree {}; got {}".format(
-                    type_def.id, constraints["degree"], degree
-                )
-            )
+            violations.append("Type '{}' requires degree {}; got {}".format(type_def.id, constraints["degree"], degree))
         if "degree_min" in constraints and degree < int(constraints["degree_min"]):
             violations.append(
-                "Type '{}' requires degree >= {}; got {}".format(
-                    type_def.id, constraints["degree_min"], degree
-                )
+                "Type '{}' requires degree >= {}; got {}".format(type_def.id, constraints["degree_min"], degree)
             )
         if "degree_max" in constraints and degree > int(constraints["degree_max"]):
             violations.append(
-                "Type '{}' requires degree <= {}; got {}".format(
-                    type_def.id, constraints["degree_max"], degree
-                )
+                "Type '{}' requires degree <= {}; got {}".format(type_def.id, constraints["degree_max"], degree)
             )
 
         # Topology: through/branch/cross/multiport/end, as classified by NetworkParser.
@@ -412,9 +415,7 @@ def context_violations(type_def, context):
             and expected_topology != actual_topology
         ):
             violations.append(
-                "Type '{}' requires topology '{}'; got '{}'".format(
-                    type_def.id, expected_topology, actual_topology
-                )
+                "Type '{}' requires topology '{}'; got '{}'".format(type_def.id, expected_topology, actual_topology)
             )
 
         # Profile: does every connected port's duct shape (Circular/
@@ -427,9 +428,7 @@ def context_violations(type_def, context):
                 profile = str(port.get("profile", "") or "")
                 if profile and profile not in profiles:
                     violations.append(
-                        "Type '{}' does not support profile '{}' on port {}".format(
-                            type_def.id, profile, index
-                        )
+                        "Type '{}' does not support profile '{}' on port {}".format(type_def.id, profile, index)
                     )
 
         # Flow classification (NetworkParser.JunctionAnalysis.flow_class/
@@ -443,9 +442,7 @@ def context_violations(type_def, context):
     elif category == "segment" and profiles and "Generic" not in profiles:
         profile = str(context.get("profile", "") or "")
         if profile and profile not in profiles:
-            violations.append(
-                "Type '{}' does not support segment profile '{}'".format(type_def.id, profile)
-            )
+            violations.append("Type '{}' does not support segment profile '{}'".format(type_def.id, profile))
 
     return violations
 

@@ -19,12 +19,12 @@ runs end-to-end without needing a real Part.Wire/BoundBox.
 
 import os
 
-import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 import pytest
 
+import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
+from freecad.HVAC.libraries.builtin_basic.generators import junctions as gen
 from freecad.HVAC.library.Library import HVACLibraryRegistry
 from freecad.HVAC.library.library_api import HVACLibraryAPI
-from freecad.HVAC.libraries.builtin_basic.generators import junctions as gen
 
 LIBRARIES_ROOT = os.path.join(os.path.dirname(__file__), "..", "freecad", "HVAC", "libraries")
 
@@ -50,6 +50,7 @@ def _port(edge_key, direction, diameter, position=(0.0, 0.0, 0.0), segment_end="
 # 1. Transition parameter handling -- TransitionRadius must be read
 # independently of TransitionLength (and of the never-declared "Length").
 # ----------------------------------------------------------------------
+
 
 def _transition_ports():
     return [
@@ -145,6 +146,7 @@ def test_transition_mitered_uses_transition_length_not_legacy_length_key():
 # actual inclined run surface, not double that distance.
 # ----------------------------------------------------------------------
 
+
 class _AnalyticProfileAPI:
     """
     Wraps the real HVACLibraryAPI, replacing profile_from_port/
@@ -196,8 +198,7 @@ def test_lateral_tee_branch_min_matches_run_surface_distance_not_double():
     layout = gen._lateral_tee_layout(context)
 
     expected_branch_min = max(
-        0.0,
-        (layout["run_surface"] - HVACLibraryAPI.vec(branch["position"])).dot(layout["branch_dir"]),
+        0.0, (layout["run_surface"] - HVACLibraryAPI.vec(branch["position"])).dot(layout["branch_dir"])
     )
     assert expected_branch_min == 100.0  # sanity: a real, non-degenerate distance
 
@@ -221,6 +222,7 @@ def test_lateral_tee_trim_branch_grows_by_exactly_the_extra_trim_property():
 # 3. Radius wye -- the common/main leg is a geometric identity (from port
 # directions), never chosen by duct size.
 # ----------------------------------------------------------------------
+
 
 def _wye_ports(common_diameter, branch1_diameter, branch2_diameter):
     # A real Y-shape: common leg outward +X, the two branches spread out
@@ -260,6 +262,7 @@ def test_wye_common_index_follows_port_order_not_a_fixed_slot():
 # ----------------------------------------------------------------------
 # 4. Generic terminal body -- geometry/measurement contract + BodyLength.
 # ----------------------------------------------------------------------
+
 
 def test_measure_terminal_body_generic_equals_body_length():
     ctx = {
@@ -308,6 +311,7 @@ def test_generic_terminal_descriptors_declare_measurement_function():
 # (these properties used to be declared in the type-def but never read).
 # ----------------------------------------------------------------------
 
+
 def _cross_context(params):
     ports = [
         _port("A", (-1.0, 0.0, 0.0), 200.0),
@@ -338,5 +342,9 @@ def test_star_port_trim_names_stop_after_four_ports():
     # A multiport's 5th+ port has no named trim; it only has the shared TrimLength.
     assert gen._port_trim_names(5) == ["TrimPortA", "TrimPortB", "TrimPortC", "TrimPortD", None]
     assert gen._star_trims({"TrimLength": 75.0, "TrimPortA": 50.0}, gen._port_trim_names(5), 999.0) == [
-        50.0, 75.0, 75.0, 75.0, 75.0
+        50.0,
+        75.0,
+        75.0,
+        75.0,
+        75.0,
     ]

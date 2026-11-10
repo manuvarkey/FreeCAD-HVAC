@@ -36,10 +36,10 @@ import math
 
 from .model import SectionModel
 
-
 # ----------------------------------------------------------------------------
 # Unit conversion
 # ----------------------------------------------------------------------------
+
 
 def mm_to_m(value_mm):
     """Convert millimetres to metres."""
@@ -60,12 +60,13 @@ def m3s_to_lps(value_m3s):
 # Cross-section area
 # ----------------------------------------------------------------------------
 
+
 def circular_area(diameter_m):
     """Cross-section area of a circular duct."""
     d = float(diameter_m)
     if d <= 0.0:
         raise ValueError("diameter_m must be positive")
-    return math.pi * (d ** 2) / 4.0
+    return math.pi * (d**2) / 4.0
 
 
 def rectangular_area(width_m, height_m):
@@ -100,12 +101,13 @@ def oval_area(width_m, height_m):
     straight = major - minor
     # An oval is a rectangle (the straight middle part) plus a full circle
     # (the two rounded end caps, which together make one circle).
-    return straight * minor + math.pi * (r ** 2)
+    return straight * minor + math.pi * (r**2)
 
 
 # ----------------------------------------------------------------------------
 # Hydraulic diameter (Dh = 4*Area / WettedPerimeter)
 # ----------------------------------------------------------------------------
+
 
 def hydraulic_diameter_circular(diameter_m):
     """Hydraulic diameter of a circular duct (== its diameter)."""
@@ -137,6 +139,7 @@ def hydraulic_diameter_oval(width_m, height_m):
 # Flow / velocity / Reynolds number
 # ----------------------------------------------------------------------------
 
+
 def velocity_from_flow(flow_m3_s, area_m2):
     """Mean duct velocity from volumetric flow rate and cross-section area."""
     a = float(area_m2)
@@ -156,6 +159,7 @@ def reynolds_number(velocity_m_s, hydraulic_diameter_m, kinematic_viscosity_m2_s
 # ----------------------------------------------------------------------------
 # Friction factor and pressure loss
 # ----------------------------------------------------------------------------
+
 
 def friction_factor_altshul_tsal(reynolds, relative_roughness):
     """
@@ -182,8 +186,7 @@ def velocity_pressure(air_density_kg_m3, velocity_m_s):
     return float(air_density_kg_m3) * (float(velocity_m_s) ** 2) / 2.0
 
 
-def darcy_weisbach_pressure_loss(friction_factor, length_m, hydraulic_diameter_m,
-                                  air_density_kg_m3, velocity_m_s):
+def darcy_weisbach_pressure_loss(friction_factor, length_m, hydraulic_diameter_m, air_density_kg_m3, velocity_m_s):
     """Straight-duct friction pressure loss via the Darcy-Weisbach equation."""
     dh = float(hydraulic_diameter_m)
     if dh <= 0.0:
@@ -255,9 +258,9 @@ def _oval_free_dim_for_area(fixed_dim_m, area_m2):
       axis, and the area formula is quadratic in it (take the smaller root).
     """
     fixed = float(fixed_dim_m)
-    if area_m2 >= math.pi * fixed ** 2 / 4.0:
+    if area_m2 >= math.pi * fixed**2 / 4.0:
         return fixed + area_m2 / fixed - math.pi * fixed / 4.0
-    discriminant = fixed ** 2 - 4.0 * _OVAL_SHAPE_FACTOR * area_m2
+    discriminant = fixed**2 - 4.0 * _OVAL_SHAPE_FACTOR * area_m2
     return (fixed - math.sqrt(max(discriminant, 0.0))) / (2.0 * _OVAL_SHAPE_FACTOR)
 
 
@@ -305,17 +308,27 @@ def oval_dims_for_velocity(flow_m3_s, velocity_m_s, mode, aspect_ratio=None, fix
 # friction rate, so we can narrow in on the size that hits the target rate.
 # ----------------------------------------------------------------------------
 
-def _friction_rate_pa_per_m(area_m2, hydraulic_diameter_m, flow_m3_s,
-                             roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3):
+
+def _friction_rate_pa_per_m(
+    area_m2, hydraulic_diameter_m, flow_m3_s, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3
+):
     velocity_m_s = velocity_from_flow(flow_m3_s, area_m2)
     reynolds = reynolds_number(velocity_m_s, hydraulic_diameter_m, kinematic_viscosity_m2_s)
     friction_factor = friction_factor_altshul_tsal(reynolds, roughness_m / hydraulic_diameter_m)
     return darcy_weisbach_pressure_loss(friction_factor, 1.0, hydraulic_diameter_m, air_density_kg_m3, velocity_m_s)
 
 
-def _solve_scale_for_friction_rate(area_and_dh_fn, flow_m3_s, target_rate_pa_per_m,
-                                    roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
-                                    lo=0.01, hi=5.0, iterations=60):
+def _solve_scale_for_friction_rate(
+    area_and_dh_fn,
+    flow_m3_s,
+    target_rate_pa_per_m,
+    roughness_m,
+    kinematic_viscosity_m2_s,
+    air_density_kg_m3,
+    lo=0.01,
+    hi=5.0,
+    iterations=60,
+):
     """
     Find the duct size that hits the target friction rate (bisection).
 
@@ -325,10 +338,12 @@ def _solve_scale_for_friction_rate(area_and_dh_fn, flow_m3_s, target_rate_pa_per
     raising -- callers can re-check the actual rate at the returned size if
     they need to know whether it was clamped.
     """
+
     def rate_at(scale):
         area_m2, dh_m = area_and_dh_fn(scale)
-        return _friction_rate_pa_per_m(area_m2, dh_m, flow_m3_s, roughness_m,
-                                        kinematic_viscosity_m2_s, air_density_kg_m3)
+        return _friction_rate_pa_per_m(
+            area_m2, dh_m, flow_m3_s, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3
+        )
 
     if rate_at(lo) <= target_rate_pa_per_m:
         return lo  # even the smallest allowed duct is already at/under the target rate
@@ -345,9 +360,11 @@ def _solve_scale_for_friction_rate(area_and_dh_fn, flow_m3_s, target_rate_pa_per
     return (lo + hi) / 2.0
 
 
-def circular_diameter_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
-                                         kinematic_viscosity_m2_s, air_density_kg_m3):
+def circular_diameter_for_friction_rate(
+    flow_m3_s, target_rate_pa_per_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3
+):
     """Circular duct diameter that gives (approximately) the target friction rate (Pa/m)."""
+
     def area_and_dh(diameter_m):
         return circular_area(diameter_m), hydraulic_diameter_circular(diameter_m)
 
@@ -356,9 +373,16 @@ def circular_diameter_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughne
     )
 
 
-def rect_dims_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
-                                 kinematic_viscosity_m2_s, air_density_kg_m3,
-                                 mode, aspect_ratio=None, fixed_dim_m=None):
+def rect_dims_for_friction_rate(
+    flow_m3_s,
+    target_rate_pa_per_m,
+    roughness_m,
+    kinematic_viscosity_m2_s,
+    air_density_kg_m3,
+    mode,
+    aspect_ratio=None,
+    fixed_dim_m=None,
+):
     """Rectangular duct (width_m, height_m) that gives (approximately) the target friction rate."""
     if mode == "aspect_ratio":
         if not aspect_ratio or aspect_ratio <= 0.0:
@@ -402,9 +426,16 @@ def rect_dims_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
     raise ValueError("Unknown mode: {!r}".format(mode))
 
 
-def oval_dims_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
-                                 kinematic_viscosity_m2_s, air_density_kg_m3,
-                                 mode, aspect_ratio=None, fixed_dim_m=None):
+def oval_dims_for_friction_rate(
+    flow_m3_s,
+    target_rate_pa_per_m,
+    roughness_m,
+    kinematic_viscosity_m2_s,
+    air_density_kg_m3,
+    mode,
+    aspect_ratio=None,
+    fixed_dim_m=None,
+):
     """Flat-oval duct (width_m, height_m) that gives (approximately) the target friction rate."""
     if mode == "aspect_ratio":
         _check_oval_aspect_ratio(aspect_ratio)
@@ -478,9 +509,19 @@ def oval_dims_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
 # that don't have a fitting-loss estimate.
 # ----------------------------------------------------------------------------
 
-def _regain_minus_friction(area_and_dh_fn, scale, flow_m3_s, upstream_velocity_pressure_pa,
-                            regain_factor, length_m, roughness_m, kinematic_viscosity_m2_s,
-                            air_density_kg_m3, fitting_loss_pa=0.0):
+
+def _regain_minus_friction(
+    area_and_dh_fn,
+    scale,
+    flow_m3_s,
+    upstream_velocity_pressure_pa,
+    regain_factor,
+    length_m,
+    roughness_m,
+    kinematic_viscosity_m2_s,
+    air_density_kg_m3,
+    fitting_loss_pa=0.0,
+):
     """
     Regain minus (friction + fitting_loss_pa) for a trial duct size. Zero
     means balanced; positive means this size has more regain than it needs
@@ -497,9 +538,20 @@ def _regain_minus_friction(area_and_dh_fn, scale, flow_m3_s, upstream_velocity_p
     return regain - friction - fitting_loss_pa
 
 
-def _solve_scale_for_static_regain(area_and_dh_fn, flow_m3_s, upstream_velocity_pressure_pa,
-                                    regain_factor, length_m, roughness_m, kinematic_viscosity_m2_s,
-                                    air_density_kg_m3, hi, lo=None, iterations=60, fitting_loss_pa=0.0):
+def _solve_scale_for_static_regain(
+    area_and_dh_fn,
+    flow_m3_s,
+    upstream_velocity_pressure_pa,
+    regain_factor,
+    length_m,
+    roughness_m,
+    kinematic_viscosity_m2_s,
+    air_density_kg_m3,
+    hi,
+    lo=None,
+    iterations=60,
+    fitting_loss_pa=0.0,
+):
     """
     Find the duct size where regain exactly cancels friction (bisection).
     Bigger duct -> less friction and more regain, so this difference only
@@ -526,8 +578,16 @@ def _solve_scale_for_static_regain(area_and_dh_fn, flow_m3_s, upstream_velocity_
 
     def balance(scale):
         return _regain_minus_friction(
-            area_and_dh_fn, scale, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, fitting_loss_pa
+            area_and_dh_fn,
+            scale,
+            flow_m3_s,
+            upstream_velocity_pressure_pa,
+            regain_factor,
+            length_m,
+            roughness_m,
+            kinematic_viscosity_m2_s,
+            air_density_kg_m3,
+            fitting_loss_pa,
         )
 
     if balance(hi) < 0.0:
@@ -545,25 +605,51 @@ def _solve_scale_for_static_regain(area_and_dh_fn, flow_m3_s, upstream_velocity_
     return (lo + hi) / 2.0, True
 
 
-def circular_diameter_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-                                         length_m, roughness_m, kinematic_viscosity_m2_s,
-                                         air_density_kg_m3, min_velocity_m_s, fitting_loss_pa=0.0):
+def circular_diameter_for_static_regain(
+    flow_m3_s,
+    upstream_velocity_pressure_pa,
+    regain_factor,
+    length_m,
+    roughness_m,
+    kinematic_viscosity_m2_s,
+    air_density_kg_m3,
+    min_velocity_m_s,
+    fitting_loss_pa=0.0,
+):
     """Returns (diameter_m, balanced) -- see _solve_scale_for_static_regain for what balanced means."""
+
     def area_and_dh(diameter_m):
         return circular_area(diameter_m), hydraulic_diameter_circular(diameter_m)
 
     floor_diameter_m = circular_diameter_for_velocity(flow_m3_s, min_velocity_m_s)
     return _solve_scale_for_static_regain(
-        area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-        length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, hi=floor_diameter_m,
+        area_and_dh,
+        flow_m3_s,
+        upstream_velocity_pressure_pa,
+        regain_factor,
+        length_m,
+        roughness_m,
+        kinematic_viscosity_m2_s,
+        air_density_kg_m3,
+        hi=floor_diameter_m,
         fitting_loss_pa=fitting_loss_pa,
     )
 
 
-def rect_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-                                 length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
-                                 min_velocity_m_s, mode, aspect_ratio=None, fixed_dim_m=None,
-                                 fitting_loss_pa=0.0):
+def rect_dims_for_static_regain(
+    flow_m3_s,
+    upstream_velocity_pressure_pa,
+    regain_factor,
+    length_m,
+    roughness_m,
+    kinematic_viscosity_m2_s,
+    air_density_kg_m3,
+    min_velocity_m_s,
+    mode,
+    aspect_ratio=None,
+    fixed_dim_m=None,
+    fitting_loss_pa=0.0,
+):
     """Returns (width_m, height_m, balanced) -- see _solve_scale_for_static_regain for what balanced means."""
     floor_w, floor_h = rect_dims_for_velocity(
         flow_m3_s, min_velocity_m_s, mode, aspect_ratio=aspect_ratio, fixed_dim_m=fixed_dim_m
@@ -578,8 +664,15 @@ def rect_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
             return rectangular_area(width_m, height_m), hydraulic_diameter_rectangular(width_m, height_m)
 
         height, balanced = _solve_scale_for_static_regain(
-            area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, hi=floor_h,
+            area_and_dh,
+            flow_m3_s,
+            upstream_velocity_pressure_pa,
+            regain_factor,
+            length_m,
+            roughness_m,
+            kinematic_viscosity_m2_s,
+            air_density_kg_m3,
+            hi=floor_h,
             fitting_loss_pa=fitting_loss_pa,
         )
         return aspect_ratio * height, height, balanced
@@ -593,8 +686,15 @@ def rect_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
             return rectangular_area(width_m, height), hydraulic_diameter_rectangular(width_m, height)
 
         width, balanced = _solve_scale_for_static_regain(
-            area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, hi=floor_w,
+            area_and_dh,
+            flow_m3_s,
+            upstream_velocity_pressure_pa,
+            regain_factor,
+            length_m,
+            roughness_m,
+            kinematic_viscosity_m2_s,
+            air_density_kg_m3,
+            hi=floor_w,
             fitting_loss_pa=fitting_loss_pa,
         )
         return width, height, balanced
@@ -608,8 +708,15 @@ def rect_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
             return rectangular_area(width, height_m), hydraulic_diameter_rectangular(width, height_m)
 
         height, balanced = _solve_scale_for_static_regain(
-            area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, hi=floor_h,
+            area_and_dh,
+            flow_m3_s,
+            upstream_velocity_pressure_pa,
+            regain_factor,
+            length_m,
+            roughness_m,
+            kinematic_viscosity_m2_s,
+            air_density_kg_m3,
+            hi=floor_h,
             fitting_loss_pa=fitting_loss_pa,
         )
         return width, height, balanced
@@ -617,10 +724,20 @@ def rect_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
     raise ValueError("Unknown mode: {!r}".format(mode))
 
 
-def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-                                 length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
-                                 min_velocity_m_s, mode, aspect_ratio=None, fixed_dim_m=None,
-                                 fitting_loss_pa=0.0):
+def oval_dims_for_static_regain(
+    flow_m3_s,
+    upstream_velocity_pressure_pa,
+    regain_factor,
+    length_m,
+    roughness_m,
+    kinematic_viscosity_m2_s,
+    air_density_kg_m3,
+    min_velocity_m_s,
+    mode,
+    aspect_ratio=None,
+    fixed_dim_m=None,
+    fitting_loss_pa=0.0,
+):
     """Returns (width_m, height_m, balanced) -- see _solve_scale_for_static_regain for what balanced means."""
     floor_w, floor_h = oval_dims_for_velocity(
         flow_m3_s, min_velocity_m_s, mode, aspect_ratio=aspect_ratio, fixed_dim_m=fixed_dim_m
@@ -634,8 +751,15 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
             return oval_area(width_m, height_m), hydraulic_diameter_oval(width_m, height_m)
 
         height, balanced = _solve_scale_for_static_regain(
-            area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3, hi=floor_h,
+            area_and_dh,
+            flow_m3_s,
+            upstream_velocity_pressure_pa,
+            regain_factor,
+            length_m,
+            roughness_m,
+            kinematic_viscosity_m2_s,
+            air_density_kg_m3,
+            hi=floor_h,
             fitting_loss_pa=fitting_loss_pa,
         )
         return aspect_ratio * height, height, balanced
@@ -651,8 +775,14 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
         # The only upper limit on width is the min_velocity ceiling (floor_w);
         # width may end up above or below the fixed height.
         width, balanced = _solve_scale_for_static_regain(
-            area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
+            area_and_dh,
+            flow_m3_s,
+            upstream_velocity_pressure_pa,
+            regain_factor,
+            length_m,
+            roughness_m,
+            kinematic_viscosity_m2_s,
+            air_density_kg_m3,
             hi=floor_w,
             fitting_loss_pa=fitting_loss_pa,
         )
@@ -669,8 +799,14 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
         # The only upper limit on height is the min_velocity ceiling (floor_h);
         # height may end up above or below the fixed width.
         height, balanced = _solve_scale_for_static_regain(
-            area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
-            length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
+            area_and_dh,
+            flow_m3_s,
+            upstream_velocity_pressure_pa,
+            regain_factor,
+            length_m,
+            roughness_m,
+            kinematic_viscosity_m2_s,
+            air_density_kg_m3,
             hi=floor_h,
             fitting_loss_pa=fitting_loss_pa,
         )
@@ -684,6 +820,7 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
 # diameter. One place for the branching that used to be copy-pasted in
 # AirflowSolver, DuctSizer, and HVACLibraryAPI.port_area.
 # ----------------------------------------------------------------------------
+
 
 def section_area_m2(section: SectionModel) -> float:
     """Cross-section area (m^2) of a SectionModel (dimensions in mm), or 0.0 if unset/degenerate."""
@@ -710,7 +847,6 @@ def section_hydraulic_diameter_m(section: SectionModel) -> float:
         if w <= 0.0 or h <= 0.0:
             return 0.0
         return (
-            hydraulic_diameter_rectangular(w, h) if section.profile == "Rectangular"
-            else hydraulic_diameter_oval(w, h)
+            hydraulic_diameter_rectangular(w, h) if section.profile == "Rectangular" else hydraulic_diameter_oval(w, h)
         )
     return 0.0

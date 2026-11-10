@@ -30,8 +30,8 @@ recipes. Library code must use this surface instead of importing FreeCAD,
 Part, or internal HVAC modules directly.
 """
 
-from dataclasses import dataclass, field
 import math
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 import FreeCAD
@@ -131,18 +131,18 @@ class HVACLibraryAPI:
         Compute the perpendicular distance between two lines in 3D.
         Each line is defined by a FreeCAD.Vector origin and direction.
         Handles parallel/coincident lines as a special case.
-        """    
+        """
         u_i = FreeCAD.Vector(dir_i).normalize()
         u_j = FreeCAD.Vector(dir_j).normalize()
-        w0  = FreeCAD.Vector(origin_i) - FreeCAD.Vector(origin_j)
-    
+        w0 = FreeCAD.Vector(origin_i) - FreeCAD.Vector(origin_j)
+
         cross = u_i.cross(u_j)
         denom = cross.Length
-    
+
         if denom < 1e-10:
             # Lines are parallel — distance is |w0 × u_i|
             return w0.cross(u_i).Length
-    
+
         # Skew lines — |(w0 · (d_i × d_j))| / |d_i × d_j|
         return abs(w0.dot(cross)) / denom
 
@@ -150,37 +150,37 @@ class HVACLibraryAPI:
     def closest_points_on_lines(p0, d0, p1, d1):
         """
         Return closest points c0 on L0 and c1 on L1 for:
-    
+
             L0(t) = p0 + t d0
             L1(s) = p1 + s d1
-    
+
         Returns (None, None) for nearly parallel lines.
         """
         p0 = FreeCAD.Vector(p0)
         p1 = FreeCAD.Vector(p1)
         d0 = FreeCAD.Vector(d0)
         d1 = FreeCAD.Vector(d1)
-    
+
         if d0.Length <= HVACLibraryAPI.EPS or d1.Length <= HVACLibraryAPI.EPS:
             raise ValueError("Line direction too small")
-    
+
         d0.normalize()
         d1.normalize()
-    
+
         w0 = p0 - p1
         a = d0.dot(d0)
         b = d0.dot(d1)
         c = d1.dot(d1)
         d = d0.dot(w0)
         e = d1.dot(w0)
-    
+
         denom = a * c - b * b
         if abs(denom) <= HVACLibraryAPI.EPS:
             return None, None
-    
+
         t = (b * e - c * d) / denom
         s = (a * e - b * d) / denom
-    
+
         c0 = p0 + d0 * t
         c1 = p1 + d1 * s
         return c0, c1
@@ -195,24 +195,21 @@ class HVACLibraryAPI:
         d1 = FreeCAD.Vector(u1)
         d0.normalize()
         d1.normalize()
-    
+
         # Lines traced back toward the junction
-        c0, c1 = HVACLibraryAPI.closest_points_on_lines(
-            FreeCAD.Vector(p0), d0,
-            FreeCAD.Vector(p1), d1
-        )
+        c0, c1 = HVACLibraryAPI.closest_points_on_lines(FreeCAD.Vector(p0), d0, FreeCAD.Vector(p1), d1)
         if c0 is None or c1 is None:
             raise ValueError("Failed to compute virtual corner")
-    
+
         # For clean coplanar cases c0 ~= c1; midpoint is robust
         corner = (c0 + c1) * 0.5
-    
+
         # Sanity check
         if (c0 - c1).Length > HVACLibraryAPI.EPS:
             FreeCAD.Console.PrintWarning(
                 "HVAC: elbow centerlines do not intersect exactly; using midpoint of closest points\n"
             )
-    
+
         return corner
 
     @staticmethod
@@ -220,7 +217,7 @@ class HVACLibraryAPI:
         """
         Compute the center of a circular arc joining p0 -> p1 with given radius,
         using tangent directions u0 at p0 and u1 at p1.
-    
+
         Parameters
         ----------
         p0, p1 : FreeCAD.Vector
@@ -229,19 +226,19 @@ class HVACLibraryAPI:
             Tangent directions at p0 and p1.
         radius : float
             Arc radius.
-    
+
         Returns
         -------
         FreeCAD.Vector
             Arc center.
-    
+
         Notes
         -----
         - The bend plane is derived from u0 x u1.
         - The chosen center is the one whose radius vectors are most
           perpendicular to the supplied tangents.
         """
-    
+
         p0 = FreeCAD.Vector(p0)
         p1 = FreeCAD.Vector(p1)
         if radius <= 0:
@@ -253,30 +250,30 @@ class HVACLibraryAPI:
             raise ValueError("Tangent direction too small")
         u0.normalize()
         u1.normalize()
-    
+
         # Chord between endpoints
         chord = p1 - p0
         d = chord.Length
         if d <= 1e-12:
             raise ValueError("Arc endpoints are coincident")
-    
+
         # A circle of radius r can span the chord only if d <= 2r
         if d > 2.0 * float(radius) + 1e-9:
             raise ValueError("Radius too small for given endpoints")
-    
+
         # Midpoint of the chord
         mid = (p0 + p1) * 0.5
-    
+
         # Bend plane normal from the two tangents
         plane_n = u0.cross(u1)
         if plane_n.Length <= 1e-12:
             raise ValueError("Elbow requires non-collinear tangent directions")
         plane_n.normalize()
-    
+
         # Unit chord direction
         chord_dir = FreeCAD.Vector(chord)
         chord_dir.normalize()
-    
+
         # Direction from chord midpoint toward candidate centers,
         # constrained to remain in the bend plane
         perp = plane_n.cross(chord_dir)
@@ -285,17 +282,17 @@ class HVACLibraryAPI:
         if perp.Length <= 1e-12:
             raise ValueError("Failed to compute elbow center direction")
         perp.normalize()
-    
+
         # Distance from chord midpoint to the circle center
         h_sq = float(radius) ** 2 - (d * 0.5) ** 2
         if h_sq < -1e-9:
             raise ValueError("Invalid geometry for arc center")
         h = math.sqrt(max(h_sq, 0.0))
-    
+
         # Two possible centers
         c1 = mid + perp * h
         c2 = mid - perp * h
-    
+
         def score(c):
             """
             Smaller score is better.
@@ -305,9 +302,8 @@ class HVACLibraryAPI:
             v0 = p0 - c
             v1 = p1 - c
             return abs(v0.dot(u0)) + abs(v1.dot(u1))
-    
-        return c1 if score(c1) <= score(c2) else c2
 
+        return c1 if score(c1) <= score(c2) else c2
 
     # ------------------------------------------------------------------
     # Context / port helpers
@@ -371,25 +367,14 @@ class HVACLibraryAPI:
 
         pairs = HVACLibraryAPI.collinear_port_index_pairs(context)
         if not pairs:
-            raise ValueError(
-                "Could not identify run pair: "
-                "context['analysis']['collinear_pairs'] is empty"
-            )
+            raise ValueError("Could not identify run pair: context['analysis']['collinear_pairs'] is empty")
 
         run_a_index, run_b_index = pairs[0]
         valid_indices = range(len(ports))
-        if (
-            run_a_index == run_b_index
-            or run_a_index not in valid_indices
-            or run_b_index not in valid_indices
-        ):
+        if run_a_index == run_b_index or run_a_index not in valid_indices or run_b_index not in valid_indices:
             raise ValueError("Run pair contains invalid connected-port indices")
 
-        branch_indices = [
-            index
-            for index in valid_indices
-            if index not in (run_a_index, run_b_index)
-        ]
+        branch_indices = [index for index in valid_indices if index not in (run_a_index, run_b_index)]
         if len(branch_indices) != 1:
             raise ValueError("Could not identify exactly one branch port")
 
@@ -532,20 +517,13 @@ class HVACLibraryAPI:
             seg_end = str(port.get("segment_end", "") or "")
             if not edge_key or seg_end not in ("start", "end"):
                 continue
-            out.append(
-                {
-                    "edge_key": edge_key,
-                    "segment_end": seg_end,
-                    "length": float(length),
-                }
-            )
+            out.append({"edge_key": edge_key, "segment_end": seg_end, "length": float(length)})
         return out
 
     def build_trim_rec_from_context_uniform(context, length_value):
         """Same as build_trim_rec_from_port_lengths, but trims every connected port by the same length_value."""
         ports = list(context.get("connected_ports", []) or [])
         return HVACLibraryAPI.build_trim_rec_from_port_lengths([(p, length_value) for p in ports])
-
 
     # ------------------------------------------------------------------
     # Basic geometry: frames, profiles, solids, booleans, and topology
@@ -617,13 +595,8 @@ class HVACLibraryAPI:
         p2 = c + x - y
         p3 = c + x + y
         p4 = c - x + y
-        
-        return Part.Wire([
-            Part.makeLine(p1, p2),
-            Part.makeLine(p2, p3),
-            Part.makeLine(p3, p4),
-            Part.makeLine(p4, p1),
-        ])
+
+        return Part.Wire([Part.makeLine(p1, p2), Part.makeLine(p2, p3), Part.makeLine(p3, p4), Part.makeLine(p4, p1)])
 
     @staticmethod
     def make_circular_wire(center, normal, diameter):
@@ -648,13 +621,13 @@ class HVACLibraryAPI:
         c = HVACLibraryAPI.vec(center)
         x = HVACLibraryAPI.unit(x_axis)
         y = HVACLibraryAPI.unit(y_axis)
-    
+
         width = float(width or 0.0)
         height = float(height or 0.0)
-    
+
         if width <= 0.0 or height <= 0.0:
             raise ValueError("Oval section requires positive Width and Height")
-    
+
         # A tall oval is a wide one turned 90 degrees: swap the frame so the
         # code below can always build with the major axis along x. Negating
         # the new y keeps the same normal (x cross y), so the wire's winding
@@ -665,36 +638,36 @@ class HVACLibraryAPI:
 
         r = 0.5 * height
         straight = width - height
-    
+
         # Degenerates to a circle when width == height
         if straight <= HVACLibraryAPI.EPS:
             return HVACLibraryAPI.make_circular_wire(c, x.cross(y), height)
-    
+
         half_straight = 0.5 * straight
-    
+
         left_center = c - x * half_straight
         right_center = c + x * half_straight
-    
+
         p_lt = left_center + y * r
         p_lb = left_center - y * r
         p_rt = right_center + y * r
         p_rb = right_center - y * r
-    
+
         # top and bottom straight edges
         e_top = Part.makeLine(p_lt, p_rt)
         e_bottom = Part.makeLine(p_rb, p_lb)
-    
+
         normal = x.cross(y)
         if normal.Length <= HVACLibraryAPI.EPS:
             raise ValueError("Invalid oval frame")
         normal.normalize()
-    
+
         # Left semicircle: top -> bottom
         left_arc = Part.Arc(p_lt, left_center - x * r, p_lb).toShape()
-    
+
         # Right semicircle: bottom -> top
         right_arc = Part.Arc(p_rb, right_center + x * r, p_rt).toShape()
-    
+
         return Part.Wire([e_top, right_arc, e_bottom, left_arc])
 
     @staticmethod
@@ -704,10 +677,8 @@ class HVACLibraryAPI:
         params = dict(section_params or {})
         center = HVACLibraryAPI.vec(center)
         direction = HVACLibraryAPI.unit(direction)
-        _, x_axis, y_axis, _ = HVACLibraryAPI.make_profile_frame(
-            direction, profile_x_axis, center
-        )
-        
+        _, x_axis, y_axis, _ = HVACLibraryAPI.make_profile_frame(direction, profile_x_axis, center)
+
         if profile == "Circular":
             diameter = float(params.get("Diameter", 0.0) or 0.0)
             if diameter <= 0.0:
@@ -720,7 +691,7 @@ class HVACLibraryAPI:
             if width <= 0.0 or height <= 0.0:
                 raise ValueError("Rectangular section requires positive Width and Height")
             return HVACLibraryAPI.make_rectangular_wire(center, x_axis, y_axis, width, height)
-            
+
         if profile == "Oval":
             width = float(params.get("Width", 0.0) or 0.0)
             height = float(params.get("Height", 0.0) or 0.0)
@@ -759,9 +730,9 @@ class HVACLibraryAPI:
         direction = HVACLibraryAPI.port_direction(port)
         preferred_x = HVACLibraryAPI.port_profile_x_axis(port)
         section_params = HVACLibraryAPI.port_section_params(port)
-        
+
         return HVACLibraryAPI.make_section_face(profile, section_params, center, direction, profile_x_axis=preferred_x)
-    
+
     # ------------------------------------------------------------------
     # Straight solids
     # ------------------------------------------------------------------
@@ -769,24 +740,11 @@ class HVACLibraryAPI:
     @staticmethod
     def arc_wire(p1, pm, p2):
         """A single-edge wire, a circular arc through p1 -> pm -> p2."""
-        edge = Part.Arc(
-            HVACLibraryAPI.vec(p1),
-            HVACLibraryAPI.vec(pm),
-            HVACLibraryAPI.vec(p2),
-        ).toShape()
+        edge = Part.Arc(HVACLibraryAPI.vec(p1), HVACLibraryAPI.vec(pm), HVACLibraryAPI.vec(p2)).toShape()
         return Part.Wire([edge])
 
     @classmethod
-    def make_profile(
-        cls,
-        profile_type,
-        params,
-        frame=None,
-        *,
-        center=None,
-        direction=None,
-        profile_x_axis=None,
-    ):
+    def make_profile(cls, profile_type, params, frame=None, *, center=None, direction=None, profile_x_axis=None):
         """Build a closed section wire in a local placement frame.
 
         ``profile_type`` accepts rectangular, circular, oval, rounded-
@@ -827,9 +785,13 @@ class HVACLibraryAPI:
             if r <= _EPS:
                 normalized = {"Width": w, "Height": h}
                 wire = cls.make_section_wire("Rectangular", normalized, center, direction, x_axis)
-                return HVACProfile("RoundedRectangle", {"Width": w, "Height": h, "Radius": 0.0}, center, direction, x_axis, wire)
+                return HVACProfile(
+                    "RoundedRectangle", {"Width": w, "Height": h, "Radius": 0.0}, center, direction, x_axis, wire
+                )
             wire = cls._rounded_rectangle_wire(center, x_axis, y_axis, w, h, r)
-            return HVACProfile("RoundedRectangle", {"Width": w, "Height": h, "Radius": r}, center, direction, x_axis, wire)
+            return HVACProfile(
+                "RoundedRectangle", {"Width": w, "Height": h, "Radius": r}, center, direction, x_axis, wire
+            )
 
         points = params.get("Points", params.get("points"))
         if not points or len(points) < 3:
@@ -892,11 +854,7 @@ class HVACLibraryAPI:
             raise ValueError(f"Unsupported profile offset: {kind}")
 
         return cls.make_profile(
-            kind,
-            p,
-            center=profile.center,
-            direction=profile.direction,
-            profile_x_axis=profile.profile_x_axis,
+            kind, p, center=profile.center, direction=profile.direction, profile_x_axis=profile.profile_x_axis
         )
 
     @staticmethod
@@ -907,7 +865,7 @@ class HVACLibraryAPI:
         if d.Length <= HVACLibraryAPI.EPS:
             raise ValueError("Projection direction must be non-zero")
         d.normalize()
-    
+
         probe = shape.copy()
         rotation = FreeCAD.Rotation(d, FreeCAD.Vector(1.0, 0.0, 0.0))
         probe.transformShape(rotation.toMatrix())
@@ -929,9 +887,7 @@ class HVACLibraryAPI:
 
         # Step 1: Snap the requested split to one local profile axis.
         _, x_axis, y_axis, profile_normal = cls.make_profile_frame(
-            profile.direction,
-            profile.profile_x_axis,
-            profile.center,
+            profile.direction, profile.profile_x_axis, profile.center
         )
         requested = cls.vec(split_direction)
         requested = requested - profile_normal * requested.dot(profile_normal)
@@ -948,9 +904,7 @@ class HVACLibraryAPI:
 
         # Step 2: Convert the ratio directly into a projected cut coordinate.
         normal_min, normal_max = cls.profile_projection_bounds(profile, normal)
-        transverse_min, transverse_max = cls.profile_projection_bounds(
-            profile, transverse
-        )
+        transverse_min, transverse_max = cls.profile_projection_bounds(profile, transverse)
         normal_extent = normal_max - normal_min
         transverse_extent = transverse_max - transverse_min
         if normal_extent <= cls.EPS or transverse_extent <= cls.EPS:
@@ -966,21 +920,9 @@ class HVACLibraryAPI:
         def clipped_face(lower, upper):
             width = upper - lower
             mask_center = cls.vec(profile.center)
-            mask_center += normal * (
-                0.5 * (lower + upper) - mask_center.dot(normal)
-            )
-            mask_center += transverse * (
-                transverse_center - mask_center.dot(transverse)
-            )
-            mask = Part.Face(
-                cls.make_rectangular_wire(
-                    mask_center,
-                    normal,
-                    transverse,
-                    width,
-                    mask_height,
-                )
-            )
+            mask_center += normal * (0.5 * (lower + upper) - mask_center.dot(normal))
+            mask_center += transverse * (transverse_center - mask_center.dot(transverse))
+            mask = Part.Face(cls.make_rectangular_wire(mask_center, normal, transverse, width, mask_height))
             result = source_face.common(mask)
             faces = list(result.Faces)
             if len(faces) != 1 or faces[0].Area <= cls.EPS:
@@ -991,11 +933,10 @@ class HVACLibraryAPI:
         negative = clipped_face(normal_min - margin, cut)
         return positive, negative
 
-
     @staticmethod
     def stretch_profile_one_sided(profile, direction, extension):
         """Stretch a profile along direction while keeping its heel side fixed.
-    
+
         The profile's minimum projection along direction is treated as the heel.
         The opposite side is extended by ``extension``. No assumption is made
         about profile type or geometry.
@@ -1005,15 +946,15 @@ class HVACLibraryAPI:
         if d.Length <= HVACLibraryAPI.EPS:
             raise ValueError("Stretch direction must be non-zero")
         d.normalize()
-    
+
         p_min, p_max = HVACLibraryAPI.profile_projection_bounds(shape, d)
         width = p_max - p_min
         if width <= HVACLibraryAPI.EPS:
             raise ValueError("Profile has zero extent along stretch direction")
-    
+
         factor = (width + float(extension)) / width
         k = factor - 1.0
-    
+
         matrix = FreeCAD.Matrix()
         matrix.A11 = 1.0 + k * d.x * d.x
         matrix.A12 = k * d.x * d.y
@@ -1027,7 +968,7 @@ class HVACLibraryAPI:
         matrix.A14 = -k * p_min * d.x
         matrix.A24 = -k * p_min * d.y
         matrix.A34 = -k * p_min * d.z
-    
+
         return shape.transformGeometry(matrix)
 
     @staticmethod
@@ -1132,12 +1073,7 @@ class HVACLibraryAPI:
         spine = cls._wire(path)
         wires = [cls._wire(profile) for profile in profiles]
         try:
-            shape = spine.makePipeShell(
-                wires,
-                bool(solid),
-                bool(frenet),
-                int(transition),
-            )
+            shape = spine.makePipeShell(wires, bool(solid), bool(frenet), int(transition))
         except Exception as exc:
             raise RuntimeError(f"Sweep failed: {exc}") from exc
         if shape.isNull():
@@ -1212,19 +1148,9 @@ class HVACLibraryAPI:
         """
         bb = shape.BoundBox
         extent = max(
-            bb.DiagonalLength if hasattr(bb, "DiagonalLength") else 0.0,
-            bb.XLength,
-            bb.YLength,
-            bb.ZLength,
-            1.0,
+            bb.DiagonalLength if hasattr(bb, "DiagonalLength") else 0.0, bb.XLength, bb.YLength, bb.ZLength, 1.0
         )
-        shape_center = cls.vec(
-            (
-                (bb.XMin + bb.XMax) / 2.0,
-                (bb.YMin + bb.YMax) / 2.0,
-                (bb.ZMin + bb.ZMax) / 2.0,
-            )
-        )
+        shape_center = cls.vec(((bb.XMin + bb.XMax) / 2.0, (bb.YMin + bb.YMax) / 2.0, (bb.ZMin + bb.ZMax) / 2.0))
         signed_distance = (shape_center - origin).dot(normal)
         plane_center = shape_center - normal * signed_distance
         size = extent * 4.0
@@ -1592,14 +1518,8 @@ class HVACLibraryAPI:
         midpoint = center - bisector * radius
         return {
             "path": HVACLibraryAPI.arc_wire(s0, midpoint, s1),
-            "ports": [
-                HVACLibraryAPI.copy_port(port0, position=s0),
-                HVACLibraryAPI.copy_port(port1, position=s1),
-            ],
-            "trim_lengths": [
-                max(0.0, (s0 - p0).dot(u0)),
-                max(0.0, (s1 - p1).dot(u1)),
-            ],
+            "ports": [HVACLibraryAPI.copy_port(port0, position=s0), HVACLibraryAPI.copy_port(port1, position=s1)],
+            "trim_lengths": [max(0.0, (s0 - p0).dot(u0)), max(0.0, (s1 - p1).dot(u1))],
             "center": center,
         }
 
@@ -1635,9 +1555,7 @@ class HVACLibraryAPI:
         u1 = HVACLibraryAPI.port_direction(port1)
         theta = HVACLibraryAPI.angle_between(u0, u1)
         if abs(theta - math.pi) > 1e-6:
-            raise ValueError(
-                "Offset transition requires opposite parallel port directions"
-            )
+            raise ValueError("Offset transition requires opposite parallel port directions")
         length = float(length)
         if length <= 0.0:
             raise ValueError("Offset transition length must be > 0")
@@ -1676,10 +1594,17 @@ class HVACLibraryAPI:
         # Deflection angle between end straight and diagonal.
         turn_angle = HVACLibraryAPI.angle_between(d, diagonal)
         return {
-            "p0": p0, "p1": p1, "u0": u0, "u1": u1,
-            "d": d, "s0": s0, "s1": s1,
-            "corner0": corner0, "corner1": corner1,
-            "diagonal": diagonal, "turn_angle": turn_angle,
+            "p0": p0,
+            "p1": p1,
+            "u0": u0,
+            "u1": u1,
+            "d": d,
+            "s0": s0,
+            "s1": s1,
+            "corner0": corner0,
+            "corner1": corner1,
+            "diagonal": diagonal,
+            "turn_angle": turn_angle,
         }
 
     @staticmethod
@@ -1716,14 +1641,8 @@ class HVACLibraryAPI:
         if turn_angle <= 1e-6:
             return {
                 "path": Part.Wire([Part.makeLine(s0, s1)]),
-                "ports": [
-                    HVACLibraryAPI.copy_port(port0, position=s0),
-                    HVACLibraryAPI.copy_port(port1, position=s1),
-                ],
-                "trim_lengths": [
-                    max(0.0, (s0 - p0).dot(u0)),
-                    max(0.0, (s1 - p1).dot(u1)),
-                ],
+                "ports": [HVACLibraryAPI.copy_port(port0, position=s0), HVACLibraryAPI.copy_port(port1, position=s1)],
+                "trim_lengths": [max(0.0, (s0 - p0).dot(u0)), max(0.0, (s1 - p1).dot(u1))],
                 "turn_points": [corner0, corner1],
             }
         if turn_angle >= math.pi - 1e-6:
@@ -1738,13 +1657,9 @@ class HVACLibraryAPI:
         tangent_length = radius * math.tan(turn_angle / 2.0)
         end_straight_available = length / 4.0
         if tangent_length >= end_straight_available - eps:
-            raise ValueError(
-                "Radius is too large for the available end straight length"
-            )
+            raise ValueError("Radius is too large for the available end straight length")
         if 2.0 * tangent_length >= diagonal_length - eps:
-            raise ValueError(
-                "Radius is too large for the available diagonal length"
-            )
+            raise ValueError("Radius is too large for the available diagonal length")
         # First bend:
         #
         # s0 ---- a0 )---- a1 ------ diagonal
@@ -1757,16 +1672,13 @@ class HVACLibraryAPI:
         #
         b0 = corner1 - diagonal * tangent_length
         b1 = corner1 + d * tangent_length
+
         # ------------------------------------------------------------------
         # Circular arc helper.
         # ------------------------------------------------------------------
         def make_arc(start, end, tangent_start, tangent_end):
             center = HVACLibraryAPI.arc_center_from_points_tangents_radius(
-                start,
-                end,
-                tangent_start,
-                tangent_end,
-                radius,
+                start, end, tangent_start, tangent_end, radius
             )
             r0 = start - center
             r1 = end - center
@@ -1777,12 +1689,8 @@ class HVACLibraryAPI:
                 raise ValueError("Unable to determine arc midpoint")
             rm.normalize()
             midpoint = center + rm * radius
-            return HVACLibraryAPI.arc_wire(
-                start,
-                midpoint,
-                end,
-            )
-    
+            return HVACLibraryAPI.arc_wire(start, midpoint, end)
+
         arc0 = make_arc(a0, a1, d, diagonal)
         arc1 = make_arc(b0, b1, diagonal, d)
         # ------------------------------------------------------------------
@@ -1792,36 +1700,21 @@ class HVACLibraryAPI:
         if (a0 - s0).Length > eps:
             edges.append(Part.makeLine(s0, a0))
         edges.extend(arc0.Edges)
-    
+
         if (b0 - a1).Length > eps:
             edges.append(Part.makeLine(a1, b0))
         edges.extend(arc1.Edges)
-    
+
         if (s1 - b1).Length > eps:
             edges.append(Part.makeLine(b1, s1))
-    
+
         return {
             "path": Part.Wire(edges),
-            "ports": [
-                HVACLibraryAPI.copy_port(
-                    port0,
-                    position=s0,
-                ),
-                HVACLibraryAPI.copy_port(
-                    port1,
-                    position=s1,
-                ),
-            ],
-            "trim_lengths": [
-                max(0.0, (s0 - p0).dot(u0)),
-                max(0.0, (s1 - p1).dot(u1)),
-            ],
-            "turn_points": [
-                corner0,
-                corner1,
-            ],
+            "ports": [HVACLibraryAPI.copy_port(port0, position=s0), HVACLibraryAPI.copy_port(port1, position=s1)],
+            "trim_lengths": [max(0.0, (s0 - p0).dot(u0)), max(0.0, (s1 - p1).dot(u1))],
+            "turn_points": [corner0, corner1],
         }
-        
+
     @classmethod
     def build_envelopes(cls, envelope_builder, construction_layers, params):
         """
@@ -1893,17 +1786,16 @@ class HVACLibraryAPI:
         envelopes = cls.build_envelopes(envelope_builder, construction_layers, params)
         layer_shapes = cls.envelopes_to_layers(envelopes)
         return {
-            "layers": {
-                layer_def.id: {"shape": shape}
-                for layer_def, shape in zip(construction_layers, layer_shapes)
-            }
+            "layers": {layer_def.id: {"shape": shape} for layer_def, shape in zip(construction_layers, layer_shapes)}
         }
 
     @staticmethod
-    def shape_from_fcstd(fcstd_path, context, params=None, result_object="Result",
-                          port_names=None, tol_mm=0.5, tol_deg=0.5):
+    def shape_from_fcstd(
+        fcstd_path, context, params=None, result_object="Result", port_names=None, tol_mm=0.5, tol_deg=0.5
+    ):
         """Build a shape from an FCStd template file (a parametric sketch-driven model) -- see template_shapes.py."""
         from . import template_shapes
+
         return template_shapes.build_shape_from_template(
             fcstd_path, context, params, result_object, port_names, tol_mm, tol_deg
         )

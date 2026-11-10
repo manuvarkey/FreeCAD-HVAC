@@ -3,21 +3,15 @@ import sys
 import types
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
-
-from freecad.HVAC.library.Library import HVACLibrary, HVACTypeDef, HVACLibraryRegistry
-from freecad.HVAC.library.construction import ConstructionLayerDef, ConstructionFeatureDef
+from freecad.HVAC.library.construction import ConstructionFeatureDef, ConstructionLayerDef
+from freecad.HVAC.library.Library import HVACLibrary, HVACLibraryRegistry, HVACTypeDef
 from freecad.HVAC.library.library_api import HVACLibraryAPI
 from freecad.HVAC.library.loss_api import HVACLossAPI
 
 
 def _type_def(id_, category, family, profiles=None):
     return HVACTypeDef(
-        id=id_,
-        label=id_,
-        category=category,
-        topology="generic",
-        family=family,
-        profiles=list(profiles or []),
+        id=id_, label=id_, category=category, topology="generic", family=family, profiles=list(profiles or [])
     )
 
 
@@ -63,13 +57,17 @@ def test_load_type_def_file_normalizes_string_family_to_list(tmp_path):
     # though HVACTypeDef.family is typed as list[str] -- the loader must
     # normalize this so callers can always safely iterate t.family.
     type_file = tmp_path / "circular_straight.json"
-    type_file.write_text(json.dumps({
-        "id": "circular_straight",
-        "label": "Circular Straight",
-        "category": "segment",
-        "family": "straight_segment",
-        "profiles": ["Circular"],
-    }))
+    type_file.write_text(
+        json.dumps(
+            {
+                "id": "circular_straight",
+                "label": "Circular Straight",
+                "category": "segment",
+                "family": "straight_segment",
+                "profiles": ["Circular"],
+            }
+        )
+    )
 
     reg = HVACLibraryRegistry()
     lib = HVACLibrary(id="lib", label="Lib", root_path=str(tmp_path), generators_package="")
@@ -98,9 +96,7 @@ def test_build_geometry_dispatches_legacy_generator_and_aliases_params_as_proper
     fake_module.build_elbow = build_elbow
     sys.modules["fake_hvac_lib_pkg.junctions"] = fake_module
     try:
-        lib = HVACLibrary(
-            id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg"
-        )
+        lib = HVACLibrary(id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg")
         type_def = HVACTypeDef(
             id="elbow",
             label="Elbow",
@@ -138,9 +134,7 @@ def test_build_geometry_injects_geometry_and_loss_apis():
     fake_module.build = build
     sys.modules["fake_hvac_lib_pkg.context_probe"] = fake_module
     try:
-        lib = HVACLibrary(
-            id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg"
-        )
+        lib = HVACLibrary(id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg")
         type_def = HVACTypeDef(
             id="circular_straight",
             label="Circular Straight",
@@ -175,9 +169,7 @@ def test_call_loss_injects_dedicated_loss_api():
     fake_module.calculate = calculate
     sys.modules["fake_hvac_lib_pkg.loss_probe"] = fake_module
     try:
-        lib = HVACLibrary(
-            id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg"
-        )
+        lib = HVACLibrary(id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg")
         type_def = HVACTypeDef(
             id="through_elbow_generic",
             label="Elbow",
@@ -201,13 +193,17 @@ def test_call_loss_injects_dedicated_loss_api():
 
 def test_load_type_def_file_parses_generator_module_and_function(tmp_path):
     type_file = tmp_path / "elbow.json"
-    type_file.write_text(json.dumps({
-        "id": "elbow",
-        "label": "Elbow",
-        "category": "junction",
-        "family": ["through.elbow"],
-        "generator": {"module": "junctions", "function": "build_elbow"},
-    }))
+    type_file.write_text(
+        json.dumps(
+            {
+                "id": "elbow",
+                "label": "Elbow",
+                "category": "junction",
+                "family": ["through.elbow"],
+                "generator": {"module": "junctions", "function": "build_elbow"},
+            }
+        )
+    )
 
     reg = HVACLibraryRegistry()
     type_def = reg._load_type_def_file(str(type_file))
@@ -218,28 +214,32 @@ def test_load_type_def_file_parses_generator_module_and_function(tmp_path):
 
 def test_load_type_def_file_parses_construction_block(tmp_path):
     type_file = tmp_path / "type.json"
-    type_file.write_text(json.dumps({
-        "id": "circular_straight",
-        "label": "Circular Straight",
-        "category": "segment",
-        "family": ["straight_segment"],
-        "generator": {"module": "segments", "function": "build_circular_straight"},
-        "construction": {
-            "layers": [
-                {
-                    "id": "casing",
-                    "roles": ["flow_surface", "structural_shell"],
-                    "thickness_property": "Thickness",
+    type_file.write_text(
+        json.dumps(
+            {
+                "id": "circular_straight",
+                "label": "Circular Straight",
+                "category": "segment",
+                "family": ["straight_segment"],
+                "generator": {"module": "segments", "function": "build_circular_straight"},
+                "construction": {
+                    "layers": [
+                        {
+                            "id": "casing",
+                            "roles": ["flow_surface", "structural_shell"],
+                            "thickness_property": "Thickness",
+                        },
+                        {
+                            "id": "insulation",
+                            "roles": ["thermal_insulation"],
+                            "default_material_role": "thermal_insulation",
+                            "thickness_property": "InsulationThickness",
+                        },
+                    ]
                 },
-                {
-                    "id": "insulation",
-                    "roles": ["thermal_insulation"],
-                    "default_material_role": "thermal_insulation",
-                    "thickness_property": "InsulationThickness",
-                },
-            ],
-        },
-    }))
+            }
+        )
+    )
 
     reg = HVACLibraryRegistry()
     type_def = reg._load_type_def_file(str(type_file))
@@ -253,27 +253,31 @@ def test_load_type_def_file_parses_construction_block(tmp_path):
 
 def test_load_type_def_file_parses_features_block(tmp_path):
     type_file = tmp_path / "type.json"
-    type_file.write_text(json.dumps({
-        "id": "circular_straight",
-        "label": "Circular Straight",
-        "category": "segment",
-        "family": ["straight_segment"],
-        "generator": {"module": "segments", "function": "build_circular_straight"},
-        "construction": {
-            "layers": [{"id": "casing", "roles": ["flow_surface", "structural_shell"]}],
-            "features": [
-                {
-                    "id": "transverse_flange",
-                    "role": "transverse_joint",
-                    "host_layer": "casing",
-                    "generator": "generate_transverse_flange",
-                    "enabled_parameter": "FlangeEnabled",
-                    "visible_parameter": "FlangeVisible",
-                    "parameters": ["FlangeDepth", "FlangeThickness"],
+    type_file.write_text(
+        json.dumps(
+            {
+                "id": "circular_straight",
+                "label": "Circular Straight",
+                "category": "segment",
+                "family": ["straight_segment"],
+                "generator": {"module": "segments", "function": "build_circular_straight"},
+                "construction": {
+                    "layers": [{"id": "casing", "roles": ["flow_surface", "structural_shell"]}],
+                    "features": [
+                        {
+                            "id": "transverse_flange",
+                            "role": "transverse_joint",
+                            "host_layer": "casing",
+                            "generator": "generate_transverse_flange",
+                            "enabled_parameter": "FlangeEnabled",
+                            "visible_parameter": "FlangeVisible",
+                            "parameters": ["FlangeDepth", "FlangeThickness"],
+                        }
+                    ],
                 },
-            ],
-        },
-    }))
+            }
+        )
+    )
 
     reg = HVACLibraryRegistry()
     type_def = reg._load_type_def_file(str(type_file))
@@ -292,24 +296,28 @@ def test_load_type_def_file_parses_features_block(tmp_path):
 
 def test_load_type_def_file_parses_features_module_override(tmp_path):
     type_file = tmp_path / "type.json"
-    type_file.write_text(json.dumps({
-        "id": "circular_straight",
-        "label": "Circular Straight",
-        "category": "segment",
-        "family": ["straight_segment"],
-        "generator": {"module": "segments", "function": "build_circular_straight"},
-        "construction": {
-            "layers": [{"id": "casing", "roles": ["flow_surface"]}],
-            "features": [
-                {
-                    "id": "transverse_flange",
-                    "host_layer": "casing",
-                    "module": "custom_features",
-                    "generator": "generate_transverse_flange",
+    type_file.write_text(
+        json.dumps(
+            {
+                "id": "circular_straight",
+                "label": "Circular Straight",
+                "category": "segment",
+                "family": ["straight_segment"],
+                "generator": {"module": "segments", "function": "build_circular_straight"},
+                "construction": {
+                    "layers": [{"id": "casing", "roles": ["flow_surface"]}],
+                    "features": [
+                        {
+                            "id": "transverse_flange",
+                            "host_layer": "casing",
+                            "module": "custom_features",
+                            "generator": "generate_transverse_flange",
+                        }
+                    ],
                 },
-            ],
-        },
-    }))
+            }
+        )
+    )
 
     reg = HVACLibraryRegistry()
     type_def = reg._load_type_def_file(str(type_file))
@@ -319,19 +327,21 @@ def test_load_type_def_file_parses_features_module_override(tmp_path):
 
 def test_load_type_def_file_features_default_to_optional_fields_unset(tmp_path):
     type_file = tmp_path / "type.json"
-    type_file.write_text(json.dumps({
-        "id": "circular_straight",
-        "label": "Circular Straight",
-        "category": "segment",
-        "family": ["straight_segment"],
-        "generator": {"module": "segments", "function": "build_circular_straight"},
-        "construction": {
-            "layers": [{"id": "casing", "roles": ["flow_surface"]}],
-            "features": [
-                {"id": "stiffener", "host_layer": "casing", "generator": "generate_stiffener"},
-            ],
-        },
-    }))
+    type_file.write_text(
+        json.dumps(
+            {
+                "id": "circular_straight",
+                "label": "Circular Straight",
+                "category": "segment",
+                "family": ["straight_segment"],
+                "generator": {"module": "segments", "function": "build_circular_straight"},
+                "construction": {
+                    "layers": [{"id": "casing", "roles": ["flow_surface"]}],
+                    "features": [{"id": "stiffener", "host_layer": "casing", "generator": "generate_stiffener"}],
+                },
+            }
+        )
+    )
 
     reg = HVACLibraryRegistry()
     type_def = reg._load_type_def_file(str(type_file))
@@ -346,13 +356,17 @@ def test_load_type_def_file_features_default_to_optional_fields_unset(tmp_path):
 
 def test_load_type_def_file_defaults_construction_to_empty_list(tmp_path):
     type_file = tmp_path / "type.json"
-    type_file.write_text(json.dumps({
-        "id": "circular_straight",
-        "label": "Circular Straight",
-        "category": "segment",
-        "family": ["straight_segment"],
-        "generator": {"module": "segments", "function": "build_circular_straight"},
-    }))
+    type_file.write_text(
+        json.dumps(
+            {
+                "id": "circular_straight",
+                "label": "Circular Straight",
+                "category": "segment",
+                "family": ["straight_segment"],
+                "generator": {"module": "segments", "function": "build_circular_straight"},
+            }
+        )
+    )
 
     reg = HVACLibraryRegistry()
     type_def = reg._load_type_def_file(str(type_file))
@@ -365,10 +379,15 @@ def test_load_type_def_file_defaults_construction_to_empty_list(tmp_path):
 # resolve_loss_variant / validation.unknown_flow_constraint_keys)
 # ----------------------------------------------------------------------
 
+
 def _junction_type_json(id_="branch_tee_generic", loss=None, constraints=None):
     return {
-        "id": id_, "label": id_, "category": "junction", "topology": "branch",
-        "family": ["branch.tee"], "profiles": ["Circular"],
+        "id": id_,
+        "label": id_,
+        "category": "junction",
+        "topology": "branch",
+        "family": ["branch.tee"],
+        "profiles": ["Circular"],
         "constraints": dict(constraints or {"degree": 3}),
         "loss": dict(loss or {}),
     }
@@ -376,9 +395,9 @@ def _junction_type_json(id_="branch_tee_generic", loss=None, constraints=None):
 
 def test_load_type_def_file_legacy_loss_schema_has_no_variants(tmp_path):
     type_file = tmp_path / "type.json"
-    type_file.write_text(json.dumps(_junction_type_json(
-        loss={"module": "junction_losses", "function": "loss_tee_generic"},
-    )))
+    type_file.write_text(
+        json.dumps(_junction_type_json(loss={"module": "junction_losses", "function": "loss_tee_generic"}))
+    )
 
     reg = HVACLibraryRegistry()
     type_def = reg._load_type_def_file(str(type_file))
@@ -390,25 +409,31 @@ def test_load_type_def_file_legacy_loss_schema_has_no_variants(tmp_path):
 
 def test_load_type_def_file_parses_loss_variants(tmp_path):
     type_file = tmp_path / "type.json"
-    type_file.write_text(json.dumps(_junction_type_json(loss={
-        "module": "junction_losses",
-        "function": "loss_tee_generic",
-        "variants": [
-            {
-                "constraints": {
-                    "flow_class": {"enum": ["diverging"]},
-                    "qualifiers": {"common_leg": {"enum": ["run"]}},
-                },
-                "module": "junction_losses",
-                "function": "loss_branch_diverging_run",
-            },
-            {
-                "constraints": {"flow_class": {"enum": ["converging"]}},
-                "module": "junction_losses",
-                "function": "loss_branch_converging_run",
-            },
-        ],
-    })))
+    type_file.write_text(
+        json.dumps(
+            _junction_type_json(
+                loss={
+                    "module": "junction_losses",
+                    "function": "loss_tee_generic",
+                    "variants": [
+                        {
+                            "constraints": {
+                                "flow_class": {"enum": ["diverging"]},
+                                "qualifiers": {"common_leg": {"enum": ["run"]}},
+                            },
+                            "module": "junction_losses",
+                            "function": "loss_branch_diverging_run",
+                        },
+                        {
+                            "constraints": {"flow_class": {"enum": ["converging"]}},
+                            "module": "junction_losses",
+                            "function": "loss_branch_converging_run",
+                        },
+                    ],
+                }
+            )
+        )
+    )
 
     reg = HVACLibraryRegistry()
     type_def = reg._load_type_def_file(str(type_file))
@@ -424,10 +449,17 @@ def test_load_type_def_file_parses_loss_variants(tmp_path):
 
 def test_load_type_def_file_loss_variant_missing_function_raises(tmp_path):
     type_file = tmp_path / "type.json"
-    type_file.write_text(json.dumps(_junction_type_json(loss={
-        "module": "junction_losses", "function": "loss_tee_generic",
-        "variants": [{"constraints": {"flow_class": {"enum": ["diverging"]}}, "module": "junction_losses"}],
-    })))
+    type_file.write_text(
+        json.dumps(
+            _junction_type_json(
+                loss={
+                    "module": "junction_losses",
+                    "function": "loss_tee_generic",
+                    "variants": [{"constraints": {"flow_class": {"enum": ["diverging"]}}, "module": "junction_losses"}],
+                }
+            )
+        )
+    )
 
     reg = HVACLibraryRegistry()
     try:
@@ -440,9 +472,9 @@ def test_load_type_def_file_loss_variant_missing_function_raises(tmp_path):
 
 def test_load_type_def_file_unknown_qualifier_key_raises(tmp_path):
     type_file = tmp_path / "type.json"
-    type_file.write_text(json.dumps(_junction_type_json(
-        constraints={"degree": 3, "qualifiers": {"alginment": {"enum": ["eccentric"]}}},
-    )))
+    type_file.write_text(
+        json.dumps(_junction_type_json(constraints={"degree": 3, "qualifiers": {"alginment": {"enum": ["eccentric"]}}}))
+    )
 
     reg = HVACLibraryRegistry()
     try:
@@ -455,9 +487,7 @@ def test_load_type_def_file_unknown_qualifier_key_raises(tmp_path):
 
 def test_load_type_def_file_unknown_top_level_constraint_key_raises(tmp_path):
     type_file = tmp_path / "type.json"
-    type_file.write_text(json.dumps(_junction_type_json(
-        constraints={"degree": 3, "aera_ratio": {"minimum": 1.0}},
-    )))
+    type_file.write_text(json.dumps(_junction_type_json(constraints={"degree": 3, "aera_ratio": {"minimum": 1.0}})))
 
     reg = HVACLibraryRegistry()
     try:
@@ -470,13 +500,23 @@ def test_load_type_def_file_unknown_top_level_constraint_key_raises(tmp_path):
 
 def test_load_type_def_file_unknown_key_in_loss_variant_constraints_raises(tmp_path):
     type_file = tmp_path / "type.json"
-    type_file.write_text(json.dumps(_junction_type_json(loss={
-        "module": "junction_losses", "function": "loss_tee_generic",
-        "variants": [{
-            "constraints": {"qualifiers": {"comon_leg": {"enum": ["run"]}}},
-            "module": "junction_losses", "function": "loss_branch_diverging_run",
-        }],
-    })))
+    type_file.write_text(
+        json.dumps(
+            _junction_type_json(
+                loss={
+                    "module": "junction_losses",
+                    "function": "loss_tee_generic",
+                    "variants": [
+                        {
+                            "constraints": {"qualifiers": {"comon_leg": {"enum": ["run"]}}},
+                            "module": "junction_losses",
+                            "function": "loss_branch_diverging_run",
+                        }
+                    ],
+                }
+            )
+        )
+    )
 
     reg = HVACLibraryRegistry()
     try:
@@ -489,15 +529,19 @@ def test_load_type_def_file_unknown_key_in_loss_variant_constraints_raises(tmp_p
 
 def test_load_type_def_file_known_flow_constraint_keys_load_cleanly(tmp_path):
     type_file = tmp_path / "type.json"
-    type_file.write_text(json.dumps(_junction_type_json(
-        constraints={
-            "degree": 3,
-            "flow_class": {"enum": ["diverging"]},
-            "profile_relation": {"enum": ["same"]},
-            "qualifiers": {"common_leg": {"enum": ["run"]}, "transition_form": {"enum": ["pyramidal"]}},
-            "area_ratio": {"minimum": 1.0, "maximum": 4.0},
-        },
-    )))
+    type_file.write_text(
+        json.dumps(
+            _junction_type_json(
+                constraints={
+                    "degree": 3,
+                    "flow_class": {"enum": ["diverging"]},
+                    "profile_relation": {"enum": ["same"]},
+                    "qualifiers": {"common_leg": {"enum": ["run"]}, "transition_form": {"enum": ["pyramidal"]}},
+                    "area_ratio": {"minimum": 1.0, "maximum": 4.0},
+                }
+            )
+        )
+    )
 
     reg = HVACLibraryRegistry()
     type_def = reg._load_type_def_file(str(type_file))  # must not raise
@@ -513,9 +557,7 @@ def test_build_geometry_stamps_layer_roles_from_construction_defs():
     fake_module.build = build
     sys.modules["fake_hvac_lib_pkg.segments"] = fake_module
     try:
-        lib = HVACLibrary(
-            id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg"
-        )
+        lib = HVACLibrary(id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg")
         type_def = HVACTypeDef(
             id="circular_straight",
             label="Circular Straight",
@@ -545,6 +587,7 @@ def test_build_geometry_stamps_layer_roles_from_construction_defs():
 # ----------------------------------------------------------------------
 # build_geometry() -- construction features
 # ----------------------------------------------------------------------
+
 
 def _register_fake_type(construction=None, features=None, extra_params=None):
     """
@@ -588,23 +631,26 @@ def test_build_geometry_invokes_an_enabled_features_own_generator_with_filtered_
     features_module.generate_transverse_flange = generate_transverse_flange
     sys.modules["fake_hvac_lib_pkg.features"] = features_module
     try:
-        reg, type_def = _register_fake_type(features=[
-            ConstructionFeatureDef(
-                id="transverse_flange",
-                role="transverse_joint",
-                host_layer="casing",
-                generator="generate_transverse_flange",
-                parameters=["FlangeDepth", "FlangeThickness"],
-            ),
-        ])
+        reg, type_def = _register_fake_type(
+            features=[
+                ConstructionFeatureDef(
+                    id="transverse_flange",
+                    role="transverse_joint",
+                    host_layer="casing",
+                    generator="generate_transverse_flange",
+                    parameters=["FlangeDepth", "FlangeThickness"],
+                )
+            ]
+        )
 
-        result = reg.build_geometry("lib", type_def, {
-            "params": {"FlangeDepth": 25.0, "FlangeThickness": 1.0, "SomethingElse": 999},
-        })
+        result = reg.build_geometry(
+            "lib", type_def, {"params": {"FlangeDepth": 25.0, "FlangeThickness": 1.0, "SomethingElse": 999}}
+        )
 
         assert len(calls) == 1
         api_arg, ctx = calls[0]
         from freecad.HVAC.library.library_api import HVACLibraryAPI
+
         assert api_arg is HVACLibraryAPI
         # Only the feature's own declared parameters -- never the type's
         # full property set (e.g. "SomethingElse" must not leak through).
@@ -630,14 +676,16 @@ def test_build_geometry_skips_a_disabled_feature_entirely():
     features_module.generate_transverse_flange = generate_transverse_flange
     sys.modules["fake_hvac_lib_pkg.features"] = features_module
     try:
-        reg, type_def = _register_fake_type(features=[
-            ConstructionFeatureDef(
-                id="transverse_flange",
-                host_layer="casing",
-                generator="generate_transverse_flange",
-                enabled_parameter="FlangeEnabled",
-            ),
-        ])
+        reg, type_def = _register_fake_type(
+            features=[
+                ConstructionFeatureDef(
+                    id="transverse_flange",
+                    host_layer="casing",
+                    generator="generate_transverse_flange",
+                    enabled_parameter="FlangeEnabled",
+                )
+            ]
+        )
 
         result = reg.build_geometry("lib", type_def, {"params": {"FlangeEnabled": False}})
 
@@ -653,14 +701,16 @@ def test_build_geometry_stamps_visible_false_from_visible_parameter():
     features_module.generate_transverse_flange = lambda api, ctx: "FLANGE_SHAPE"
     sys.modules["fake_hvac_lib_pkg.features"] = features_module
     try:
-        reg, type_def = _register_fake_type(features=[
-            ConstructionFeatureDef(
-                id="transverse_flange",
-                host_layer="casing",
-                generator="generate_transverse_flange",
-                visible_parameter="FlangeVisible",
-            ),
-        ])
+        reg, type_def = _register_fake_type(
+            features=[
+                ConstructionFeatureDef(
+                    id="transverse_flange",
+                    host_layer="casing",
+                    generator="generate_transverse_flange",
+                    visible_parameter="FlangeVisible",
+                )
+            ]
+        )
 
         result = reg.build_geometry("lib", type_def, {"params": {"FlangeVisible": False}})
 
@@ -678,13 +728,13 @@ def test_build_geometry_raises_for_a_feature_referencing_an_unbuilt_host_layer()
     features_module.generate_transverse_flange = lambda api, ctx: "FLANGE_SHAPE"
     sys.modules["fake_hvac_lib_pkg.features"] = features_module
     try:
-        reg, type_def = _register_fake_type(features=[
-            ConstructionFeatureDef(
-                id="transverse_flange",
-                host_layer="does_not_exist",
-                generator="generate_transverse_flange",
-            ),
-        ])
+        reg, type_def = _register_fake_type(
+            features=[
+                ConstructionFeatureDef(
+                    id="transverse_flange", host_layer="does_not_exist", generator="generate_transverse_flange"
+                )
+            ]
+        )
 
         try:
             reg.build_geometry("lib", type_def, {"params": {}})
@@ -708,14 +758,13 @@ def test_build_geometry_resolves_a_feature_from_its_own_declared_module():
     custom_module.generate_stiffener = generate_stiffener
     sys.modules["fake_hvac_lib_pkg.custom_features"] = custom_module
     try:
-        reg, type_def = _register_fake_type(features=[
-            ConstructionFeatureDef(
-                id="stiffener",
-                host_layer="casing",
-                module="custom_features",
-                generator="generate_stiffener",
-            ),
-        ])
+        reg, type_def = _register_fake_type(
+            features=[
+                ConstructionFeatureDef(
+                    id="stiffener", host_layer="casing", module="custom_features", generator="generate_stiffener"
+                )
+            ]
+        )
 
         result = reg.build_geometry("lib", type_def, {"params": {}})
 
@@ -742,19 +791,16 @@ def test_build_geometry_resolves_each_feature_from_its_own_module_independently(
     custom_module.generate_stiffener = lambda api, ctx: custom_calls.append(ctx) or "STIFFENER_SHAPE"
     sys.modules["fake_hvac_lib_pkg.custom_features"] = custom_module
     try:
-        reg, type_def = _register_fake_type(features=[
-            ConstructionFeatureDef(
-                id="transverse_flange",
-                host_layer="casing",
-                generator="generate_transverse_flange",
-            ),
-            ConstructionFeatureDef(
-                id="stiffener",
-                host_layer="casing",
-                module="custom_features",
-                generator="generate_stiffener",
-            ),
-        ])
+        reg, type_def = _register_fake_type(
+            features=[
+                ConstructionFeatureDef(
+                    id="transverse_flange", host_layer="casing", generator="generate_transverse_flange"
+                ),
+                ConstructionFeatureDef(
+                    id="stiffener", host_layer="casing", module="custom_features", generator="generate_stiffener"
+                ),
+            ]
+        )
 
         result = reg.build_geometry("lib", type_def, {"params": {}})
 
@@ -783,9 +829,7 @@ def test_build_geometry_leaves_roles_empty_for_layers_with_no_matching_construct
     fake_module.build = build
     sys.modules["fake_hvac_lib_pkg.segments_unmigrated"] = fake_module
     try:
-        lib = HVACLibrary(
-            id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg"
-        )
+        lib = HVACLibrary(id="lib", label="Lib", root_path="", generators_package="fake_hvac_lib_pkg")
         type_def = HVACTypeDef(
             id="rectangular_straight",
             label="Rectangular Straight",

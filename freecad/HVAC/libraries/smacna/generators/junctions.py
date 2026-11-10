@@ -134,7 +134,9 @@ def build_diffuser_generic(context):
     p = _props(context)
     port = ports[0]
     length = _positive(p.get("Length"), 0.35 * _size(api, port))
-    return {"shape": api.refine(api.extrude(api.profile_from_port(port), api.port_direction(port) * length, solid=True))}
+    return {
+        "shape": api.refine(api.extrude(api.profile_from_port(port), api.port_direction(port) * length, solid=True))
+    }
 
 
 def build_duct_closure_generic(context):
@@ -276,11 +278,7 @@ def _star_layered(context, factor, align_branch=False):
             center_port = api.copy_port(end, position=inner_position, direction=api.port_direction(end) * -1.0)
             leg = _loft(api, [end, center_port], offset, ruled=True)
             if port is branch:
-                leg = api.clip_plane(
-                    leg,
-                    (center, api.port_direction(branch)),
-                    side="positive",
-                )
+                leg = api.clip_plane(leg, (center, api.port_direction(branch)), side="positive")
             legs.append(leg)
         return api.fuse(*legs)
 
@@ -315,7 +313,9 @@ def build_through_generic(context):
         dot = max(-1.0, min(1.0, float(u0.dot(u1))))
         if dot > -0.985:
             return build_elbow(context)
-        if api.port_profile(ports[0]) != api.port_profile(ports[1]) or api.port_section_params(ports[0]) != api.port_section_params(ports[1]):
+        if api.port_profile(ports[0]) != api.port_profile(ports[1]) or api.port_section_params(
+            ports[0]
+        ) != api.port_section_params(ports[1]):
             return build_transition(context)
         return _inline(context, 0.35, 80.0)
     return _marker(context, 160.0)
