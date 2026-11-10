@@ -2,10 +2,10 @@ import pytest
 
 from freecad.HVAC.library import smacna_loss as sl
 
-
 # ----------------------------------------------------------------------------
 # Interpolation helpers
 # ----------------------------------------------------------------------------
+
 
 def test_interp1d_exact_grid_point():
     assert sl._interp1d(1.0, [0.5, 1.0, 1.5], [10.0, 20.0, 30.0]) == pytest.approx(20.0)
@@ -37,6 +37,7 @@ def test_interp2d_handles_descending_y_axis():
 # Elbows
 # ----------------------------------------------------------------------------
 
+
 def test_elbow_zeta_round_exact_grid_points():
     assert sl.elbow_zeta_round(0.5) == pytest.approx(0.71)
     assert sl.elbow_zeta_round(1.0) == pytest.approx(0.22)
@@ -45,7 +46,7 @@ def test_elbow_zeta_round_exact_grid_points():
 
 def test_elbow_zeta_round_interpolates_and_clamps():
     assert sl.elbow_zeta_round(0.625) == pytest.approx((0.71 + 0.33) / 2.0)
-    assert sl.elbow_zeta_round(0.1) == pytest.approx(0.71)   # clamped below range
+    assert sl.elbow_zeta_round(0.1) == pytest.approx(0.71)  # clamped below range
     assert sl.elbow_zeta_round(10.0) == pytest.approx(0.12)  # clamped above range
 
 
@@ -66,10 +67,11 @@ def test_elbow_zeta_rect_reynolds_correction_reduces_at_low_reynolds():
 # Transitions
 # ----------------------------------------------------------------------------
 
+
 def test_expansion_zeta_round_exact_grid_point_mid_reynolds():
     # theta=90 (index 5), area_ratio=4 (index 1) -> mid-Re table value 0.59, referenced to small duct.
     zeta_small_equivalent = 0.59
-    expected_large = zeta_small_equivalent * (4.0 ** 2)
+    expected_large = zeta_small_equivalent * (4.0**2)
     got = sl.expansion_zeta_round(theta_deg=90.0, area_ratio=4.0, reynolds=3e5)
     assert got == pytest.approx(expected_large)
 
@@ -83,7 +85,7 @@ def test_expansion_zeta_round_picks_reynolds_bucket():
 
 def test_expansion_zeta_rect_exact_grid_point():
     # theta=90 (index5), area_ratio=4(index1) -> 0.63, referenced to small duct.
-    expected_large = 0.63 * (4.0 ** 2)
+    expected_large = 0.63 * (4.0**2)
     got = sl.expansion_zeta_rect(theta_deg=90.0, area_ratio=4.0)
     assert got == pytest.approx(expected_large)
 
@@ -97,6 +99,7 @@ def test_contraction_zeta_exact_grid_point():
 # ----------------------------------------------------------------------------
 # Branch fittings
 # ----------------------------------------------------------------------------
+
 
 def test_diverging_branch_tee90_exact_grid_point():
     # Table 14-14 A (90 deg) is keyed by Ab/Ac and the FLOW ratio Qb/Qc.
@@ -114,10 +117,8 @@ def test_diverging_branch_lookup_uses_flow_ratio_not_velocity_ratio():
 
 def test_diverging_branch_tee90_straight_leg_exact_grid_point():
     # vs_on_vc=0.4 (index4 of [0,0.1,...,1.0]) -> raw zeta_c=0.13
-    _, zeta_straight = sl.diverging_branch_zetas(
-        angle_deg=90.0, ab_on_ac=0.5, vb_on_vc=0.5, vs_on_vc=0.4
-    )
-    assert zeta_straight == pytest.approx(0.13 / (0.4 ** 2))
+    _, zeta_straight = sl.diverging_branch_zetas(angle_deg=90.0, ab_on_ac=0.5, vb_on_vc=0.5, vs_on_vc=0.4)
+    assert zeta_straight == pytest.approx(0.13 / (0.4**2))
 
 
 def test_diverging_branch_selects_wye_vs_tee_table():
@@ -154,6 +155,7 @@ def test_converging_branch_wye_vs_tee_differ():
 # ----------------------------------------------------------------------------
 # Corrections and notes checked against the printed tables
 # ----------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("theta, factor", [(0.0, 0.0), (45.0, 0.60), (90.0, 1.0), (180.0, 1.40), (37.5, 0.525)])
 def test_elbow_angle_factor_note_1(theta, factor):

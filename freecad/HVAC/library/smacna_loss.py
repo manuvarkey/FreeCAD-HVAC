@@ -66,6 +66,7 @@ literal SMACNA rectangular-fitting lookup.
 # Interpolation helpers
 # ----------------------------------------------------------------------------
 
+
 def _interp1d(x, xs, ys):
     """Linear interpolation, clamped to the table's range. Handles xs given in either order."""
     pairs = sorted(zip(xs, ys))
@@ -152,7 +153,7 @@ _ELBOW_RECT_ZETA = [
 ]
 
 _RE_ELBOW_CORR_RE = [1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 14.0, 20.0]  # in units of 1e4
-_RE_ELBOW_CORR_K_LOW = [1.40, 1.26, 1.19, 1.14, 1.09, 1.06, 1.04, 1.0, 1.0]   # R/W <= 0.5
+_RE_ELBOW_CORR_K_LOW = [1.40, 1.26, 1.19, 1.14, 1.09, 1.06, 1.04, 1.0, 1.0]  # R/W <= 0.5
 _RE_ELBOW_CORR_K_HIGH = [2.0, 1.77, 1.64, 1.56, 1.46, 1.38, 1.30, 1.15, 1.0]  # R/W >= 0.75
 
 
@@ -261,7 +262,7 @@ def expansion_zeta_round(theta_deg, area_ratio, reynolds):
     else:
         table = _EXP_ROUND_ZETA_RE_HIGH
     zeta_small = _interp2d(theta_deg, area_ratio, _EXP_ROUND_THETA, _EXP_ROUND_AREA_RATIO, table)
-    return zeta_small * (area_ratio ** 2)
+    return zeta_small * (area_ratio**2)
 
 
 _EXP_RECT_THETA = [16.0, 20.0, 30.0, 45.0, 60.0, 90.0, 120.0, 180.0]
@@ -281,7 +282,7 @@ def expansion_zeta_rect(theta_deg, area_ratio):
     area_ratio = larger_area / smaller_area (>= 1). SMACNA A8B.
     """
     zeta_small = _interp2d(theta_deg, area_ratio, _EXP_RECT_THETA, _EXP_RECT_AREA_RATIO, _EXP_RECT_ZETA)
-    return zeta_small * (area_ratio ** 2)
+    return zeta_small * (area_ratio**2)
 
 
 _CONTRACTION_THETA = [10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 60.0, 90.0, 120.0, 150.0, 180.0]
@@ -382,8 +383,8 @@ def converging_branch_zetas(angle_deg, ab_on_ac, vb_on_vc, vs_on_vc):
         zeta_b_raw = _interp2d(ab_on_ac, qb_on_qc, _CONV_TEE90_AB_ON_AC, _CONV_TEE90_QB_ON_QC, _CONV_TEE90_ZETA_B)
         zeta_c_raw = _interp1d(qb_on_qc, _CONV_TEE90_QB_ON_QC, _CONV_TEE90_ZETA_C)
 
-    zeta_branch = zeta_b_raw / (vb_on_vc ** 2) if vb_on_vc > 0 else zeta_b_raw
-    zeta_straight = zeta_c_raw / (vs_on_vc ** 2) if vs_on_vc > 0 else zeta_c_raw
+    zeta_branch = zeta_b_raw / (vb_on_vc**2) if vb_on_vc > 0 else zeta_b_raw
+    zeta_straight = zeta_c_raw / (vs_on_vc**2) if vs_on_vc > 0 else zeta_c_raw
     return zeta_branch, zeta_straight
 
 
@@ -439,6 +440,6 @@ def diverging_branch_zetas(angle_deg, ab_on_ac, vb_on_vc, vs_on_vc):
     zeta_b_raw = _interp2d(qb_on_qc, ab_on_ac, _DIV_QB_ON_QC, _DIV_AB_ON_AC, table)
     zeta_c_raw = _interp1d(vs_on_vc, _DIV_VS_ON_VC, _DIV_ZETA_C)
 
-    zeta_branch = zeta_b_raw / (vb_on_vc ** 2) if vb_on_vc > 0 else zeta_b_raw
-    zeta_straight = zeta_c_raw / (vs_on_vc ** 2) if vs_on_vc > 0 else zeta_c_raw
+    zeta_branch = zeta_b_raw / (vb_on_vc**2) if vb_on_vc > 0 else zeta_b_raw
+    zeta_straight = zeta_c_raw / (vs_on_vc**2) if vs_on_vc > 0 else zeta_c_raw
     return zeta_branch, zeta_straight

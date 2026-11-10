@@ -3,15 +3,24 @@ import math
 import pytest
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs (incl. FakeVector)
-
 from freecad.HVAC.analysis import physics as airflow
 from freecad.HVAC.library import smacna_loss
 from freecad.HVAC.library.library_api import HVACLibraryAPI as geometry_api
 from freecad.HVAC.library.loss_api import HVACLossAPI as api
 
 
-def _port(edge_key, direction, flow_into_junction, profile="Circular", diameter=None,
-          width=None, height=None, velocity_ms=0.0, reynolds=0.0, flow_rate_lps=0.0):
+def _port(
+    edge_key,
+    direction,
+    flow_into_junction,
+    profile="Circular",
+    diameter=None,
+    width=None,
+    height=None,
+    velocity_ms=0.0,
+    reynolds=0.0,
+    flow_rate_lps=0.0,
+):
     section_params = {}
     if diameter is not None:
         section_params["Diameter"] = diameter
@@ -46,6 +55,7 @@ def _path_for(evaluation, edge_key):
 # port_area
 # ----------------------------------------------------------------------------
 
+
 def test_port_area_circular():
     port = _port("A", (1, 0, 0), False, profile="Circular", diameter=200.0)
     expected = airflow.circular_area(airflow.mm_to_m(200.0))
@@ -66,6 +76,7 @@ def test_port_area_missing_dimensions_is_zero():
 # ----------------------------------------------------------------------------
 # elbow_loss
 # ----------------------------------------------------------------------------
+
 
 def test_elbow_loss_round():
     inlet = _port("IN", (-1, 0, 0), True, profile="Circular", diameter=200.0)
@@ -96,8 +107,7 @@ def test_elbow_loss_scales_with_turn_angle():
 
 def test_elbow_loss_rectangular():
     inlet = _port("IN", (-1, 0, 0), True, profile="Rectangular", width=200.0, height=200.0)
-    outlet = _port("OUT", (0, 1, 0), False, profile="Rectangular", width=200.0, height=200.0,
-                    reynolds=1e6)
+    outlet = _port("OUT", (0, 1, 0), False, profile="Rectangular", width=200.0, height=200.0, reynolds=1e6)
     context = {
         "connected_ports": [inlet, outlet],
         "properties": {"CenterlineRadius": 200.0},  # r_on_w = h_on_w = 1.0
@@ -129,13 +139,11 @@ def test_elbow_loss_wrong_port_count_returns_unsupported():
 # transition_loss
 # ----------------------------------------------------------------------------
 
+
 def test_transition_loss_expansion_round():
     inlet = _port("IN", (-1, 0, 0), True, profile="Circular", diameter=200.0, reynolds=3e5)
     outlet = _port("OUT", (1, 0, 0), False, profile="Circular", diameter=400.0)
-    context = {
-        "connected_ports": [inlet, outlet],
-        "properties": {"TransitionLength": 1000.0},
-    }
+    context = {"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 1000.0}}
     result = api.transition_loss(context)
 
     area_in = airflow.circular_area(airflow.mm_to_m(200.0))
@@ -156,10 +164,7 @@ def test_transition_loss_expansion_round():
 def test_transition_loss_contraction_uses_outlet_reference():
     inlet = _port("IN", (-1, 0, 0), True, profile="Circular", diameter=400.0)
     outlet = _port("OUT", (1, 0, 0), False, profile="Circular", diameter=200.0)
-    context = {
-        "connected_ports": [inlet, outlet],
-        "properties": {"TransitionLength": 1000.0},
-    }
+    context = {"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 1000.0}}
     result = api.transition_loss(context)
 
     area_in = airflow.circular_area(airflow.mm_to_m(400.0))
@@ -209,6 +214,7 @@ def test_transition_loss_oval_profile_returns_unsupported_not_a_rectangular_gues
 # ----------------------------------------------------------------------------
 # branch_loss
 # ----------------------------------------------------------------------------
+
 
 def test_branch_loss_diverging_tee90_identifies_branch_and_straight():
     # Inlet (common/primary) points backward (-x); straight outlet continues
@@ -303,6 +309,7 @@ def test_branch_loss_ambiguous_flow_pattern_returns_unsupported():
 # NetworkParser.classify_flow / TOPOLOGY_CLASSIFICATION.md)
 # ----------------------------------------------------------------------------
 
+
 def test_branch_loss_bullhead_diverging_covers_both_run_legs():
     # Single inlet on the geometric branch leg (-x), splitting into two
     # collinear run legs (+y/-y) -- a bullhead dividing tee.
@@ -321,10 +328,7 @@ def test_branch_loss_bullhead_diverging_covers_both_run_legs():
         return zeta
 
     assert result.status == api.APPROXIMATION
-    assert _paths_by_edge(result) == pytest.approx({
-        "RUN_A": _expected(3.0, 200.0),
-        "RUN_B": _expected(2.0, 250.0),
-    })
+    assert _paths_by_edge(result) == pytest.approx({"RUN_A": _expected(3.0, 200.0), "RUN_B": _expected(2.0, 250.0)})
     assert _path_for(result, "RUN_A").from_edge_key == "IN"
     assert _path_for(result, "RUN_A").to_edge_key == "RUN_A"
 
@@ -346,10 +350,7 @@ def test_branch_loss_bullhead_converging_covers_both_run_legs():
         return zeta
 
     assert result.status == api.APPROXIMATION
-    assert _paths_by_edge(result) == pytest.approx({
-        "RUN_A": _expected(3.0, 200.0),
-        "RUN_B": _expected(2.0, 250.0),
-    })
+    assert _paths_by_edge(result) == pytest.approx({"RUN_A": _expected(3.0, 200.0), "RUN_B": _expected(2.0, 250.0)})
     assert _path_for(result, "RUN_A").from_edge_key == "RUN_A"
     assert _path_for(result, "RUN_A").to_edge_key == "OUT"
 
@@ -391,6 +392,7 @@ def test_branch_loss_bullhead_ambiguous_flow_pattern_returns_unsupported():
 # fittings have that same shape), but the two are architecturally separate
 # entry points for two different physical fittings.
 # ----------------------------------------------------------------------------
+
 
 def test_wye_loss_diverging_treats_symmetric_legs_symmetrically():
     # A genuine Wye: two outlet legs at the same angle off the common inlet,
@@ -472,14 +474,14 @@ def test_wye_loss_ambiguous_flow_pattern_returns_unsupported():
 # manifold_loss
 # ----------------------------------------------------------------------------
 
+
 def _flow_lps(velocity_ms, diameter_mm):
     area = airflow.circular_area(airflow.mm_to_m(diameter_mm))
     return airflow.m3s_to_lps(velocity_ms * area)
 
 
 def test_manifold_loss_diverging_matches_branch_loss_at_two_secondaries():
-    primary = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0,
-                     flow_rate_lps=_flow_lps(5.0, 300.0))
+    primary = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0, flow_rate_lps=_flow_lps(5.0, 300.0))
     straight = _port("STRAIGHT", (1, 0, 0), False, diameter=300.0, velocity_ms=4.0)
     branch = _port("BRANCH", (0, 1, 0), False, diameter=150.0, velocity_ms=3.0)
     context = {"connected_ports": [primary, straight, branch], "properties": {}}
@@ -506,9 +508,14 @@ def test_manifold_loss_diverging_cross_covers_all_secondaries():
     # 1 inlet -> 3 outlets (a header/cross with one straightest continuation
     # and two side takeoffs), flows conserved: 200 = 80 + 70 + 50.
     q_in = 200.0
-    primary = _port("IN", (-1, 0, 0), True, diameter=400.0,
-                     velocity_ms=airflow.velocity_from_flow(airflow.lps_to_m3s(q_in), airflow.circular_area(0.4)),
-                     flow_rate_lps=q_in)
+    primary = _port(
+        "IN",
+        (-1, 0, 0),
+        True,
+        diameter=400.0,
+        velocity_ms=airflow.velocity_from_flow(airflow.lps_to_m3s(q_in), airflow.circular_area(0.4)),
+        flow_rate_lps=q_in,
+    )
 
     def outlet(edge_key, direction, diameter, q):
         v = airflow.velocity_from_flow(airflow.lps_to_m3s(q), airflow.circular_area(airflow.mm_to_m(diameter)))
@@ -535,9 +542,14 @@ def test_manifold_loss_diverging_cross_covers_all_secondaries():
 def test_manifold_loss_converging_cross_covers_all_secondaries():
     # 3 inlets merging -> 1 outlet, flows conserved: 80 + 70 + 50 = 200.
     q_out = 200.0
-    primary = _port("OUT", (1, 0, 0), False, diameter=400.0,
-                     velocity_ms=airflow.velocity_from_flow(airflow.lps_to_m3s(q_out), airflow.circular_area(0.4)),
-                     flow_rate_lps=q_out)
+    primary = _port(
+        "OUT",
+        (1, 0, 0),
+        False,
+        diameter=400.0,
+        velocity_ms=airflow.velocity_from_flow(airflow.lps_to_m3s(q_out), airflow.circular_area(0.4)),
+        flow_rate_lps=q_out,
+    )
 
     def inlet(edge_key, direction, diameter, q):
         v = airflow.velocity_from_flow(airflow.lps_to_m3s(q), airflow.circular_area(airflow.mm_to_m(diameter)))
@@ -597,14 +609,12 @@ def test_manifold_loss_zero_primary_flow_returns_zero_for_all_secondaries():
 # terminal_component_loss
 # ----------------------------------------------------------------------------
 
+
 def test_terminal_component_loss_neck_matches_duct_size_gives_k_unchanged():
     # Neck same size as the connecting duct -> neck velocity == duct velocity
     # -> K_effective == K exactly (no conversion needed).
     port = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=5.0, flow_rate_lps=_flow_lps(5.0, 200.0))
-    context = {
-        "connected_ports": [port],
-        "properties": {"NeckSize": 200.0, "LossCoefficient": 1.5},
-    }
+    context = {"connected_ports": [port], "properties": {"NeckSize": 200.0, "LossCoefficient": 1.5}}
     result = api.terminal_component_loss(context)
     assert result.status == api.EXACT
     assert _paths_by_edge(result) == pytest.approx({"A": 1.5})
@@ -619,10 +629,7 @@ def test_terminal_component_loss_smaller_neck_increases_effective_k():
     # against -- K_effective must come out larger than the raw K.
     duct_flow_lps = _flow_lps(5.0, 200.0)
     port = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=5.0, flow_rate_lps=duct_flow_lps)
-    context = {
-        "connected_ports": [port],
-        "properties": {"NeckSize": 100.0, "LossCoefficient": 1.5},
-    }
+    context = {"connected_ports": [port], "properties": {"NeckSize": 100.0, "LossCoefficient": 1.5}}
     result = api.terminal_component_loss(context)
 
     neck_v = airflow.velocity_from_flow(airflow.lps_to_m3s(duct_flow_lps), airflow.circular_area(0.1))
@@ -635,10 +642,7 @@ def test_terminal_component_loss_smaller_neck_increases_effective_k():
 def test_terminal_component_loss_larger_neck_decreases_effective_k():
     duct_flow_lps = _flow_lps(5.0, 200.0)
     port = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=5.0, flow_rate_lps=duct_flow_lps)
-    context = {
-        "connected_ports": [port],
-        "properties": {"NeckSize": 400.0, "LossCoefficient": 1.5},
-    }
+    context = {"connected_ports": [port], "properties": {"NeckSize": 400.0, "LossCoefficient": 1.5}}
     result = api.terminal_component_loss(context)
 
     neck_v = airflow.velocity_from_flow(airflow.lps_to_m3s(duct_flow_lps), airflow.circular_area(0.4))
@@ -667,10 +671,7 @@ def test_terminal_component_loss_missing_loss_coefficient_returns_unsupported():
 def test_terminal_component_loss_wrong_port_count_returns_unsupported():
     p1 = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=5.0)
     p2 = _port("B", (-1, 0, 0), True, diameter=200.0, velocity_ms=5.0)
-    context = {
-        "connected_ports": [p1, p2],
-        "properties": {"NeckSize": 200.0, "LossCoefficient": 1.5},
-    }
+    context = {"connected_ports": [p1, p2], "properties": {"NeckSize": 200.0, "LossCoefficient": 1.5}}
     result = api.terminal_component_loss(context)
     assert result.status == api.UNSUPPORTED
     assert result.paths == []
@@ -678,10 +679,7 @@ def test_terminal_component_loss_wrong_port_count_returns_unsupported():
 
 def test_terminal_component_loss_zero_flow_returns_zero_not_unsupported():
     port = _port("A", (1, 0, 0), False, diameter=200.0, velocity_ms=0.0, flow_rate_lps=0.0)
-    context = {
-        "connected_ports": [port],
-        "properties": {"NeckSize": 200.0, "LossCoefficient": 1.5},
-    }
+    context = {"connected_ports": [port], "properties": {"NeckSize": 200.0, "LossCoefficient": 1.5}}
     result = api.terminal_component_loss(context)
     assert result.status == api.EXACT
     assert _paths_by_edge(result) == {"A": 0.0}
@@ -691,6 +689,7 @@ def test_terminal_component_loss_zero_flow_returns_zero_not_unsupported():
 # inline_device_loss -- resolves its 2 connected ports (inlet/outlet) itself
 # now, unlike the old bare-float contract which ignored ports entirely.
 # ----------------------------------------------------------------------------
+
 
 def _inline_ports():
     inlet = _port("IN", (-1, 0, 0), True, diameter=200.0, velocity_ms=5.0)
@@ -743,6 +742,7 @@ def test_inline_device_loss_wrong_port_count_returns_unsupported():
 # uniform_fallback_loss
 # ----------------------------------------------------------------------------
 
+
 def test_uniform_fallback_loss_applies_k_to_every_outlet_port():
     primary = _port("IN", (-1, 0, 0), True, diameter=300.0, velocity_ms=5.0)
     straight = _port("STRAIGHT", (1, 0, 0), False, diameter=300.0, velocity_ms=4.0)
@@ -774,6 +774,7 @@ def test_uniform_fallback_loss_carries_through_optional_warning():
 # ----------------------------------------------------------------------------
 # grow_port_section
 # ----------------------------------------------------------------------------
+
 
 def test_grow_port_section_circular_grows_diameter_by_twice_delta():
     port = _port("A", (1, 0, 0), False, profile="Circular", diameter=200.0)
