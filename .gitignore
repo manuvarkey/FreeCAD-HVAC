@@ -1,3 +1,5 @@
 
 *.pyc
 /.zed
+reference/
+__pycache__/
