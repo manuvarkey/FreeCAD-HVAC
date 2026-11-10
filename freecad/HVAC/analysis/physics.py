@@ -77,27 +77,30 @@ def rectangular_area(width_m, height_m):
     return w * h
 
 
-def oval_area(width_m, height_m):
-    """
-    Cross-section area of a flat-oval (stadium/obround) duct.
-
-    width_m  = overall width (major axis, along the straight sides)
-    height_m = overall height (minor axis == diameter of the end caps)
-
-    Requires width_m >= height_m > 0, matching
-    library_api.HVACLibraryAPI.make_oval_wire's convention.
-    """
+def _oval_major_minor(width_m, height_m):
+    """Sort an oval's two extents into (major, minor) -- a tall oval is just a wide one turned 90 degrees."""
     w = float(width_m)
     h = float(height_m)
     if w <= 0.0 or h <= 0.0:
         raise ValueError("width_m and height_m must be positive")
-    if w < h:
-        raise ValueError("oval section requires width_m >= height_m")
-    r = h / 2.0
-    straight = w - h
+    return (w, h) if w >= h else (h, w)
+
+
+def oval_area(width_m, height_m):
+    """
+    Cross-section area of a flat-oval (stadium/obround) duct.
+
+    width_m / height_m = overall extents. Either one may be the longer
+    side: the longer one is the major axis (along the straight sides), the
+    shorter one is the minor axis (the diameter of the rounded end caps).
+    This matches library_api.HVACLibraryAPI.make_oval_wire.
+    """
+    major, minor = _oval_major_minor(width_m, height_m)
+    r = minor / 2.0
+    straight = major - minor
     # An oval is a rectangle (the straight middle part) plus a full circle
     # (the two rounded end caps, which together make one circle).
-    return straight * h + math.pi * (r ** 2)
+    return straight * minor + math.pi * (r ** 2)
 
 
 # ----------------------------------------------------------------------------
@@ -123,15 +126,10 @@ def hydraulic_diameter_rectangular(width_m, height_m):
 
 def hydraulic_diameter_oval(width_m, height_m):
     """Hydraulic diameter of a flat-oval (stadium/obround) duct: 4A/P."""
-    w = float(width_m)
-    h = float(height_m)
-    if w <= 0.0 or h <= 0.0:
-        raise ValueError("width_m and height_m must be positive")
-    if w < h:
-        raise ValueError("oval section requires width_m >= height_m")
-    straight = w - h
-    area = oval_area(w, h)
-    perimeter = 2.0 * straight + math.pi * h
+    major, minor = _oval_major_minor(width_m, height_m)
+    straight = major - minor
+    area = oval_area(major, minor)
+    perimeter = 2.0 * straight + math.pi * minor
     return (4.0 * area) / perimeter
 
 
@@ -240,6 +238,29 @@ def rect_dims_for_velocity(flow_m3_s, velocity_m_s, mode, aspect_ratio=None, fix
     raise ValueError("Unknown mode: {!r}".format(mode))
 
 
+def _check_oval_aspect_ratio(aspect_ratio):
+    """An oval's aspect ratio (width / height) may be above or below 1, but must be positive."""
+    if not aspect_ratio or aspect_ratio <= 0.0:
+        raise ValueError("aspect_ratio must be positive")
+
+
+def _oval_free_dim_for_area(fixed_dim_m, area_m2):
+    """
+    The other extent of an oval, given one fixed extent and the target area.
+
+    Works whichever of the two ends up longer:
+    - target area >= a circle of the fixed diameter: the free extent is the
+      major axis, and the area formula rearranges directly to it.
+    - target area smaller than that circle: the free extent is the minor
+      axis, and the area formula is quadratic in it (take the smaller root).
+    """
+    fixed = float(fixed_dim_m)
+    if area_m2 >= math.pi * fixed ** 2 / 4.0:
+        return fixed + area_m2 / fixed - math.pi * fixed / 4.0
+    discriminant = fixed ** 2 - 4.0 * _OVAL_SHAPE_FACTOR * area_m2
+    return (fixed - math.sqrt(max(discriminant, 0.0))) / (2.0 * _OVAL_SHAPE_FACTOR)
+
+
 def oval_dims_for_velocity(flow_m3_s, velocity_m_s, mode, aspect_ratio=None, fixed_dim_m=None):
     """
     Flat-oval duct (width_m, height_m) that gives exactly the target
@@ -255,29 +276,22 @@ def oval_dims_for_velocity(flow_m3_s, velocity_m_s, mode, aspect_ratio=None, fix
     area = float(flow_m3_s) / float(velocity_m_s)
 
     if mode == "aspect_ratio":
-        if not aspect_ratio or aspect_ratio < 1.0:
-            raise ValueError("aspect_ratio must be >= 1.0 for an oval (width >= height)")
-        # width = aspect_ratio * height, so area becomes a function of height alone.
-        height = math.sqrt(area / (aspect_ratio - 1.0 + math.pi / 4.0))
-        return aspect_ratio * height, height
+        _check_oval_aspect_ratio(aspect_ratio)
+        # aspect_ratio = width / height. Below 1 the oval is taller than it
+        # is wide, so solve the same shape turned 90 degrees and swap back.
+        major_on_minor = aspect_ratio if aspect_ratio >= 1.0 else 1.0 / aspect_ratio
+        # major = major_on_minor * minor, so area becomes a function of minor alone.
+        minor = math.sqrt(area / (major_on_minor - 1.0 + math.pi / 4.0))
+        major = major_on_minor * minor
+        return (major, minor) if aspect_ratio >= 1.0 else (minor, major)
     if mode == "fixed_height":
         if not fixed_dim_m or fixed_dim_m <= 0.0:
             raise ValueError("fixed_dim_m must be positive")
-        height = fixed_dim_m
-        # Height is fixed, so the area formula rearranges directly to width.
-        width = height + area / height - math.pi * height / 4.0
-        return width, height
+        return _oval_free_dim_for_area(fixed_dim_m, area), fixed_dim_m
     if mode == "fixed_width":
         if not fixed_dim_m or fixed_dim_m <= 0.0:
             raise ValueError("fixed_dim_m must be positive")
-        width = fixed_dim_m
-        # Width is fixed, so the area formula is quadratic in height --
-        # solve it with the quadratic formula (the smaller, valid root).
-        discriminant = width ** 2 - 4.0 * _OVAL_SHAPE_FACTOR * area
-        if discriminant < 0.0:
-            raise ValueError("No valid oval height for the given width and flow/velocity")
-        height = (width - math.sqrt(discriminant)) / (2.0 * _OVAL_SHAPE_FACTOR)
-        return width, height
+        return fixed_dim_m, _oval_free_dim_for_area(fixed_dim_m, area)
     raise ValueError("Unknown mode: {!r}".format(mode))
 
 
@@ -393,8 +407,7 @@ def oval_dims_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
                                  mode, aspect_ratio=None, fixed_dim_m=None):
     """Flat-oval duct (width_m, height_m) that gives (approximately) the target friction rate."""
     if mode == "aspect_ratio":
-        if not aspect_ratio or aspect_ratio < 1.0:
-            raise ValueError("aspect_ratio must be >= 1.0 for an oval (width >= height)")
+        _check_oval_aspect_ratio(aspect_ratio)
 
         def area_and_dh(height_m):
             width_m = aspect_ratio * height_m
@@ -414,8 +427,7 @@ def oval_dims_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
             return oval_area(width_m, height), hydraulic_diameter_oval(width_m, height)
 
         width = _solve_scale_for_friction_rate(
-            area_and_dh, flow_m3_s, target_rate_pa_per_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
-            lo=height,  # width must be >= height for a valid oval
+            area_and_dh, flow_m3_s, target_rate_pa_per_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3
         )
         return width, height
 
@@ -428,8 +440,7 @@ def oval_dims_for_friction_rate(flow_m3_s, target_rate_pa_per_m, roughness_m,
             return oval_area(width, height_m), hydraulic_diameter_oval(width, height_m)
 
         height = _solve_scale_for_friction_rate(
-            area_and_dh, flow_m3_s, target_rate_pa_per_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
-            hi=width,  # height must be <= width for a valid oval
+            area_and_dh, flow_m3_s, target_rate_pa_per_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3
         )
         return width, height
 
@@ -495,11 +506,9 @@ def _solve_scale_for_static_regain(area_and_dh_fn, flow_m3_s, upstream_velocity_
     ever grows as size grows, making the bracket well-posed.
 
     hi is the largest size allowed -- the size at the minimum allowed
-    velocity (see the module note above), optionally tightened further by
-    the caller for its own geometry rule (e.g. an oval's width >= height).
-    lo defaults to a tiny size (an effectively unbounded velocity); callers
-    only pass their own lo for a real geometric lower bound (e.g. an oval's
-    height <= width).
+    velocity (see the module note above). lo defaults to a tiny size (an
+    effectively unbounded velocity); callers only pass their own lo for a
+    real geometric lower bound.
 
     Returns (scale, balanced):
       - balanced=True: found a size where regain == friction.
@@ -618,8 +627,7 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
     )
 
     if mode == "aspect_ratio":
-        if not aspect_ratio or aspect_ratio < 1.0:
-            raise ValueError("aspect_ratio must be >= 1.0 for an oval (width >= height)")
+        _check_oval_aspect_ratio(aspect_ratio)
 
         def area_and_dh(height_m):
             width_m = aspect_ratio * height_m
@@ -640,14 +648,12 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
         def area_and_dh(width_m):
             return oval_area(width_m, height), hydraulic_diameter_oval(width_m, height)
 
-        # Two upper limits on width apply at once: the min_velocity ceiling
-        # (floor_w) and the oval rule width >= height -- take the larger so
-        # the bracket never excludes a width that's valid but below floor_w.
+        # The only upper limit on width is the min_velocity ceiling (floor_w);
+        # width may end up above or below the fixed height.
         width, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
             length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
-            lo=height,  # width must also stay >= height for a valid oval
-            hi=max(floor_w, height),
+            hi=floor_w,
             fitting_loss_pa=fitting_loss_pa,
         )
         return width, height, balanced
@@ -660,13 +666,12 @@ def oval_dims_for_static_regain(flow_m3_s, upstream_velocity_pressure_pa, regain
         def area_and_dh(height_m):
             return oval_area(width, height_m), hydraulic_diameter_oval(width, height_m)
 
-        # Two upper limits on height apply at once: the min_velocity ceiling
-        # (floor_h) and the oval rule height <= width -- take whichever is
-        # tighter (smaller) so neither rule gets violated.
+        # The only upper limit on height is the min_velocity ceiling (floor_h);
+        # height may end up above or below the fixed width.
         height, balanced = _solve_scale_for_static_regain(
             area_and_dh, flow_m3_s, upstream_velocity_pressure_pa, regain_factor,
             length_m, roughness_m, kinematic_viscosity_m2_s, air_density_kg_m3,
-            hi=min(floor_h, width),  # height must also stay <= width for a valid oval
+            hi=floor_h,
             fitting_loss_pa=fitting_loss_pa,
         )
         return width, height, balanced

@@ -79,4 +79,4 @@ Report view.
 For how the addon is put together internally (module responsibilities,
 sync/execute flow, the airflow/sizing solvers, the library type-selection
 system) see [`ARCHITECTURE.md`](ARCHITECTURE.md). Coding/testing rules for
-this repository are in [`CLAUDE.md`](CLAUDE.md).
+this repository are in [`AGENTS.md`](AGENTS.md).

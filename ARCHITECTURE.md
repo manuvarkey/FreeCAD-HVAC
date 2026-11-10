@@ -2,7 +2,7 @@
 
 Short, practical map of how this addon actually runs — for developers and
 for Claude picking up work in a fresh session. Rules for *how* to write code
-here live in [`CLAUDE.md`](CLAUDE.md); this document is about how the
+here live in [`AGENTS.md`](AGENTS.md); this document is about how the
 pieces fit together and execute. For the user-facing feature overview see
 [`README.md`](README.md).
 
@@ -20,7 +20,7 @@ Library layer              JSON type-defs + HVACLibraryRegistry: what geometry t
 
 Each layer only talks to the one below it. Don't hardcode fitting-specific
 logic upstream of where it belongs (e.g. no fitting knowledge in the
-parser) — see `CLAUDE.md` §3 "Respect the layering".
+parser) — see `AGENTS.md` §3 "Respect the layering".
 
 A `DuctJunction` is a purely logical/connectivity node — it holds no
 `LibraryId`/`TypeId`/`Shape` of its own. Each `DuctJunction` has exactly one
@@ -601,7 +601,7 @@ Key rules (all enforced in `freecad/HVAC/library/Library.py`):
 ## Where to look for more
 
 - **How to write code here** (test policy, naming convention, layering
-  rules, SPDX header) → [`CLAUDE.md`](CLAUDE.md).
+  rules, SPDX header) → [`AGENTS.md`](AGENTS.md).
 - **User-facing feature overview, design goals, status** → [`README.md`](README.md).
 - **Library/type-def JSON schema, naming convention, type-selection
   details** → [`freecad/HVAC/libraries/README.md`](freecad/HVAC/libraries/README.md).

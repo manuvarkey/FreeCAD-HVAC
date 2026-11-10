@@ -301,3 +301,42 @@ def test_generic_terminal_descriptors_declare_measurement_function():
         assert type_def.lengths_module == "junctions", type_id
         assert type_def.lengths_function == "measure_terminal_body_generic", type_id
         assert any(p.name == "BodyLength" for p in type_def.properties), type_id
+
+
+# ----------------------------------------------------------------------
+# 5. Star fittings -- each port's own TrimPort<letter> must be honoured
+# (these properties used to be declared in the type-def but never read).
+# ----------------------------------------------------------------------
+
+def _cross_context(params):
+    ports = [
+        _port("A", (-1.0, 0.0, 0.0), 200.0),
+        _port("B", (1.0, 0.0, 0.0), 200.0, segment_end="end", flow_into_junction=False),
+        _port("C", (0.0, 1.0, 0.0), 200.0, segment_end="end", flow_into_junction=False),
+        _port("D", (0.0, -1.0, 0.0), 200.0, segment_end="end", flow_into_junction=False),
+    ]
+    return {"hvac_api": HVACLibraryAPI, "params": params, "connected_ports": ports, "center_point": (0.0, 0.0, 0.0)}
+
+
+def _lengths_by_edge(records):
+    return {rec["edge_key"]: rec["length"] for rec in records}
+
+
+def test_star_cross_uses_each_ports_own_trim():
+    params = {"TrimPortA": 110.0, "TrimPortB": 120.0, "TrimPortC": 130.0, "TrimPortD": 140.0}
+    lengths = _lengths_by_edge(gen.measure_cross(_cross_context(params)))
+    assert lengths == pytest.approx({"A": 110.0, "B": 120.0, "C": 130.0, "D": 140.0})
+
+
+def test_star_cross_unset_port_trim_falls_back_to_size_based_default():
+    # 0.6 x the largest port size (200) is the built-in default for a cross.
+    lengths = _lengths_by_edge(gen.measure_cross(_cross_context({"TrimPortA": 90.0, "TrimPortB": 0.0})))
+    assert lengths == pytest.approx({"A": 90.0, "B": 120.0, "C": 120.0, "D": 120.0})
+
+
+def test_star_port_trim_names_stop_after_four_ports():
+    # A multiport's 5th+ port has no named trim; it only has the shared TrimLength.
+    assert gen._port_trim_names(5) == ["TrimPortA", "TrimPortB", "TrimPortC", "TrimPortD", None]
+    assert gen._star_trims({"TrimLength": 75.0, "TrimPortA": 50.0}, gen._port_trim_names(5), 999.0) == [
+        50.0, 75.0, 75.0, 75.0, 75.0
+    ]

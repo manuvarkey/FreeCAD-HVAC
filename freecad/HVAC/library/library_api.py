@@ -638,12 +638,12 @@ class HVACLibraryAPI:
     def make_oval_wire(center, x_axis, y_axis, width, height):
         """
         Flat-oval / obround section.
-        Major axis along x_axis, minor axis along y_axis.
-    
-        width  = total overall width
-        height = total overall height
-    
-        Requires width >= height > 0.
+
+        width  = total overall extent along x_axis
+        height = total overall extent along y_axis
+
+        Either one may be the longer side: the straight sides run along
+        whichever axis is longer, the rounded caps close the shorter one.
         """
         c = HVACLibraryAPI.vec(center)
         x = HVACLibraryAPI.unit(x_axis)
@@ -655,9 +655,14 @@ class HVACLibraryAPI:
         if width <= 0.0 or height <= 0.0:
             raise ValueError("Oval section requires positive Width and Height")
     
+        # A tall oval is a wide one turned 90 degrees: swap the frame so the
+        # code below can always build with the major axis along x. Negating
+        # the new y keeps the same normal (x cross y), so the wire's winding
+        # direction doesn't change.
         if width < height:
-            raise ValueError("Oval section currently requires Width >= Height")
-    
+            x, y = y, x * -1.0
+            width, height = height, width
+
         r = 0.5 * height
         straight = width - height
     

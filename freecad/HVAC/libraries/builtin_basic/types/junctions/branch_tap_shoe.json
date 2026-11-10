@@ -19,7 +19,7 @@
         "group": "Dimensions",
         "description": "Height of tap connector",
         "default": 75.0,
-        "min": 1.0
+        "validation": {"minimum": 1.0}
     },
     {
       "name": "TrimRunA",

@@ -14,28 +14,28 @@
   },
   "properties": [
     {
-      "name": "TrimLengthA",
+      "name": "TrimPortA",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
       "description": "Trim length for port A",
       "default": 100.0
     },
     {
-      "name": "TrimLengthB",
+      "name": "TrimPortB",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
       "description": "Trim length for port B",
       "default": 100.0
     },
     {
-      "name": "TrimLengthC",
+      "name": "TrimPortC",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
       "description": "Trim length for port C",
       "default": 100.0
     },
     {
-      "name": "TrimLengthD",
+      "name": "TrimPortD",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
       "description": "Trim length for port D",

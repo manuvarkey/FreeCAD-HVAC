@@ -192,6 +192,6 @@ once some type-def's `family` list references its dotted key. If a real
 duct layout produces a `topology`/`family` combination that doesn't fit any
 existing type-def, or a fitting distinction you need doesn't map onto the
 degree/collinearity/eccentricity/coplanarity vocabulary above, raise it
-rather than working around it in library code — see `CLAUDE.md`'s layering
+rather than working around it in library code — see `AGENTS.md`'s layering
 guidance (core classification logic must stay generic; fitting-specific
 behavior belongs in library data).

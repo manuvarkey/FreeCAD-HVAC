@@ -805,3 +805,46 @@ def test_build_geometry_leaves_roles_empty_for_layers_with_no_matching_construct
         assert result.layers["shape"].roles == []
     finally:
         sys.modules.pop("fake_hvac_lib_pkg.segments_unmigrated", None)
+
+
+def _type_json_with_property(**extra):
+    raw = _junction_type_json()
+    raw["properties"] = [dict({"name": "TapHeight", "prop_type": "App::PropertyLength", "default": 75.0}, **extra)]
+    return raw
+
+
+def test_load_type_def_file_unknown_property_key_raises(tmp_path):
+    # A top-level "min" is not a validation rule; it must not load silently.
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps(_type_json_with_property(min=1.0)))
+
+    reg = HVACLibraryRegistry()
+    try:
+        reg._load_type_def_file(str(type_file))
+    except ValueError as exc:
+        assert "TapHeight" in str(exc)
+        assert "min" in str(exc)
+    else:
+        raise AssertionError("Expected an unknown property key to raise")
+
+
+def test_load_type_def_file_unknown_validation_rule_raises(tmp_path):
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps(_type_json_with_property(validation={"minimun": 1.0})))
+
+    reg = HVACLibraryRegistry()
+    try:
+        reg._load_type_def_file(str(type_file))
+    except ValueError as exc:
+        assert "validation.minimun" in str(exc)
+    else:
+        raise AssertionError("Expected an unknown validation rule to raise")
+
+
+def test_load_type_def_file_known_property_keys_load(tmp_path):
+    type_file = tmp_path / "type.json"
+    type_file.write_text(json.dumps(_type_json_with_property(validation={"minimum": 1.0}, group="Dimensions")))
+
+    type_def = HVACLibraryRegistry()._load_type_def_file(str(type_file))
+
+    assert type_def.properties[0].validation == {"minimum": 1.0}

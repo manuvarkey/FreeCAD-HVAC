@@ -102,6 +102,33 @@ def _numeric(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+# Every key a property def's "validation" block may use -- exactly the ones
+# validate_value() below understands.
+KNOWN_VALIDATION_RULE_KEYS = frozenset(
+    {"enum", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minLength", "maxLength"}
+)
+
+# Every key a type-def property entry may use (see Library.HVACPropertyDef).
+KNOWN_PROPERTY_DEF_KEYS = frozenset(
+    {"name", "prop_type", "group", "description", "default", "editor_mode", "required", "validation"}
+)
+
+
+def unknown_property_def_keys(raw_property):
+    """
+    Keys in one raw type-def property entry that nothing reads.
+
+    A misspelled or made-up key (e.g. a top-level "min" instead of
+    "validation": {"minimum": ...}) would otherwise load fine and silently
+    never be enforced. Unknown "validation" rules are reported with a
+    "validation." prefix.
+    """
+    unknown = [key for key in raw_property if key not in KNOWN_PROPERTY_DEF_KEYS]
+    rules = raw_property.get("validation") or {}
+    unknown.extend("validation.{}".format(key) for key in rules if key not in KNOWN_VALIDATION_RULE_KEYS)
+    return sorted(unknown)
+
+
 def validate_value(type_id, prop_name, value, rules):
     """Validate one normalized property using a compact JSON-Schema-like subset."""
     rules = dict(rules or {})

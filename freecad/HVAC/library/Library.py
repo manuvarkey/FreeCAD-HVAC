@@ -1161,6 +1161,14 @@ class HVACLibraryRegistry:
 
         props = []
         for p in raw.get("properties", []) or []:
+            # Reject keys nothing reads, so a typo can't become a rule that is never enforced.
+            unknown_keys = validation.unknown_property_def_keys(p)
+            if unknown_keys:
+                raise ValueError(
+                    "Type-def '{}': property '{}' has unknown key(s) {}".format(
+                        filepath, p.get("name", "?"), ", ".join(unknown_keys)
+                    )
+                )
             props.append(
                 HVACPropertyDef(
                     name=p["name"],

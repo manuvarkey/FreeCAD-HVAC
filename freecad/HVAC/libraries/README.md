@@ -274,8 +274,25 @@ Property def (`HVACPropertyDef`):
 
 `prop_type` is any FreeCAD property type string (`App::PropertyLength`,
 `App::PropertyBool`, ...). `group` is the FreeCAD property-editor group; the
-established groups are `"Dimensions"` (sizes/thicknesses) and `"Options"`
-(booleans/toggles like `ShowFlange1`).
+established groups are `"Dimensions"` (sizes/thicknesses), `"Options"`
+(booleans/toggles like `ShowFlange1`) and `"Parameters"` (values used for
+calculation rather than geometry, like `LossCoefficient` or `NeckSize`).
+
+A property entry may only use the keys `name`, `prop_type`, `group`,
+`description`, `default`, `editor_mode`, `required` and `validation`, and
+`validation` may only use the rules `enum`, `minimum`, `maximum`,
+`exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength` and
+`maxLength`. Any other key is a load error, so a typo (or a made-up key like
+a top-level `"min"`) can't become a limit that is never enforced.
+
+**Trim property names.** A property holding one port's trim length is named
+`Trim<Role>`, where the role says which port it belongs to: `TrimRunA` /
+`TrimRunB` / `TrimBranch` (tee, tap, lateral tee), `TrimMain` /
+`TrimBranchA` / `TrimBranchB` (wye), and `TrimPortA` .. `TrimPortD` for a
+fitting whose ports have no such role (generic branch, cross -- letters
+follow the order of the connected ports). `TrimLength` is one shared trim
+for every port (multiport), and is also the fallback for any `TrimPort*`
+that is not set.
 
 See `samples/README.md` for the three geometry backends (`partscript`,
 `static`, and the legacy `generator` function -- including its use as a

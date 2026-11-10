@@ -45,9 +45,9 @@ def test_oval_area_rectangle_plus_circle():
     assert got == pytest.approx(expected)
 
 
-def test_oval_area_rejects_width_less_than_height():
+def test_oval_area_rejects_non_positive_extent():
     with pytest.raises(ValueError):
-        airflow.oval_area(0.2, 0.5)
+        airflow.oval_area(0.2, 0.0)
 
 
 # ----------------------------------------------------------------------------
@@ -228,9 +228,55 @@ def test_oval_dims_for_velocity_aspect_ratio_one_matches_circle():
     assert h == pytest.approx(d)
 
 
-def test_oval_dims_for_velocity_aspect_ratio_below_one_rejected():
+def test_oval_dims_for_velocity_aspect_ratio_below_one_gives_tall_oval():
+    # aspect_ratio = width / height, so 0.5 is the 2.0 oval turned 90 degrees.
+    w, h = airflow.oval_dims_for_velocity(0.4, 6.0, "aspect_ratio", aspect_ratio=0.5)
+    wide_w, wide_h = airflow.oval_dims_for_velocity(0.4, 6.0, "aspect_ratio", aspect_ratio=2.0)
+    assert (w, h) == pytest.approx((wide_h, wide_w))
+    assert w / h == pytest.approx(0.5)
+
+
+def test_oval_dims_for_velocity_non_positive_aspect_ratio_rejected():
     with pytest.raises(ValueError):
-        airflow.oval_dims_for_velocity(0.4, 6.0, "aspect_ratio", aspect_ratio=0.5)
+        airflow.oval_dims_for_velocity(0.4, 6.0, "aspect_ratio", aspect_ratio=0.0)
+
+
+def test_oval_area_and_hydraulic_diameter_do_not_depend_on_orientation():
+    assert airflow.oval_area(0.2, 0.5) == pytest.approx(airflow.oval_area(0.5, 0.2))
+    assert airflow.hydraulic_diameter_oval(0.2, 0.5) == pytest.approx(airflow.hydraulic_diameter_oval(0.5, 0.2))
+
+
+@pytest.mark.parametrize("mode, fixed", [("fixed_height", 0.6), ("fixed_width", 0.6)])
+def test_oval_dims_for_velocity_fixed_dim_longer_than_free_dim(mode, fixed):
+    # A small flow against a large fixed side: the free side ends up the
+    # shorter one, and the result must still hit the target area exactly.
+    flow, v = 0.4, 6.0
+    w, h = airflow.oval_dims_for_velocity(flow, v, mode, fixed_dim_m=fixed)
+    assert min(w, h) < fixed
+    assert max(w, h) == pytest.approx(fixed)
+    assert airflow.oval_area(w, h) == pytest.approx(flow / v)
+
+
+def test_oval_dims_for_friction_rate_tall_fixed_height():
+    # Fixed height larger than the solved width used to be clamped to width == height.
+    args = (0.2, 1.0, 0.00009, 1.5e-5, 1.2)
+    w, h = airflow.oval_dims_for_friction_rate(*args, "fixed_height", fixed_dim_m=0.6)
+    assert h == pytest.approx(0.6)
+    assert w < h
+    rate = airflow._friction_rate_pa_per_m(airflow.oval_area(w, h), airflow.hydraulic_diameter_oval(w, h), *args[:1], *args[2:])
+    assert rate == pytest.approx(1.0, rel=1e-3)
+
+
+def test_oval_dims_for_static_regain_accepts_tall_aspect_ratio():
+    kwargs = dict(
+        flow_m3_s=0.3, upstream_velocity_pressure_pa=40.0, regain_factor=0.75, length_m=5.0, roughness_m=0.00009,
+        kinematic_viscosity_m2_s=1.5e-5, air_density_kg_m3=1.2, min_velocity_m_s=2.0,
+    )
+    tall = airflow.oval_dims_for_static_regain(mode="aspect_ratio", aspect_ratio=0.5, **kwargs)
+    wide = airflow.oval_dims_for_static_regain(mode="aspect_ratio", aspect_ratio=2.0, **kwargs)
+    assert tall[0] == pytest.approx(wide[1])
+    assert tall[1] == pytest.approx(wide[0])
+    assert tall[2] == wide[2]
 
 
 def test_oval_dims_for_velocity_fixed_height_keeps_height():

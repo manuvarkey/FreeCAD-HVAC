@@ -227,6 +227,29 @@ def build_vav_generic(context):
     return _inline(context, 1.0, 300.0)
 
 
+# Per-port trim property names for star fittings whose ports have no
+# run/branch role. Letters follow the order of connected_ports.
+_PORT_TRIM_NAMES = ("TrimPortA", "TrimPortB", "TrimPortC", "TrimPortD")
+
+
+def _star_trims(p, names, default_trim):
+    """
+    One trim length per port of a star fitting.
+
+    Each port uses its own named property when that is set. Otherwise it
+    falls back to the shared TrimLength, and then to default_trim. A port
+    with no name (None, e.g. the 5th port of a multiport) only has the
+    shared fallback.
+    """
+    shared = _positive(p.get("JunctionLength", p.get("TrimLength")), default_trim)
+    return [_positive(p.get(name), shared) if name else shared for name in names]
+
+
+def _port_trim_names(count):
+    """TrimPortA.. for the first ports, None for any port beyond the named ones."""
+    return [_PORT_TRIM_NAMES[i] if i < len(_PORT_TRIM_NAMES) else None for i in range(count)]
+
+
 def _star_layered(context, factor, align_branch=False):
     api = context["hvac_api"]
     ports = api.connected_ports(context)
@@ -234,13 +257,17 @@ def _star_layered(context, factor, align_branch=False):
         raise ValueError("Branch fitting requires at least three connected ports")
     p = _props(context)
     thickness = float(p.get("Thickness", 0.8) or 0.0)
-    center = sum((api.port_position(port) for port in ports), api.vec((0, 0, 0))) / len(ports)
+    center = api.average_point([api.port_position(port) for port in ports])
     branch = None
+    names = _port_trim_names(len(ports))
     if align_branch:
-        _, _, branch = api.run_branch_ports(context)
+        run_a, run_b, branch = api.run_branch_ports(context)
         center = api.center_from_context(context)
-    trim = _positive(p.get("JunctionLength", p.get("TrimLength")), factor * max(_size(api, port) for port in ports))
-    ends = [_trimmed(api, port, trim) for port in ports]
+        # A tee's ports have real roles, so its trims are named after them.
+        role_names = {id(run_a): "TrimRunA", id(run_b): "TrimRunB", id(branch): "TrimBranch"}
+        names = [role_names[id(port)] for port in ports]
+    trims = _star_trims(p, names, factor * max(_size(api, port) for port in ports))
+    ends = [_trimmed(api, port, trim) for port, trim in zip(ports, trims)]
 
     def build_envelope(offset):
         legs = []
@@ -260,7 +287,7 @@ def _star_layered(context, factor, align_branch=False):
     result = api.build_layered_geometry(build_envelope, context["construction_layers"], p)
     casing = _add_flanges(api, result["layers"].get("casing", {}).get("shape"), ends, thickness, p)
     result["layers"]["casing"] = {"shape": casing}
-    result["connection_lengths"] = api.build_trim_rec_from_port_lengths([(port, trim) for port in ports])
+    result["connection_lengths"] = api.build_trim_rec_from_port_lengths(list(zip(ports, trims)))
     return result
 
 
