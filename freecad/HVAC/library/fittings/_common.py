@@ -63,13 +63,43 @@ def _loft(api, ports, offset=0.0, ruled=True):
     return api.loft([api.profile_from_port(p, offset) for p in ports], solid=True, ruled=ruled)
 
 
+def _finish(context, envelope, connection_lengths):
+    """
+    Turn a fitting's envelope builder into the result dict a generator returns.
+
+    `envelope(offset)` builds the fitting's whole outer boundary as a solid,
+    grown outward by `offset` from the clear-air boundary (offset 0 is the
+    air space itself). Every fitting in this package describes its shape
+    that way, so one fitting works for any wall build-up:
+
+    - The type declares construction layers with a thickness: each layer
+      becomes its own hollow shell (HVACLibraryAPI.build_layered_geometry).
+    - No layer has a thickness: there is no wall to build, so the plain
+      air-space solid is returned as the single legacy "shape".
+    """
+    api = context["hvac_api"]
+    params = _props(context)
+    layer_defs = list(context.get("construction_layers") or [])
+
+    def thickness(layer_def):
+        name = getattr(layer_def, "thickness_property", None)
+        return float(params.get(name, 0.0) or 0.0) if name else 0.0
+
+    if any(thickness(layer_def) > _EPS for layer_def in layer_defs):
+        result = api.build_layered_geometry(envelope, layer_defs, params)
+    else:
+        result = {"shape": api.refine(envelope(0.0))}
+    result["connection_lengths"] = connection_lengths
+    return result
+
+
 def _profile_extent(profile):
     shape = profile.wire if hasattr(profile, "wire") else profile
     bb = shape.BoundBox
     return max(bb.DiagonalLength, bb.XLength, bb.YLength, bb.ZLength, 1.0)
 
 
-def _mitered_bend(api, port0, port1, radius, cuts, profile0=None, profile1=None):
+def _mitered_bend(api, port0, port1, radius, cuts, profile0=None, profile1=None, offset=0.0):
     """Build a faceted bend between two arbitrary ports.
 
     Used by through mitered elbows, the mitered-shoe tee, and mitered wye.
@@ -79,6 +109,9 @@ def _mitered_bend(api, port0, port1, radius, cuts, profile0=None, profile1=None)
 
     ``profile0``/``profile1`` optionally replace the exact tangent-end
     sections, allowing a split wye profile to transition through the gores.
+    ``offset`` grows the two default end sections outward (see ``_finish``);
+    the route, mitre planes and trims never depend on it. A caller passing
+    its own profiles applies the offset to them itself.
     Returns ``(shape, [trim0, trim1])``.
     """
     u0 = api.port_direction(port0)
@@ -157,9 +190,9 @@ def _mitered_bend(api, port0, port1, radius, cuts, profile0=None, profile1=None)
 
     # Actual fitting-end profiles. These may be geometrically different.
     if profile0 is None:
-        profile0 = api.profile_from_port(route_port0)
+        profile0 = api.profile_from_port(route_port0, offset)
     if profile1 is None:
-        profile1 = api.profile_from_port(route_port1)
+        profile1 = api.profile_from_port(route_port1, offset)
 
     # Use one central gore as the finite transition between the exact
     # profiles propagated from each end.
@@ -198,7 +231,7 @@ def _mitered_bend(api, port0, port1, radius, cuts, profile0=None, profile1=None)
     return shape, [route["trim_lengths"][0], route["trim_lengths"][1]]
 
 
-def _extend_leg(api, shape, port, current_trim, requested_trim):
+def _extend_leg(api, shape, port, current_trim, requested_trim, offset=0.0):
     """Fuse a plain straight extension onto a swept/mitred leg's outer end,
     so a user-requested trim length can grow past whatever minimum the
     bend geometry alone requires (``current_trim``) -- e.g. a tee/tap's
@@ -209,7 +242,7 @@ def _extend_leg(api, shape, port, current_trim, requested_trim):
     if extra <= _EPS:
         return shape
     end = _trimmed(api, port, current_trim)
-    stub = api.extrude(api.profile_from_port(end), api.port_direction(port) * extra, solid=True)
+    stub = api.extrude(api.profile_from_port(end, offset), api.port_direction(port) * extra, solid=True)
     return api.fuse(shape, stub)
 
 

@@ -5,7 +5,7 @@
 End-of-duct fittings: the generic terminal body and the duct closure (end cap).
 """
 
-from ._common import _positive, _props, _size
+from ._common import _finish, _positive, _props, _size
 from .markers import _marker
 
 
@@ -39,11 +39,11 @@ def measure_terminal_body_generic(context):
 def build_terminal_body_generic(context):
     api = context["hvac_api"]
     port, body_length = _terminal_body_layout(context)
-    shape = api.extrude(api.profile_from_port(port), api.port_direction(port) * body_length, solid=True)
-    return {
-        "shape": api.refine(shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths([(port, body_length)]),
-    }
+
+    def envelope(offset):
+        return api.extrude(api.profile_from_port(port, offset), api.port_direction(port) * body_length, solid=True)
+
+    return _finish(context, envelope, api.build_trim_rec_from_port_lengths([(port, body_length)]))
 
 
 def _duct_closure_thickness(context):

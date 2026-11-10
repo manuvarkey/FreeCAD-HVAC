@@ -5,7 +5,7 @@
 Inline devices: a simple body sitting between two collinear ports (damper, VAV box).
 """
 
-from ._common import _loft, _positive, _props, _size, _trimmed
+from ._common import _finish, _loft, _positive, _props, _size, _trimmed
 
 
 def _inline_layout(context, factor, minimum):
@@ -31,10 +31,12 @@ def _inline(context, factor, minimum):
     api = context["hvac_api"]
     ports, trim = _inline_layout(context, factor, minimum)
     a, b = _trimmed(api, ports[0], trim), _trimmed(api, ports[1], trim)
-    return {
-        "shape": api.refine(_loft(api, [a, b], 0.0, ruled=True)),
-        "connection_lengths": api.build_trim_rec_from_port_lengths([(ports[0], trim), (ports[1], trim)]),
-    }
+
+    def envelope(offset):
+        return _loft(api, [a, b], offset, ruled=True)
+
+    lengths = api.build_trim_rec_from_port_lengths([(ports[0], trim), (ports[1], trim)])
+    return _finish(context, envelope, lengths)
 
 
 def build_damper_generic(context):

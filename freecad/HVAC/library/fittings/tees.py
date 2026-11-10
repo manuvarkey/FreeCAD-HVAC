@@ -10,6 +10,7 @@ from ._common import (
     _clip_junction_to_body,
     _extend_leg,
     _extra_trim,
+    _finish,
     _junction_minimums,
     _junction_shape_minimums,
     _junction_trims,
@@ -49,14 +50,12 @@ def _star_tee(context, run_factor, branch_factor):
     """Straight-legged tee with trims measured beyond the intrinsic junction body."""
     api = context["hvac_api"]
     run_a, run_b, branch, center, minimums, trims = _star_tee_layout(context, run_factor, branch_factor)
-    shape = _star_body(api, center, [run_a, run_b, branch], trims, minimums, branch=branch)
 
-    return {
-        "shape": api.refine(shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(
-            [(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]
-        ),
-    }
+    def envelope(offset):
+        return _star_body(api, center, [run_a, run_b, branch], trims, minimums, branch=branch, offset=offset)
+
+    lengths = api.build_trim_rec_from_port_lengths([(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])])
+    return _finish(context, envelope, lengths)
 
 
 def _run_surface_along_branch(api, center, run_a, run_b, branch_dir):
@@ -265,22 +264,11 @@ def _radius_tee(context, run_factor, branch_factor, branch_alignment):
     trims = layout["trims"]
     route = layout["route"]
 
-    # Build the curved body only here; measurement uses the shared layout.
-    stub = api.sweep([api.profile_from_port(port) for port in route["ports"]], route["path"], solid=True)
-
-    # Start the branch extension at the sweep's actual end section. A trim
-    # length can be clamped, so reconstructing that section can leave a gap.
     branch_start = route["ports"][0]
     branch_end = _trimmed(api, branch, trims[2])
     branch_reach = api.port_position(branch_end) - api.port_position(branch_start)
-    if branch_reach.Length > api.EPS:
-        stub = api.fuse(stub, _loft(api, [branch_start, branch_end]))
-
-    # Loft the minor trunk into its own section, then join both sections
-    # to the full main trunk. The branch sweep keeps its entire profile.
     main_index = 0 if layout["main"] is run_a else 1
     minor_index = 1 - main_index
-    minor_body = _loft(api, [_trimmed(api, layout["minor"], trims[minor_index]), layout["minor_trunk_port"]])
     main_inner_port = layout["main_inner_port"]
     if branch_alignment == "center":
         # Cross the shared tangent plane slightly so OCC fuses the three
@@ -290,11 +278,25 @@ def _radius_tee(context, run_factor, branch_factor, branch_alignment):
             main_inner_port,
             position=api.port_position(main_inner_port) - api.unit(api.port_direction(layout["main"])) * overlap,
         )
-    main_body = _loft(api, [main_inner_port, _trimmed(api, layout["main"], trims[main_index])])
-    shape = api.fuse(main_body, minor_body, stub)
-    shape = _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
 
-    return {"shape": api.refine(shape), "connection_lengths": _radius_tee_connection_lengths(api, layout)}
+    def envelope(offset):
+        # Build the curved body only here; measurement uses the shared layout.
+        stub = api.sweep([api.profile_from_port(port, offset) for port in route["ports"]], route["path"], solid=True)
+
+        # Start the branch extension at the sweep's actual end section. A trim
+        # length can be clamped, so reconstructing that section can leave a gap.
+        if branch_reach.Length > api.EPS:
+            stub = api.fuse(stub, _loft(api, [branch_start, branch_end], offset))
+
+        # Loft the minor trunk into its own section, then join both sections
+        # to the full main trunk. The branch sweep keeps its entire profile.
+        minor_end = _trimmed(api, layout["minor"], trims[minor_index])
+        minor_body = _loft(api, [minor_end, layout["minor_trunk_port"]], offset)
+        main_body = _loft(api, [main_inner_port, _trimmed(api, layout["main"], trims[main_index])], offset)
+        shape = api.fuse(main_body, minor_body, stub)
+        return _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
+
+    return _finish(context, envelope, _radius_tee_connection_lengths(api, layout))
 
 
 def measure_radius_tee_edge(context, run_factor, branch_factor):
@@ -337,24 +339,25 @@ def build_tee_straight(context):
     api = context["hvac_api"]
     run_a, run_b, branch, center, _, trims = _star_tee_layout(context, 0.60, 0.60)
 
-    # Build the run as one continuous trunk, matching the radius tee.
-    trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])])
-
-    # Join a straight branch stub at the trunk center plane.
     branch_end = _trimmed(api, branch, trims[2])
     branch_center = api.copy_port(branch, position=_port_axis_point(api, branch, center))
-    stub = _loft(api, [branch_end, branch_center])
-    stub = _clip_branch_at_trunk_center(api, stub, center, branch)
 
-    shape = api.fuse(trunk, stub)
-    shape = _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
+    def envelope(offset):
+        # Build the run as one continuous trunk, matching the radius tee.
+        trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])], offset)
 
-    return {
-        "shape": api.refine(shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(
-            [(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]
-        ),
-    }
+        # Join a straight branch stub at the trunk center plane.
+        stub = _loft(api, [branch_end, branch_center], offset)
+        stub = _clip_branch_at_trunk_center(api, stub, center, branch)
+
+        shape = api.fuse(trunk, stub)
+        return _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
+
+    return _finish(
+        context,
+        envelope,
+        api.build_trim_rec_from_port_lengths([(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]),
+    )
 
 
 def _tee_mitered_shoe_layout(context):
@@ -398,6 +401,9 @@ def _tee_mitered_shoe_layout(context):
         "branch": branch,
         "center": center,
         "lean": lean,
+        "trunk_axis_port": trunk_axis_port,
+        "radius": radius,
+        "cuts": cuts,
         "bend_shape": bend_shape,
         "branch_route_trim": branch_route_trim,
         "lean_route_trim": lean_route_trim,
@@ -428,19 +434,26 @@ def build_tee_mitered_shoe(context):
     center = layout["center"]
     trims = layout["trims"]
 
-    bend_shape = _extend_leg(api, layout["bend_shape"], branch, layout["branch_route_trim"], trims[2])
-    trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])])
+    def envelope(offset):
+        # The layout already built the air-space bend to measure it; only a
+        # wall envelope (offset > 0) needs the bend built again, larger.
+        if offset > 0.0:
+            bend_shape = _mitered_bend(
+                api, branch, layout["trunk_axis_port"], layout["radius"], layout["cuts"], offset=offset
+            )[0]
+        else:
+            bend_shape = layout["bend_shape"]
+        bend_shape = _extend_leg(api, bend_shape, branch, layout["branch_route_trim"], trims[2], offset)
+        trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])], offset)
+        bend_shape = _clip_branch_at_trunk_center(api, bend_shape, center, branch)
+        shape = api.fuse(trunk, bend_shape)
+        return _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
 
-    bend_shape = _clip_branch_at_trunk_center(api, bend_shape, center, branch)
-    shape = api.fuse(trunk, bend_shape)
-    shape = _clip_junction_to_body(api, shape, center, [run_a, run_b, branch], trims)
-
-    return {
-        "shape": api.refine(shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(
-            [(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]
-        ),
-    }
+    return _finish(
+        context,
+        envelope,
+        api.build_trim_rec_from_port_lengths([(run_a, trims[0]), (run_b, trims[1]), (branch, trims[2])]),
+    )
 
 
 def _lateral_tee_layout(context):
@@ -527,28 +540,34 @@ def build_lateral_tee(context):
     run_a, run_b, branch, center = layout["run_a"], layout["run_b"], layout["branch"], layout["center"]
     trim_a, trim_b, trim_branch = layout["trim_a"], layout["trim_b"], layout["trim_branch"]
 
-    # Build the run as one continuous trunk, matching the straight tee.
-    trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)])
-
-    # Join a straight branch stub at the trunk center plane.
     branch_end = _trimmed(api, branch, trim_branch)
     branch_axis_center = _port_axis_point(api, branch, center)
-    branch_center = api.copy_port(branch, position=branch_axis_center)
-    branch_stub = _loft(api, [branch_end, branch_center])
     branch_dir = api.port_direction(branch)
     trunk_dir = api.port_direction(run_a)
 
-    # Cut on a plane perpendicular to the wye plane. Its normal stays in
-    # the wye plane and points from the trunk axis toward the branch.
+    # Run the stub's inner end slightly past the trunk axis. Stopping it
+    # exactly on the axis leaves a knife edge there once the inclined clip
+    # plane below has cut it, and the fuse with the trunk can then fail
+    # (seen on a circular branch at exactly 45 degrees).
+    embed = max(0.01 * _size(api, branch), 2.0)
+    branch_center = api.copy_port(branch, position=branch_axis_center - api.unit(branch_dir) * embed)
+
+    # The branch stub is cut on a plane perpendicular to the wye plane. Its
+    # normal stays in the wye plane and points from the trunk axis toward
+    # the branch.
     wye_plane_normal = api.unit(trunk_dir.cross(branch_dir))
     clip_normal = api.unit(wye_plane_normal.cross(trunk_dir))
-    branch_stub = api.clip_plane(branch_stub, (branch_axis_center, clip_normal), side="positive")
 
-    shape = api.fuse(trunk, branch_stub)
+    def envelope(offset):
+        # Build the run as one continuous trunk, matching the straight tee.
+        trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)], offset)
 
-    return {
-        "shape": api.refine(shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(
-            [(run_a, trim_a), (run_b, trim_b), (branch, trim_branch)]
-        ),
-    }
+        # Join a straight branch stub at the trunk center plane.
+        branch_stub = _loft(api, [branch_end, branch_center], offset)
+        branch_stub = api.clip_plane(branch_stub, (branch_axis_center, clip_normal), side="positive")
+        # Keep the stub inside the run body, so nothing pokes out past the run's own end planes.
+        branch_stub = _clip_junction_to_body(api, branch_stub, center, [run_a, run_b], [trim_a, trim_b])
+        return api.fuse(trunk, branch_stub)
+
+    lengths = api.build_trim_rec_from_port_lengths([(run_a, trim_a), (run_b, trim_b), (branch, trim_branch)])
+    return _finish(context, envelope, lengths)

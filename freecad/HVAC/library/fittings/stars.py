@@ -9,8 +9,7 @@ fallback shape for branch, cross and multiport nodes.
 from ._common import (
     _clip_branch_at_trunk_center,
     _clip_junction_to_body,
-    _junction_minimums,
-    _junction_trims,
+    _finish,
     _loft,
     _port_axis_point,
     _positive,
@@ -70,18 +69,19 @@ def _star_junction(context, default_factor=0.6, align_branch=False):
             _, _, branch = api.run_branch_ports(context)
             center = api.center_from_context(context)
     trimmed = [_trimmed(api, port, trim) for port, trim in zip(ports, trims)]
-    legs = []
-    for source_port, port in zip(ports, trimmed):
-        inner_position = _port_axis_point(api, source_port, center) if source_port is branch else center
-        center_port = api.copy_port(port, position=inner_position, direction=api.port_direction(port) * -1.0)
-        leg = _loft(api, [port, center_port], 0.0, ruled=True)
-        if source_port is branch:
-            leg = _clip_branch_at_trunk_center(api, leg, center, branch)
-        legs.append(leg)
-    return {
-        "shape": api.refine(api.fuse(*legs)),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(list(zip(ports, trims))),
-    }
+
+    def envelope(offset):
+        legs = []
+        for source_port, port in zip(ports, trimmed):
+            inner_position = _port_axis_point(api, source_port, center) if source_port is branch else center
+            center_port = api.copy_port(port, position=inner_position, direction=api.port_direction(port) * -1.0)
+            leg = _loft(api, [port, center_port], offset, ruled=True)
+            if source_port is branch:
+                leg = _clip_branch_at_trunk_center(api, leg, center, branch)
+            legs.append(leg)
+        return api.fuse(*legs)
+
+    return _finish(context, envelope, api.build_trim_rec_from_port_lengths(list(zip(ports, trims))))
 
 
 def measure_branch_generic(context):
@@ -96,7 +96,7 @@ def measure_manifold(context):
     return measure_star_junction(context, 0.65)
 
 
-def _star_body(api, center, ports, trims, minimums, branch=None):
+def _star_body(api, center, ports, trims, minimums, branch=None, offset=0.0):
     """Build robust straight-legged junction geometry with controlled overlap."""
     legs = []
     for port, trim, minimum in zip(ports, trims, minimums):
@@ -105,44 +105,12 @@ def _star_body(api, center, ports, trims, minimums, branch=None):
         embed = max(0.10 * minimum, 1.0)
         inner_center = _port_axis_point(api, port, center) if port is branch else center
         inner = api.copy_port(port, position=inner_center - direction * embed)
-        leg = _loft(api, [end, inner], 0.0, ruled=True)
+        leg = _loft(api, [end, inner], offset, ruled=True)
         if port is branch:
             leg = _clip_branch_at_trunk_center(api, leg, center, branch)
         legs.append(leg)
     shape = api.fuse(*legs)
     return _clip_junction_to_body(api, shape, center, ports, trims)
-
-
-def _star_wye_layout(context, factor=0.70):
-    api = context["hvac_api"]
-    ports = list(api.connected_ports(context))
-    if len(ports) != 3:
-        raise ValueError("Fitting requires exactly three connected ports")
-    p = _props(context)
-
-    center = api.center_from_context(context)
-    minimums = _junction_minimums(api, center, ports)
-    names = ("TrimBranchA", "TrimBranchB", "TrimBranchC")
-    trims = _junction_trims(api, p, ports, names, (factor, factor, factor), minimums)
-    return ports, center, minimums, trims
-
-
-def measure_star_wye(context, factor=0.70):
-    api = context["hvac_api"]
-    ports, center, minimums, trims = _star_wye_layout(context, factor)
-    return api.build_trim_rec_from_port_lengths(list(zip(ports, trims)))
-
-
-def _star_wye(context, factor=0.70):
-    """Straight-legged wye with independent trims outside its minimum body."""
-    api = context["hvac_api"]
-    ports, center, minimums, trims = _star_wye_layout(context, factor)
-    shape = _star_body(api, center, ports, trims, minimums)
-
-    return {
-        "shape": api.refine(shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(list(zip(ports, trims))),
-    }
 
 
 def build_branch_generic(context):

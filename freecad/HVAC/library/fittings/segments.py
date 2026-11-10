@@ -3,6 +3,8 @@
 
 """Straight duct segments: one profile extruded (or swept along a path edge) from start to end."""
 
+from ._common import _finish
+
 
 def _properties(context):
     return dict(context.get("params") or context.get("properties") or {})
@@ -17,8 +19,14 @@ def _build(context, profile, section):
     x_axis = context.get("profile_x_axis")
 
     p0 = api.make_profile(profile, section, center=start, direction=direction, profile_x_axis=x_axis)
-    shape = api.sweep(p0, path, solid=True) if path is not None else api.extrude(p0, end - start, solid=True)
-    return {"shape": api.refine(shape)}
+
+    def envelope(offset):
+        grown = api.offset_profile(p0, offset) if offset > 0.0 else p0
+        if path is not None:
+            return api.sweep(grown, path, solid=True)
+        return api.extrude(grown, end - start, solid=True)
+
+    return _finish(context, envelope, [])
 
 
 def build_rectangular_straight(context):

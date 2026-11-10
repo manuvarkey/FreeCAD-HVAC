@@ -36,8 +36,8 @@ import math
 
 from ..analysis import physics as airflow
 from ..analysis.loss import LossEvaluation, LossPath, LossStatus
-from .library_api import HVACLibraryAPI
 from . import smacna_loss
+from .library_api import HVACLibraryAPI
 
 
 class HVACLossAPI:

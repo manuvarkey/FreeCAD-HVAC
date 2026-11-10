@@ -29,6 +29,11 @@
       "default": 3.0
     }
   ],
+  "construction": {
+    "layers": [
+      {"id": "shape", "roles": ["flow_surface", "structural_shell"], "default_material_role": "flow_surface"}
+    ]
+  },
   "generator": {
     "module": "shared:terminals",
     "function": "build_duct_closure_generic"

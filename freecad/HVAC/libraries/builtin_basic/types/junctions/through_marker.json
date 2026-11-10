@@ -21,6 +21,11 @@
       "default": 240.0
     }
   ],
+  "construction": {
+    "layers": [
+      {"id": "shape", "roles": ["flow_surface", "structural_shell"], "default_material_role": "flow_surface"}
+    ]
+  },
   "generator": {
     "module": "shared:markers",
     "function": "build_transition_marker"

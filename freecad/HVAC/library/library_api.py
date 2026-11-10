@@ -857,6 +857,28 @@ class HVACLibraryAPI:
             kind, p, center=profile.center, direction=profile.direction, profile_x_axis=profile.profile_x_axis
         )
 
+    @classmethod
+    def offset_wire(cls, wire, distance):
+        """
+        Grow (positive distance) or shrink (negative) any closed planar wire
+        in its own plane, keeping sharp corners sharp.
+
+        Use `offset_profile()` for a normal section profile -- it rebuilds
+        the section exactly from its own dimensions. This is for a wire that
+        is no longer a plain section, e.g. one half of a split profile or a
+        section cut off a mitred body.
+        """
+        source = cls._wire(wire)
+        d = float(distance)
+        if abs(d) <= _EPS:
+            return source
+        # join=2 extends the neighbouring edges until they meet, so corners stay sharp.
+        result = source.makeOffset2D(d, join=2)
+        wires = list(getattr(result, "Wires", []) or [])
+        if len(wires) != 1:
+            raise ValueError("Wire offset by {} did not give exactly one closed wire".format(d))
+        return wires[0]
+
     @staticmethod
     def profile_projection_bounds(profile, direction):
         """Return the minimum and maximum projection of a profile along direction."""
@@ -1405,13 +1427,42 @@ class HVACLibraryAPI:
 
     @staticmethod
     def refine(shape):
-        """Remove boolean splitters when OCC can do so safely."""
+        """
+        Remove boolean splitters when OCC can do so safely.
+
+        Merging faces sometimes turns a valid shape into an invalid one
+        (seen on fused swept bodies, where a later cut then gives a wrong
+        result). In that case the original, unrefined shape is returned.
+        """
         if shape is None or shape.isNull():
             return shape
         try:
-            return shape.removeSplitter()
+            # Work on a copy: removeSplitter() can adjust tolerances inside
+            # the shape it is given, which leaves the caller's original
+            # damaged even when the refined result is thrown away below.
+            refined = shape.copy().removeSplitter()
         except Exception:
             return shape
+        if refined is None or refined.isNull():
+            return shape
+        # An invalid input has nothing to protect: refining often repairs it.
+        if not shape.isValid():
+            return refined
+        if not refined.isValid():
+            return shape
+        # A refined shape can also stay "valid" but silently lose or gain
+        # material. Refining a valid shape never should change its volume,
+        # so treat any real change as a failed refine.
+        try:
+            before, after = float(shape.Volume), float(refined.Volume)
+        except Exception:
+            return refined
+        if abs(after - before) > 1.0e-6 * max(abs(before), 1.0):
+            return shape
+        return refined
+        if abs(after - before) > 1.0e-6 * max(abs(before), 1.0):
+            return shape
+        return refined
 
     @staticmethod
     def validate(shape, *, raise_on_error=False, require_solid=False):
@@ -1742,14 +1793,16 @@ class HVACLibraryAPI:
         redundant rebuild), which is how `envelopes_to_layers` recognizes
         it below.
         """
-        envelopes = [cls.refine(envelope_builder(0.0))]
+        # Envelopes are kept exactly as built; envelopes_to_layers() decides
+        # how to cut them (see _layer_between()).
+        envelopes = [envelope_builder(0.0)]
         cumulative = 0.0
         for layer_def in construction_layers:
             thickness_property = getattr(layer_def, "thickness_property", None)
             thickness = float(params.get(thickness_property, 0.0) or 0.0) if thickness_property else 0.0
             if thickness > _EPS:
                 cumulative += thickness
-                envelopes.append(cls.refine(envelope_builder(cumulative)))
+                envelopes.append(envelope_builder(cumulative))
             else:
                 envelopes.append(envelopes[-1])
         return envelopes
@@ -1767,8 +1820,51 @@ class HVACLibraryAPI:
         """
         layers = []
         for inner, outer in zip(envelopes, envelopes[1:]):
-            layers.append(None if outer is inner else cls.refine(cls.cut(outer, inner)))
+            layers.append(None if outer is inner else cls._layer_between(inner, outer))
         return layers
+
+    @classmethod
+    def _layer_between(cls, inner, outer):
+        """
+        One wall layer: the outer envelope with the inner envelope cut out.
+
+        OCC booleans on fused swept bodies are sensitive to whether the
+        inputs had their faces merged first, and neither way is always
+        right. So this tries the cut a few ways and keeps the first result
+        that passes a strict check: the inner envelope lies inside the
+        outer one, so the layer's volume must equal outer minus inner.
+        If no attempt passes, the best one found is returned (a valid shape
+        with the wrong volume is still preferred over nothing).
+        """
+        expected = float(outer.Volume) - float(inner.Volume)
+        tolerance = 1.0e-3 * max(abs(expected), 1.0)
+
+        def attempts():
+            # Step 1: exactly as built.
+            yield lambda: cls.cut(outer, inner)
+            # Step 2: faces merged first.
+            yield lambda: cls.cut(cls.refine(outer), cls.refine(inner))
+            # Step 3: a fuzzy cut, which tolerates nearly-touching faces.
+            yield lambda: outer.cut([inner], 1.0e-3)
+
+        best, best_score = None, None
+        for attempt in attempts():
+            try:
+                layer = cls.refine(attempt())
+                if layer is None or layer.isNull():
+                    continue
+                volume_ok = abs(float(layer.Volume) - expected) <= tolerance
+                valid = bool(layer.isValid())
+            except Exception:
+                continue
+            if volume_ok and valid:
+                return layer
+            score = (volume_ok, valid)
+            if best_score is None or score > best_score:
+                best, best_score = layer, score
+        if best is None:
+            raise ValueError("Could not cut a wall layer out of its envelopes")
+        return best
 
     @classmethod
     def build_layered_geometry(cls, envelope_builder, construction_layers, params):

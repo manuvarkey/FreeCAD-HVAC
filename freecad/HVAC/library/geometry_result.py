@@ -21,7 +21,7 @@ deals with a real GeometryResult, never a bare dict.
 
 from dataclasses import dataclass, field
 
-from .construction import LayerGeometry, FeatureGeometry  # noqa: F401 -- re-exported for GeometryResult.features consumers
+from .construction import FeatureGeometry, LayerGeometry  # noqa: F401 -- re-exported for GeometryResult.features consumers
 
 # Top-level raw-dict keys normalize() understands by name; anything else is
 # preserved verbatim on GeometryResult.extra rather than silently dropped.

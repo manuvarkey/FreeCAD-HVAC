@@ -5,7 +5,7 @@
 Elbows: smooth-radius and mitered (gored) bends between two ports.
 """
 
-from ._common import _mitered_bend, _positive, _profile_extent, _props, _size
+from ._common import _finish, _mitered_bend, _positive, _profile_extent, _props, _size
 
 
 def _elbow_route(context):
@@ -37,15 +37,15 @@ def measure_elbow(context):
 def build_elbow(context):
     api = context["hvac_api"]
     ports, route = _elbow_route(context)
-    shape = api.sweep(
-        [api.profile_from_port(route["ports"][0]), api.profile_from_port(route["ports"][1])], route["path"], solid=True
+
+    def envelope(offset):
+        ends = [api.profile_from_port(route["ports"][0], offset), api.profile_from_port(route["ports"][1], offset)]
+        return api.sweep(ends, route["path"], solid=True)
+
+    lengths = api.build_trim_rec_from_port_lengths(
+        [(ports[0], route["trim_lengths"][0]), (ports[1], route["trim_lengths"][1])]
     )
-    return {
-        "shape": api.refine(shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(
-            [(ports[0], route["trim_lengths"][0]), (ports[1], route["trim_lengths"][1])]
-        ),
-    }
+    return _finish(context, envelope, lengths)
 
 
 def _elbow_mitered_radius(context, ports):
@@ -81,8 +81,13 @@ def build_elbow_mitered(context):
     radius = _elbow_mitered_radius(context, ports)
     props = _props(context)
     cuts = max(int(props.get("NumberOfCuts", 1) or 1), 1)
-    shape, trims = _mitered_bend(api, port0, port1, radius, cuts)
-    return {
-        "shape": api.refine(shape),
-        "connection_lengths": api.build_trim_rec_from_port_lengths([(port0, trims[0]), (port1, trims[1])]),
-    }
+
+    def envelope(offset):
+        return _mitered_bend(api, port0, port1, radius, cuts, offset=offset)[0]
+
+    # The trims come from the tangent-arc route alone, the same one measure_elbow_mitered() reads.
+    route = api.make_elbow_path(port0, port1, radius)
+    lengths = api.build_trim_rec_from_port_lengths(
+        [(port0, route["trim_lengths"][0]), (port1, route["trim_lengths"][1])]
+    )
+    return _finish(context, envelope, lengths)

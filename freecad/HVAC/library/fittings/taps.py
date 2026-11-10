@@ -9,6 +9,7 @@ Taps: a branch collar attached to the surface of a continuous run
 from ._common import (
     _clip_branch_at_trunk_center,
     _extra_trim,
+    _finish,
     _lean_port,
     _loft,
     _port_axis_point,
@@ -148,19 +149,21 @@ def _straight_tap(context, run_factor, branch_factor):
     base_position = layout["base_position"]
     trim_a, trim_b, trim_branch = layout["trim_a"], layout["trim_b"], layout["trim_branch"]
 
-    trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)])
     branch_end = _trimmed(api, branch, trim_branch)
     reach = max(0.0, (api.port_position(branch_end) - base_position).dot(branch_dir))
-    stub = api.extrude(api.profile_from_port(branch_end), branch_dir * -reach, solid=True)
-    stub = _clip_tap_to_run_body(api, stub, trunk_center, run_a, run_b, trim_a, trim_b)
-    stub = _clip_branch_at_trunk_center(api, stub, trunk_center, branch)
 
-    return {
-        "shape": api.refine(api.fuse(trunk, stub)),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(
-            [(run_a, trim_a), (run_b, trim_b), (branch, trim_branch)]
-        ),
-    }
+    def envelope(offset):
+        trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)], offset)
+        stub = api.extrude(api.profile_from_port(branch_end, offset), branch_dir * -reach, solid=True)
+        stub = _clip_tap_to_run_body(api, stub, trunk_center, run_a, run_b, trim_a, trim_b)
+        stub = _clip_branch_at_trunk_center(api, stub, trunk_center, branch)
+        return api.fuse(trunk, stub)
+
+    return _finish(
+        context,
+        envelope,
+        api.build_trim_rec_from_port_lengths([(run_a, trim_a), (run_b, trim_b), (branch, trim_branch)]),
+    )
 
 
 def _saddle_tap_layout(context, run_factor, branch_factor, flare_factor=0.6):
@@ -222,31 +225,35 @@ def _saddle_tap(context, run_factor, branch_factor, flare_factor=0.6):
     trunk_center, branch_dir = layout["trunk_center"], layout["branch_dir"]
     tap_top, base_position = layout["tap_top"], layout["base_position"]
     growth, overlap, tap_height = layout["growth"], layout["overlap"], layout["tap_height"]
-    surface_profile = layout["surface_profile"]
     trim_a, trim_b, trim_branch = layout["trim_a"], layout["trim_b"], layout["trim_branch"]
 
     top_port = api.copy_port(branch, position=tap_top)
+    # The run surface sits one TapHeight below the tap top, along the branch axis.
+    surface_port = api.copy_port(branch, position=tap_top - branch_dir * tap_height)
     base_port = api.copy_port(branch, position=base_position)
-    top_profile = api.profile_from_port(top_port)
     base_growth = growth * (tap_height + overlap) / tap_height
-    base_profile = api.offset_profile(api.profile_from_port(base_port), base_growth)
-
-    trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)])
     branch_end = _trimmed(api, branch, trim_branch)
 
-    profiles = [top_profile, surface_profile, base_profile]
-    if (api.port_position(branch_end) - tap_top).Length > api.EPS:
-        profiles.insert(0, api.profile_from_port(branch_end))
-    stub = api.loft(profiles, solid=True, ruled=True)
-    stub = _clip_tap_to_run_body(api, stub, trunk_center, run_a, run_b, trim_a, trim_b)
-    stub = _clip_branch_at_trunk_center(api, stub, trunk_center, branch)
+    def envelope(offset):
+        # Same flare as the layout used for the trims, with every section grown by the wall offset.
+        top_profile = api.profile_from_port(top_port, offset)
+        surface_profile = api.offset_profile(api.profile_from_port(surface_port, offset), growth)
+        base_profile = api.offset_profile(api.profile_from_port(base_port, offset), base_growth)
+        trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)], offset)
 
-    return {
-        "shape": api.refine(api.fuse(trunk, stub)),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(
-            [(run_a, trim_a), (run_b, trim_b), (branch, trim_branch)]
-        ),
-    }
+        profiles = [top_profile, surface_profile, base_profile]
+        if (api.port_position(branch_end) - tap_top).Length > api.EPS:
+            profiles.insert(0, api.profile_from_port(branch_end, offset))
+        stub = api.loft(profiles, solid=True, ruled=True)
+        stub = _clip_tap_to_run_body(api, stub, trunk_center, run_a, run_b, trim_a, trim_b)
+        stub = _clip_branch_at_trunk_center(api, stub, trunk_center, branch)
+        return api.fuse(trunk, stub)
+
+    return _finish(
+        context,
+        envelope,
+        api.build_trim_rec_from_port_lengths([(run_a, trim_a), (run_b, trim_b), (branch, trim_branch)]),
+    )
 
 
 def measure_tap_straight(context):
@@ -324,27 +331,35 @@ def build_tap_shoe(context):
     trunk_center, branch_dir, toe_dir = layout["trunk_center"], layout["branch_dir"], layout["toe_dir"]
     tap_top, base_position = layout["tap_top"], layout["base_position"]
     overlap, tap_height = layout["overlap"], layout["tap_height"]
-    surface_profile = layout["surface_profile"]
     trim_a, trim_b, trim_branch = layout["trim_a"], layout["trim_b"], layout["trim_branch"]
 
     top_port = api.copy_port(branch, position=tap_top)
+    # The run surface sits one TapHeight below the tap top, along the branch axis.
+    surface_port = api.copy_port(branch, position=tap_top - branch_dir * tap_height)
     base_port = api.copy_port(branch, position=base_position)
-    top_profile = api.profile_from_port(top_port)
-    base_profile = api.stretch_profile_one_sided(api.profile_from_port(base_port), toe_dir, tap_height + overlap)
-
-    trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)])
     branch_end = _trimmed(api, branch, trim_branch)
 
-    profiles = [top_profile, surface_profile, base_profile]
-    if (api.port_position(branch_end) - tap_top).Length > api.EPS:
-        profiles.insert(0, api.profile_from_port(branch_end))
-    stub = api.loft(profiles, solid=True, ruled=True)
-    stub = _clip_tap_to_run_body(api, stub, trunk_center, run_a, run_b, trim_a, trim_b)
-    stub = _clip_branch_at_trunk_center(api, stub, trunk_center, branch)
+    def envelope(offset):
+        # Same shoe as the layout used for the trims, with every section grown by the wall offset.
+        top_profile = api.profile_from_port(top_port, offset)
+        surface_profile = api.stretch_profile_one_sided(
+            api.profile_from_port(surface_port, offset), toe_dir, tap_height
+        )
+        base_profile = api.stretch_profile_one_sided(
+            api.profile_from_port(base_port, offset), toe_dir, tap_height + overlap
+        )
+        trunk = _loft(api, [_trimmed(api, run_a, trim_a), _trimmed(api, run_b, trim_b)], offset)
 
-    return {
-        "shape": api.refine(api.fuse(trunk, stub)),
-        "connection_lengths": api.build_trim_rec_from_port_lengths(
-            [(run_a, trim_a), (run_b, trim_b), (branch, trim_branch)]
-        ),
-    }
+        profiles = [top_profile, surface_profile, base_profile]
+        if (api.port_position(branch_end) - tap_top).Length > api.EPS:
+            profiles.insert(0, api.profile_from_port(branch_end, offset))
+        stub = api.loft(profiles, solid=True, ruled=True)
+        stub = _clip_tap_to_run_body(api, stub, trunk_center, run_a, run_b, trim_a, trim_b)
+        stub = _clip_branch_at_trunk_center(api, stub, trunk_center, branch)
+        return api.fuse(trunk, stub)
+
+    return _finish(
+        context,
+        envelope,
+        api.build_trim_rec_from_port_lengths([(run_a, trim_a), (run_b, trim_b), (branch, trim_branch)]),
+    )

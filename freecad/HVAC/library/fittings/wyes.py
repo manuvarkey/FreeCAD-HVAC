@@ -9,6 +9,7 @@ import math
 
 from ._common import (
     _extend_leg,
+    _finish,
     _junction_minimums,
     _junction_shape_minimums,
     _junction_trims,
@@ -19,6 +20,36 @@ from ._common import (
     _size,
     _trimmed,
 )
+
+
+def _wye_mitered_branch_shapes(api, branch, split_face, route, main_center, cuts, offset=0.0):
+    """
+    The two pieces that carry one branch into the common leg of a mitered wye.
+
+    Returns (split_shape, bend_shape, branch_trim):
+    - split_shape: the branch's own half of the main profile, extruded from
+      the split plane up to where its bend starts (None if they coincide).
+    - bend_shape: the faceted bend from there to the branch.
+
+    `offset` grows both pieces outward by a wall offset (see _common._finish).
+    The split plane, bend route and trim never depend on it.
+    """
+    split_wire = api.offset_wire(split_face.OuterWire, offset)
+    split_port = api.copy_port(main_center, position=split_face.CenterOfMass)
+    main_tangent = route["ports"][1]
+    main_tangent_position = api.port_position(main_tangent)
+    main_reach = main_tangent_position - split_face.CenterOfMass
+    tangent_wire = split_wire
+    split_shape = None
+    if main_reach.Length > api.EPS:
+        split_shape = api.extrude(split_wire, main_reach, solid=True)
+        tangent_face = api.section_face(split_shape, (main_tangent_position, api.port_direction(main_tangent)))
+        tangent_wire = tangent_face.OuterWire
+
+    bend_shape, route_trims = _mitered_bend(
+        api, branch, split_port, route["radius"], cuts, profile1=tangent_wire, offset=offset
+    )
+    return split_shape, bend_shape, route_trims[0]
 
 
 def _wye_mitered_layout(context):
@@ -35,27 +66,18 @@ def _wye_mitered_layout(context):
     intrinsic_shapes = []
 
     for branch, branch_index, split_face, route in split_routes:
-        split_port = api.copy_port(main_center, position=split_face.CenterOfMass)
-        main_tangent = route["ports"][1]
-        main_tangent_position = api.port_position(main_tangent)
-        main_reach = main_tangent_position - split_face.CenterOfMass
-        tangent_face = split_face
-        split_shape = None
-        if main_reach.Length > api.EPS:
-            split_shape = api.extrude(split_face.OuterWire, main_reach, solid=True)
-            tangent_face = api.section_face(split_shape, (main_tangent_position, api.port_direction(main_tangent)))
-
-        bend_shape, route_trims = _mitered_bend(
-            api, branch, split_port, route["radius"], cuts, profile1=tangent_face.OuterWire
+        split_shape, bend_shape, branch_trim = _wye_mitered_branch_shapes(
+            api, branch, split_face, route, main_center, cuts
         )
-
         routes.append(
             {
                 "branch": branch,
                 "branch_index": branch_index,
+                "split_face": split_face,
+                "route": route,
                 "split_shape": split_shape,
                 "bend_shape": bend_shape,
-                "branch_trim": route_trims[0],
+                "branch_trim": branch_trim,
                 "radius": route["radius"],
             }
         )
@@ -79,6 +101,7 @@ def _wye_mitered_layout(context):
         "center": center,
         "main": main,
         "main_center": main_center,
+        "cuts": cuts,
         "routes": routes,
         "trims": trims,
     }
@@ -104,28 +127,38 @@ def build_wye_mitered(context):
     main_end = _trimmed(api, main, trims[0])
     main_reach = api.port_position(main_end) - api.port_position(main_center)
     main_tolerance = max(api.EPS, 1.0e-6 * _size(api, main))
-    shape = None
-    if main_reach.Length > main_tolerance:
-        shape = _loft(api, [main_end, main_center], 0.0, ruled=True)
 
-    for route in layout["routes"]:
-        branch = route["branch"]
-        branch_index = route["branch_index"]
+    def envelope(offset):
+        shape = None
+        if main_reach.Length > main_tolerance:
+            shape = _loft(api, [main_end, main_center], offset, ruled=True)
 
-        bend_shape = _extend_leg(api, route["bend_shape"], branch, route["branch_trim"], trims[branch_index])
-
-        shape = api.fuse(shape, route["split_shape"], bend_shape)
-
-    validation = api.validate(shape, require_solid=True)
-    if not validation["valid"] or validation["solid_count"] != 1:
-        raise RuntimeError(
-            "Mitered wye geometry could not be fused into one valid solid (requested radius {:.3f} mm; cuts {})".format(
-                float(_props(context).get("BranchRadius") or 0.0),
-                max(int(_props(context).get("NumberOfCuts", 2) or 2), 1),
+        for route in layout["routes"]:
+            branch = route["branch"]
+            # The layout already built the air-space pieces to measure them;
+            # only a wall envelope (offset > 0) needs them built again, larger.
+            if offset > 0.0:
+                split_shape, bend_shape, _ = _wye_mitered_branch_shapes(
+                    api, branch, route["split_face"], route["route"], main_center, layout["cuts"], offset
+                )
+            else:
+                split_shape, bend_shape = route["split_shape"], route["bend_shape"]
+            bend_shape = _extend_leg(
+                api, bend_shape, branch, route["branch_trim"], trims[route["branch_index"]], offset
             )
-        )
+            shape = api.fuse(shape, split_shape, bend_shape)
 
-    return {"shape": shape, "connection_lengths": api.build_trim_rec_from_port_lengths(list(zip(ports, trims)))}
+        validation = api.validate(shape, require_solid=True)
+        if not validation["valid"] or validation["solid_count"] != 1:
+            raise RuntimeError(
+                "Mitered wye geometry could not be fused into one valid solid "
+                "(requested radius {:.3f} mm; cuts {})".format(
+                    float(_props(context).get("BranchRadius") or 0.0), layout["cuts"]
+                )
+            )
+        return shape
+
+    return _finish(context, envelope, api.build_trim_rec_from_port_lengths(list(zip(ports, trims))))
 
 
 def _wye_common_index(api, ports):
@@ -323,100 +356,110 @@ def build_wye_radius(context):
     api = context["hvac_api"]
     ports, main_center, routes, trims = _wye_radius_layout(context)
 
-    # Sweep each split half of the main profile into its branch tangent.
-    split_sweeps = []
-    split_touch_sweeps = []
-    branch_sweeps = []
-    for branch, _branch_index, split_face, route in routes:
-        main_tangent = route["ports"][1]
-        main_tangent_position = api.port_position(main_tangent)
-        main_reach = main_tangent_position - split_face.CenterOfMass
-        tangent_face = split_face
-        if main_reach.Length > api.EPS:
-            route_overlap = 0.1 * _wye_route_clearance(api, branch)
-            section_probe = api.extrude(split_face.OuterWire, main_reach, solid=True)
-            probe = api.extrude(split_face.OuterWire, main_reach + api.unit(main_reach) * route_overlap, solid=True)
-            tangent_face = api.section_face(section_probe, (main_tangent_position, api.port_direction(main_tangent)))
-            split_sweeps.append(probe)
-            split_touch_sweeps.append(section_probe)
-        else:
-            split_sweeps.append(None)
-            split_touch_sweeps.append(None)
+    def envelope(offset):
+        # Sweep each split half of the main profile into its branch tangent.
+        split_sweeps = []
+        split_touch_sweeps = []
+        branch_sweeps = []
+        for branch, _branch_index, split_face, route in routes:
+            main_tangent = route["ports"][1]
+            main_tangent_position = api.port_position(main_tangent)
+            main_reach = main_tangent_position - split_face.CenterOfMass
+            split_wire = api.offset_wire(split_face.OuterWire, offset)
+            tangent_wire = split_wire
+            if main_reach.Length > api.EPS:
+                route_overlap = 0.1 * _wye_route_clearance(api, branch)
+                section_probe = api.extrude(split_wire, main_reach, solid=True)
+                probe = api.extrude(split_wire, main_reach + api.unit(main_reach) * route_overlap, solid=True)
+                tangent_face = api.section_face(
+                    section_probe, (main_tangent_position, api.port_direction(main_tangent))
+                )
+                tangent_wire = tangent_face.OuterWire
+                split_sweeps.append(probe)
+                split_touch_sweeps.append(section_probe)
+            else:
+                split_sweeps.append(None)
+                split_touch_sweeps.append(None)
 
-        branch_tangent = route["ports"][0]
-        try:
-            branch_sweeps.append(
-                api.sweep(
-                    [tangent_face.OuterWire, api.profile_from_port(branch_tangent)],
-                    api.reverse(route["path"]),
-                    solid=True,
+            branch_tangent = route["ports"][0]
+            try:
+                branch_sweeps.append(
+                    api.sweep(
+                        [tangent_wire, api.profile_from_port(branch_tangent, offset)],
+                        api.reverse(route["path"]),
+                        solid=True,
+                    )
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    "Wye branch sweep failed at effective radius {:.3f} mm: {}".format(route["radius"], exc)
+                ) from exc
+
+        # A small scaled overlap avoids a coplanar boolean at the split plane;
+        # the full main profile still stops at the split approach itself.
+        main_overlap = 0.1 * min(_wye_route_clearance(api, branch) for branch, _, _, _ in routes)
+        main_trim_start = api.copy_port(
+            main_center,
+            position=(api.port_position(main_center) - api.unit(api.port_direction(main_center)) * main_overlap),
+        )
+        trim_starts = [main_trim_start] + [route["ports"][0] for _, _, _, route in routes]
+        trim_sweeps = []
+        for port, trim_start, trim in zip(ports, trim_starts, trims):
+            trim_end = _trimmed(api, port, trim)
+            trim_reach = api.port_position(trim_end) - api.port_position(trim_start)
+            trim_tolerance = max(api.EPS, 1.0e-6 * _size(api, port))
+            if trim_reach.Length <= trim_tolerance:
+                trim_sweeps.append(None)
+                continue
+            trim_path = api.make_line(api.port_position(trim_start), api.port_position(trim_end))
+            try:
+                trim_sweeps.append(
+                    api.sweep(
+                        [api.profile_from_port(trim_start, offset), api.profile_from_port(trim_end, offset)],
+                        trim_path,
+                        solid=True,
+                    )
+                )
+            except Exception as exc:
+                edge_key = str(port.get("edge_key", "") or "?")
+                raise RuntimeError(
+                    "Wye trim sweep failed for port '{}' at {:.6f} mm: {}".format(edge_key, trim_reach.Length, exc)
+                ) from exc
+
+        main_trim = trim_sweeps[0]
+        fuse_orders = []
+        for connector_sweeps in (split_sweeps, split_touch_sweeps):
+            leg_a = (connector_sweeps[0], branch_sweeps[0], trim_sweeps[1])
+            leg_b = (connector_sweeps[1], branch_sweeps[1], trim_sweeps[2])
+            fuse_orders.extend(
+                (
+                    (main_trim, *leg_a, *leg_b),
+                    (main_trim, leg_a[0], leg_a[1], leg_b[0], leg_b[1], leg_a[2], leg_b[2]),
+                    (*leg_a, main_trim, *leg_b),
+                    (main_trim, *leg_b, *leg_a),
+                    (*connector_sweeps, *branch_sweeps, *trim_sweeps),
                 )
             )
-        except Exception as exc:
+
+        # OCC booleans are order-sensitive when several swept solids share seams.
+        # Keep the first sequence that produces exactly one valid solid.
+        shape = None
+        for fuse_order in fuse_orders:
+            try:
+                candidate = api.fuse(*fuse_order)
+            except Exception:
+                continue
+            validation = api.validate(candidate, require_solid=True)
+            if validation["valid"] and validation["solid_count"] == 1:
+                shape = candidate
+                break
+        if shape is None:
+            requested_radius = float(_props(context).get("BranchRadius") or 0.0)
+            effective_radii = ", ".join("{:.3f}".format(route["radius"]) for _, _, _, route in routes)
             raise RuntimeError(
-                "Wye branch sweep failed at effective radius {:.3f} mm: {}".format(route["radius"], exc)
-            ) from exc
-
-    # A small scaled overlap avoids a coplanar boolean at the split plane;
-    # the full main profile still stops at the split approach itself.
-    main_overlap = 0.1 * min(_wye_route_clearance(api, branch) for branch, _, _, _ in routes)
-    main_trim_start = api.copy_port(
-        main_center,
-        position=(api.port_position(main_center) - api.unit(api.port_direction(main_center)) * main_overlap),
-    )
-    trim_starts = [main_trim_start] + [route["ports"][0] for _, _, _, route in routes]
-    trim_sweeps = []
-    for port, trim_start, trim in zip(ports, trim_starts, trims):
-        trim_end = _trimmed(api, port, trim)
-        trim_reach = api.port_position(trim_end) - api.port_position(trim_start)
-        trim_tolerance = max(api.EPS, 1.0e-6 * _size(api, port))
-        if trim_reach.Length <= trim_tolerance:
-            trim_sweeps.append(None)
-            continue
-        trim_path = api.make_line(api.port_position(trim_start), api.port_position(trim_end))
-        try:
-            trim_sweeps.append(
-                api.sweep([api.profile_from_port(trim_start), api.profile_from_port(trim_end)], trim_path, solid=True)
+                "Wye geometry could not be fused into one valid solid "
+                "(requested radius {:.3f} mm; effective branch radii {} mm)".format(requested_radius, effective_radii)
             )
-        except Exception as exc:
-            edge_key = str(port.get("edge_key", "") or "?")
-            raise RuntimeError(
-                "Wye trim sweep failed for port '{}' at {:.6f} mm: {}".format(edge_key, trim_reach.Length, exc)
-            ) from exc
+        return shape
 
-    main_trim = trim_sweeps[0]
-    fuse_orders = []
-    for connector_sweeps in (split_sweeps, split_touch_sweeps):
-        leg_a = (connector_sweeps[0], branch_sweeps[0], trim_sweeps[1])
-        leg_b = (connector_sweeps[1], branch_sweeps[1], trim_sweeps[2])
-        fuse_orders.extend(
-            (
-                (main_trim, *leg_a, *leg_b),
-                (main_trim, leg_a[0], leg_a[1], leg_b[0], leg_b[1], leg_a[2], leg_b[2]),
-                (*leg_a, main_trim, *leg_b),
-                (main_trim, *leg_b, *leg_a),
-                (*connector_sweeps, *branch_sweeps, *trim_sweeps),
-            )
-        )
-
-    # OCC booleans are order-sensitive when several swept solids share seams.
-    # Keep the first sequence that produces exactly one valid solid.
-    shape = None
-    for fuse_order in fuse_orders:
-        try:
-            candidate = api.fuse(*fuse_order)
-        except Exception:
-            continue
-        validation = api.validate(candidate, require_solid=True)
-        if validation["valid"] and validation["solid_count"] == 1:
-            shape = candidate
-            break
-    if shape is None:
-        requested_radius = float(_props(context).get("BranchRadius") or 0.0)
-        effective_radii = ", ".join("{:.3f}".format(route["radius"]) for _, _, _, route in routes)
-        raise RuntimeError(
-            "Wye geometry could not be fused into one valid solid "
-            "(requested radius {:.3f} mm; effective branch radii {} mm)".format(requested_radius, effective_radii)
-        )
-
-    return {"shape": shape, "connection_lengths": api.build_trim_rec_from_port_lengths(list(zip(ports, trims)))}
+    return _finish(context, envelope, api.build_trim_rec_from_port_lengths(list(zip(ports, trims))))
