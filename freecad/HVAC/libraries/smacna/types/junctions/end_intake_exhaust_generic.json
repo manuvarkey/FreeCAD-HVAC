@@ -36,8 +36,12 @@
     }
   ],
   "generator": {
-    "module": "junctions",
-    "function": "build_diffuser_generic"
+    "module": "shared:terminals",
+    "function": "build_terminal_body_generic"
+  },
+  "connection_lengths": {
+    "module": "shared:terminals",
+    "function": "measure_terminal_body_generic"
   },
   "loss": {
     "module": "shared:losses",

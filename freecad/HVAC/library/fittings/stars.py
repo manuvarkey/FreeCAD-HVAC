@@ -41,7 +41,26 @@ def _port_trim_names(count):
     return [_PORT_TRIM_NAMES[i] if i < len(_PORT_TRIM_NAMES) else None for i in range(count)]
 
 
-def _star_junction_layout(context, default_factor):
+def _star_port_names(api, context, ports, align_branch):
+    """
+    The trim property name of each port, in port order.
+
+    A type that declares the tee names (TrimRunA/TrimRunB/TrimBranch) gets
+    those, matched to the classifier's run pair and branch. Any other star
+    fitting uses the plain TrimPortA.. letters.
+    """
+    names = _port_trim_names(len(ports))
+    params = _props(context)
+    tee_names = ("TrimRunA", "TrimRunB", "TrimBranch")
+    if align_branch and len(ports) == 3 and any(name in params for name in tee_names):
+        if api.collinear_port_index_pairs(context):
+            run_a, run_b, branch = api.run_branch_ports(context)
+            by_port = {id(run_a): tee_names[0], id(run_b): tee_names[1], id(branch): tee_names[2]}
+            names = [by_port[id(port)] for port in ports]
+    return names
+
+
+def _star_junction_layout(context, default_factor, align_branch=False):
     api = context["hvac_api"]
     ports = api.connected_ports(context)
     if len(ports) < 3:
@@ -49,19 +68,23 @@ def _star_junction_layout(context, default_factor):
     p = _props(context)
     center = api.average_point([api.port_position(port) for port in ports])
     default_trim = max(_size(api, port) for port in ports) * default_factor
-    trims = _star_trims(p, _port_trim_names(len(ports)), default_trim)
-    return ports, center, trims
+    names = _star_port_names(api, context, ports, align_branch)
+    trims = _star_trims(p, names, default_trim)
+    # Each port's role ("RunA", "PortB", ...) is its trim name without the
+    # "Trim" prefix; a flange switch for that port uses the same role.
+    suffixes = {port.get("edge_key"): name[len("Trim") :] for port, name in zip(ports, names) if name}
+    return ports, center, trims, suffixes
 
 
-def measure_star_junction(context, default_factor=0.6):
+def measure_star_junction(context, default_factor=0.6, align_branch=False):
     api = context["hvac_api"]
-    ports, center, trims = _star_junction_layout(context, default_factor)
+    ports, center, trims, _suffixes = _star_junction_layout(context, default_factor, align_branch)
     return api.build_trim_rec_from_port_lengths(list(zip(ports, trims)))
 
 
 def _star_junction(context, default_factor=0.6, align_branch=False):
     api = context["hvac_api"]
-    ports, center, trims = _star_junction_layout(context, default_factor)
+    ports, center, trims, suffixes = _star_junction_layout(context, default_factor, align_branch)
     branch = None
     if align_branch:
         pairs = api.collinear_port_index_pairs(context)
@@ -81,11 +104,15 @@ def _star_junction(context, default_factor=0.6, align_branch=False):
             legs.append(leg)
         return api.fuse(*legs)
 
-    return _finish(context, envelope, api.build_trim_rec_from_port_lengths(list(zip(ports, trims))))
+    return _finish(context, envelope, api.build_trim_rec_from_port_lengths(list(zip(ports, trims))), suffixes)
 
 
 def measure_branch_generic(context):
-    return measure_star_junction(context, 0.60)
+    return measure_star_junction(context, 0.60, align_branch=True)
+
+
+def measure_wye_generic(context):
+    return measure_star_junction(context, 0.70)
 
 
 def measure_cross(context):
@@ -115,6 +142,11 @@ def _star_body(api, center, ports, trims, minimums, branch=None, offset=0.0):
 
 def build_branch_generic(context):
     return _star_junction(context, 0.60, align_branch=True)
+
+
+def build_wye_generic(context):
+    """Plain three-leg star for a wye: slightly longer default legs than the generic branch."""
+    return _star_junction(context, 0.70)
 
 
 def build_cross(context):

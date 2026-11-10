@@ -9,6 +9,34 @@ data/dispatch/loss code, none for shape construction; the
 `topology_family_sub_classification` naming convention; library code talks
 only to `HVACLibraryAPI` / `HVACLossAPI`.
 
+## 0. Progress
+
+| Stage | State | Notes |
+|---|---|---|
+| 0 | Done | Ovals accept any width/height. One trim naming scheme. Unknown property keys are load errors. Dead per-port trim properties on star fittings now work. |
+| 1 | Mostly done | Shared `library/fittings/` package behind the `shared:` module prefix; both libraries are type-defs only (smacna keeps `features.py` and its PartScripts). All shared fittings are hollow and layered, with flanges as data. `api.build_fitting` / `measure_fitting` / `build_layered_fitting` added. `tools/geometry_smoke.py` added. **Open:** split `library_api.py` into modules. |
+| 2 to 11 | Not started | |
+
+Differences from the plan as written below:
+
+- Libraries do not keep thin delegating generator modules. A type-def names
+  a shared module directly (`"module": "shared:elbows"`), so there is no
+  per-library Python for a standard fitting at all.
+- Flanges are handled by the shared finisher (`_common._finish`) from
+  `FlangeThickness` / `FlangeHeight` / `ShowFlange*` properties, for every
+  shared fitting. Stage 7 item 1 is therefore largely done; what remains
+  there is moving flanges from "fused into the casing" to construction
+  features.
+- Every smacna junction type now declares `connection_lengths` (Stage 7
+  item 2 done).
+
+Known geometry issues from the smoke run (194 of 199 builds valid):
+`branch_wye_radius` with an Oval profile is hollow with the right volume but
+fails OCC's validity check; `branch_tap_mitered_shoe` with a tall Oval was
+already invalid before this work; `through_offset_radiussed` rejects the
+smoke run's default radius for the test offset (a parameter limit, not a
+defect).
+
 ## 1. Where things stand
 
 Findings from reading the code that shape the plan:

@@ -18,7 +18,7 @@ one of:
 - `{"layers": {"casing": {"shape": <Part.Shape>}, "insulation": {"shape": <Part.Shape or None>}}}`
   -- for a type with more than one construction layer (e.g. a casing plus
   its own insulation solid, as in `smacna/models/circular_straight.py`,
-  `smacna/generators/junctions.py:build_elbow`). Layer ids are whatever the
+  `library/fittings/elbows.py:build_elbow`). Layer ids are whatever the
   type-def's own `"construction"` block declares (see
   `freecad/HVAC/libraries/README.md`) -- `build_geometry()` stamps each
   returned layer's semantic roles on from there.

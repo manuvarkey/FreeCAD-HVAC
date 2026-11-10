@@ -89,8 +89,12 @@
     ]
   },
   "generator": {
-    "module": "junctions",
+    "module": "shared:transitions",
     "function": "build_transition"
+  },
+  "connection_lengths": {
+    "module": "shared:transitions",
+    "function": "measure_transition"
   },
   "loss": {
     "module": "shared:losses",

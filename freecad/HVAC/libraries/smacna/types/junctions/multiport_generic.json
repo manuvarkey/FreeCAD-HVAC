@@ -84,8 +84,12 @@
     ]
   },
   "generator": {
-    "module": "junctions",
+    "module": "shared:stars",
     "function": "build_manifold"
+  },
+  "connection_lengths": {
+    "module": "shared:stars",
+    "function": "measure_manifold"
   },
   "loss": {
     "module": "shared:losses",

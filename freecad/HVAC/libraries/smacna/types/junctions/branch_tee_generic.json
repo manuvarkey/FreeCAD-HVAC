@@ -65,14 +65,14 @@
       "default": 1.0
     },
     {
-      "name": "ShowFlangeA",
+      "name": "ShowFlangeRunA",
       "prop_type": "App::PropertyBool",
       "group": "Options",
       "description": "Include the flange at run port A",
       "default": true
     },
     {
-      "name": "ShowFlangeB",
+      "name": "ShowFlangeRunB",
       "prop_type": "App::PropertyBool",
       "group": "Options",
       "description": "Include the flange at run port B",
@@ -113,8 +113,12 @@
     ]
   },
   "generator": {
-    "module": "junctions",
-    "function": "build_tee"
+    "module": "shared:stars",
+    "function": "build_branch_generic"
+  },
+  "connection_lengths": {
+    "module": "shared:stars",
+    "function": "measure_branch_generic"
   },
   "loss": {
     "module": "shared:losses",

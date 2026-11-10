@@ -30,6 +30,7 @@ recipes. Library code must use this surface instead of importing FreeCAD,
 Part, or internal HVAC modules directly.
 """
 
+import importlib
 import math
 from dataclasses import dataclass, field
 from typing import Any, Mapping
@@ -475,10 +476,8 @@ class HVACLibraryAPI:
         section_params grows. Shared helper for building an insulation (or
         any other wrap-around) shape's own outer profile from a casing
         port's profile, without duplicating this per fitting generator.
-        Inverse of shrinking a port's section by a wall thickness (see
-        e.g. smacna/generators/junctions.py's own private _inset_port,
-        which this does not replace -- that one shrinks to build a hollow
-        casing wall, this one grows to wrap something around the outside).
+        Used for a flange collar (it sits on the outside of the wall) and
+        for any other shape wrapped around a port's own section.
         """
         profile = HVACLibraryAPI.port_profile(port)
         params = HVACLibraryAPI.port_section_params(port)
@@ -1884,6 +1883,87 @@ class HVACLibraryAPI:
         return {
             "layers": {layer_def.id: {"shape": shape} for layer_def, shape in zip(construction_layers, layer_shapes)}
         }
+
+    # ------------------------------------------------------------------
+    # Standard fittings
+    # ------------------------------------------------------------------
+
+    # name -> (shared module, build function, measure function). These are
+    # the same shared fitting modules a type-def reaches with the "shared:"
+    # module prefix, offered here for code (e.g. a PartScript) that wants a
+    # standard fitting as a starting point instead of a whole type.
+    STANDARD_FITTINGS = {
+        "elbow": ("elbows", "build_elbow", "measure_elbow"),
+        "elbow_mitered": ("elbows", "build_elbow_mitered", "measure_elbow_mitered"),
+        "transition": ("transitions", "build_transition", "measure_transition"),
+        "transition_radiussed": ("transitions", "build_transition_radiussed", "measure_transition_radiussed"),
+        "transition_mitered": ("transitions", "build_transition_mitered", "measure_transition_mitered"),
+        "tap_straight": ("taps", "build_tap_straight", "measure_tap_straight"),
+        "tap_saddle": ("taps", "build_tap_saddle", "measure_tap_saddle"),
+        "tap_shoe": ("taps", "build_tap_shoe", "measure_tap_shoe"),
+        "tee_straight": ("tees", "build_tee_straight", "measure_tee_straight"),
+        "tee_radius_edge": ("tees", "build_tee_radius_edge", "measure_tee_radius_edge"),
+        "tee_radius_center": ("tees", "build_tee_radius_center", "measure_tee_radius_center"),
+        "tee_mitered_shoe": ("tees", "build_tee_mitered_shoe", "measure_tee_mitered_shoe"),
+        "tee_lateral": ("tees", "build_lateral_tee", "measure_lateral_tee"),
+        "wye_mitered": ("wyes", "build_wye_mitered", "measure_wye_mitered"),
+        "wye_radius": ("wyes", "build_wye_radius", "measure_wye_radius"),
+        "star_branch": ("stars", "build_branch_generic", "measure_branch_generic"),
+        "star_wye": ("stars", "build_wye_generic", "measure_wye_generic"),
+        "star_cross": ("stars", "build_cross", "measure_cross"),
+        "star_multiport": ("stars", "build_manifold", "measure_manifold"),
+        "terminal_body": ("terminals", "build_terminal_body_generic", "measure_terminal_body_generic"),
+        "duct_closure": ("terminals", "build_duct_closure_generic", "measure_duct_closure_generic"),
+        "inline_damper": ("inline", "build_damper_generic", "measure_damper_generic"),
+        "inline_vav": ("inline", "build_vav_generic", "measure_vav_generic"),
+        "through": ("through", "build_through_generic", "measure_through_generic"),
+    }
+
+    @classmethod
+    def _standard_fitting_function(cls, name, index):
+        """Look up one function of a named standard fitting (index 1 = build, 2 = measure)."""
+        try:
+            entry = cls.STANDARD_FITTINGS[name]
+        except KeyError:
+            raise ValueError(
+                "Unknown standard fitting '{}'. Known: {}".format(name, ", ".join(sorted(cls.STANDARD_FITTINGS)))
+            ) from None
+        # Imported on demand: the fitting modules are plain library code and
+        # only ever reach this API through context["hvac_api"].
+        module = importlib.import_module("{}.fittings.{}".format(__package__, entry[0]))
+        return getattr(module, entry[index])
+
+    @classmethod
+    def build_fitting(cls, name, context):
+        """
+        Build one of the standard fittings (see STANDARD_FITTINGS) for the
+        given geometry context: its hollow, layered shape plus its trims,
+        as the usual `{"layers"|"shape": ..., "connection_lengths": ...}`
+        dict. The wall build-up and flanges come from the context's own
+        type (construction layers, Thickness, FlangeThickness, ...).
+        """
+        return cls._standard_fitting_function(name, 1)(context)
+
+    @classmethod
+    def measure_fitting(cls, name, context):
+        """The trim records of a standard fitting, without building any shape."""
+        return cls._standard_fitting_function(name, 2)(context)
+
+    @classmethod
+    def build_layered_fitting(cls, context, envelope_builder, connection_lengths, port_roles=None):
+        """
+        Finish a custom fitting the same way the standard ones are finished.
+
+        `envelope_builder(offset)` returns the fitting's outer boundary as a
+        solid, grown outward by `offset` from the air space. This cuts every
+        declared construction layer out of it, adds flanges at the fitting
+        ends when the type declares FlangeThickness/FlangeHeight, and
+        returns the result dict with `connection_lengths` attached.
+        `port_roles` optionally maps edge_key -> role name (e.g. "Branch")
+        for per-port ShowFlange<Role> switches.
+        """
+        common = importlib.import_module("{}.fittings._common".format(__package__))
+        return common._finish(context, envelope_builder, connection_lengths, port_roles)
 
     @staticmethod
     def shape_from_fcstd(

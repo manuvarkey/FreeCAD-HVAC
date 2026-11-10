@@ -74,28 +74,28 @@
       "default": 1.0
     },
     {
-      "name": "ShowFlangeA",
+      "name": "ShowFlangePortA",
       "prop_type": "App::PropertyBool",
       "group": "Options",
       "description": "Include the flange at port A",
       "default": true
     },
     {
-      "name": "ShowFlangeB",
+      "name": "ShowFlangePortB",
       "prop_type": "App::PropertyBool",
       "group": "Options",
       "description": "Include the flange at port B",
       "default": true
     },
     {
-      "name": "ShowFlangeC",
+      "name": "ShowFlangePortC",
       "prop_type": "App::PropertyBool",
       "group": "Options",
       "description": "Include the flange at port C",
       "default": true
     },
     {
-      "name": "ShowFlangeD",
+      "name": "ShowFlangePortD",
       "prop_type": "App::PropertyBool",
       "group": "Options",
       "description": "Include the flange at port D",
@@ -129,8 +129,12 @@
     ]
   },
   "generator": {
-    "module": "junctions",
+    "module": "shared:stars",
     "function": "build_cross"
+  },
+  "connection_lengths": {
+    "module": "shared:stars",
+    "function": "measure_cross"
   },
   "loss": {
     "module": "shared:losses",

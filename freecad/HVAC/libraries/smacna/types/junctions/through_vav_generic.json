@@ -35,8 +35,12 @@
     }
   ],
   "generator": {
-    "module": "junctions",
+    "module": "shared:inline",
     "function": "build_vav_generic"
+  },
+  "connection_lengths": {
+    "module": "shared:inline",
+    "function": "measure_vav_generic"
   },
   "loss": {
     "module": "shared:losses",

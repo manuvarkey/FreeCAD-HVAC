@@ -30,7 +30,11 @@
     }
   ],
   "generator": {
-    "module": "junctions",
+    "module": "shared:terminals",
     "function": "build_duct_closure_generic"
+  },
+  "connection_lengths": {
+    "module": "shared:terminals",
+    "function": "measure_duct_closure_generic"
   }
 }

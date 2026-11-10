@@ -22,7 +22,7 @@
     }
   ],
   "generator": {
-    "module": "junctions",
+    "module": "shared:markers",
     "function": "build_manifold_marker"
   }
 }

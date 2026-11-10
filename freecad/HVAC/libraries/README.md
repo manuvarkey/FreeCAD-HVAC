@@ -84,6 +84,31 @@ Use the shared modules for standard fittings, so a library is only data
 can use them the same way; nothing has to be copied into its `generators/`.
 Only a plain module name may follow the prefix.
 
+The shared geometry modules are `segments`, `elbows`, `transitions`, `taps`,
+`tees`, `wyes`, `stars`, `terminals`, `inline`, `through` and `markers`. Every
+fitting in them is built as an *envelope*: its air space grown outward by a
+wall offset. What comes out therefore depends only on what the type-def
+declares:
+
+- **Wall layers.** Each construction layer that names a `thickness_property`
+  becomes its own hollow shell, innermost first (a casing, then insulation
+  around it, ...). If no layer has a thickness above zero, the fitting is
+  returned as one solid body of the air space.
+- **Flanges.** If the type declares `FlangeThickness` and `FlangeHeight`
+  (both above zero), a flange collar is fused onto the structural layer at
+  every end of the fitting. One port's flange can be switched off with a
+  boolean property: `ShowFlange<Role>` (the role is that port's trim name
+  without `Trim`, e.g. `ShowFlangeBranch`, `ShowFlangePortA`),
+  `ShowFlange<N>` (1-based port number, e.g. `ShowFlange1` on a two-port
+  fitting), or one shared `ShowFlange` for all ports.
+
+Code that needs a standard fitting directly (a PartScript, a library's own
+generator) gets the same builders through the API instead of a type-def:
+`api.build_fitting("elbow", context)` / `api.measure_fitting("elbow", context)`
+(names in `HVACLibraryAPI.STANDARD_FITTINGS`), and
+`api.build_layered_fitting(context, envelope_builder, connection_lengths)`
+to give a custom shape the same layer and flange treatment.
+
 ## Type-def JSON (`HVACTypeDef`, see `freecad/HVAC/library/Library.py`)
 
 Common fields, both segments and junctions:
@@ -106,8 +131,8 @@ Common fields, both segments and junctions:
 ### `connection_lengths`: independent trim measurement
 
 ```json
-"generator": {"module": "junctions", "function": "build_elbow"},
-"connection_lengths": {"module": "junctions", "function": "measure_elbow"}
+"generator": {"module": "shared:elbows", "function": "build_elbow"},
+"connection_lengths": {"module": "shared:elbows", "function": "measure_elbow"}
 ```
 
 `generator` (or `geometry`, for a PartScript/static backend) builds the
