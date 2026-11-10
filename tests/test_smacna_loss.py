@@ -99,11 +99,17 @@ def test_contraction_zeta_exact_grid_point():
 # ----------------------------------------------------------------------------
 
 def test_diverging_branch_tee90_exact_grid_point():
-    # ab_on_ac=0.5 (index3), vb_on_vc=0.5(index4) -> raw zeta_b=1.40
-    zeta_branch, _ = sl.diverging_branch_zetas(
-        angle_deg=90.0, ab_on_ac=0.5, vb_on_vc=0.5, vs_on_vc=0.4
-    )
-    assert zeta_branch == pytest.approx(1.40 / (0.5 ** 2))
+    # Table 14-14 A (90 deg) is keyed by Ab/Ac and the FLOW ratio Qb/Qc.
+    # Ab/Ac = 0.5 with Vb/Vc = 1.0 gives Qb/Qc = 0.5 -> printed C = 1.4.
+    zeta_branch, _ = sl.diverging_branch_zetas(angle_deg=90.0, ab_on_ac=0.5, vb_on_vc=1.0, vs_on_vc=0.4)
+    assert zeta_branch == pytest.approx(1.40 / (1.0**2))
+
+
+def test_diverging_branch_lookup_uses_flow_ratio_not_velocity_ratio():
+    # Ab/Ac = 0.5, Vb/Vc = 0.4 -> Qb/Qc = 0.2 -> printed C = 1.0 (not the
+    # 1.2 printed under 0.4, which is what a velocity-ratio lookup would hit).
+    zeta_branch, _ = sl.diverging_branch_zetas(angle_deg=90.0, ab_on_ac=0.5, vb_on_vc=0.4, vs_on_vc=0.4)
+    assert zeta_branch == pytest.approx(1.0 / (0.4**2))
 
 
 def test_diverging_branch_tee90_straight_leg_exact_grid_point():
@@ -121,14 +127,46 @@ def test_diverging_branch_selects_wye_vs_tee_table():
 
 
 def test_converging_branch_tee90_exact_grid_point():
-    # Ab_on_Ac=0.4 (index3 of [0.1,0.2,0.3,0.4,0.6,0.8,1.0]), Vb_on_Vc=0.4 (index3) -> raw zeta_b=0.94
-    zeta_branch, _ = sl.converging_branch_zetas(
-        angle_deg=90.0, ab_on_ac=0.4, vb_on_vc=0.4, vs_on_vc=0.6
-    )
-    assert zeta_branch == pytest.approx(0.94 / (0.4 ** 2))
+    # Table 14-13 B is keyed by Ab/Ac and the FLOW ratio Qb/Qc.
+    # Ab/Ac = 0.4 with Vb/Vc = 1.0 gives Qb/Qc = 0.4 -> printed branch C = 0.94.
+    zeta_branch, _ = sl.converging_branch_zetas(angle_deg=90.0, ab_on_ac=0.4, vb_on_vc=1.0, vs_on_vc=0.6)
+    assert zeta_branch == pytest.approx(0.94 / (1.0**2))
+
+
+def test_converging_branch_tee90_main_uses_flow_ratio():
+    # Main coefficient is printed against Qb/Qc: 0.4 -> 0.46.
+    _, zeta_straight = sl.converging_branch_zetas(angle_deg=90.0, ab_on_ac=0.4, vb_on_vc=1.0, vs_on_vc=0.5)
+    assert zeta_straight == pytest.approx(0.46 / (0.5**2))
+
+
+def test_converging_branch_wye45_stays_velocity_keyed():
+    # Table 14-13 A really is keyed by Vb/Vc: Ab/Ac = 0.4, Vb/Vc = 0.5 -> -0.21.
+    zeta_branch, _ = sl.converging_branch_zetas(angle_deg=45.0, ab_on_ac=0.4, vb_on_vc=0.5, vs_on_vc=0.5)
+    assert zeta_branch == pytest.approx(-0.21 / (0.5**2))
 
 
 def test_converging_branch_wye_vs_tee_differ():
     wye_branch, _ = sl.converging_branch_zetas(angle_deg=45.0, ab_on_ac=0.4, vb_on_vc=0.7, vs_on_vc=0.6)
     tee_branch, _ = sl.converging_branch_zetas(angle_deg=90.0, ab_on_ac=0.4, vb_on_vc=0.7, vs_on_vc=0.6)
     assert wye_branch != tee_branch
+
+
+# ----------------------------------------------------------------------------
+# Corrections and notes checked against the printed tables
+# ----------------------------------------------------------------------------
+
+@pytest.mark.parametrize("theta, factor", [(0.0, 0.0), (45.0, 0.60), (90.0, 1.0), (180.0, 1.40), (37.5, 0.525)])
+def test_elbow_angle_factor_note_1(theta, factor):
+    assert sl.elbow_angle_factor(theta) == pytest.approx(factor)
+
+
+def test_elbow_reynolds_correction_reaches_one_at_20e4_not_before():
+    # R/W >= 0.75: printed 1.15 at Re = 14e4 and 1.0 from 20e4 up.
+    assert sl._elbow_reynolds_correction(1.0, 14e4) == pytest.approx(1.15)
+    assert sl._elbow_reynolds_correction(1.0, 17e4) == pytest.approx(1.075)
+    assert sl._elbow_reynolds_correction(1.0, 20e4) == pytest.approx(1.0)
+
+
+def test_mitered_rect_elbow_has_the_3_and_5_aspect_columns():
+    assert sl.elbow_zeta_rect_mitered(3.0, 45.0) == pytest.approx(0.28)
+    assert sl.elbow_zeta_rect_mitered(5.0, 90.0) == pytest.approx(0.89)

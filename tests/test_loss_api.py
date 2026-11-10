@@ -82,6 +82,18 @@ def test_elbow_loss_round():
     assert path.to_edge_key == "OUT"
 
 
+def test_elbow_loss_scales_with_turn_angle():
+    # A 45 deg turn: outward port directions are 135 deg apart.
+    inlet = _port("IN", (-1, 0, 0), True, profile="Circular", diameter=200.0)
+    outlet = _port("OUT", (1, 1, 0), False, profile="Circular", diameter=200.0)
+    context = {"connected_ports": [inlet, outlet], "properties": {"CenterlineRadius": 200.0}}
+    result = api.elbow_loss(context)
+    assert result.status == api.EXACT
+    expected = smacna_loss.elbow_zeta_round(1.0) * smacna_loss.elbow_angle_factor(45.0)
+    assert _paths_by_edge(result) == pytest.approx({"OUT": expected})
+    assert expected == pytest.approx(0.22 * 0.60)
+
+
 def test_elbow_loss_rectangular():
     inlet = _port("IN", (-1, 0, 0), True, profile="Rectangular", width=200.0, height=200.0)
     outlet = _port("OUT", (0, 1, 0), False, profile="Rectangular", width=200.0, height=200.0,

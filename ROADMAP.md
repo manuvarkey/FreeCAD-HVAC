@@ -15,7 +15,8 @@ only to `HVACLibraryAPI` / `HVACLossAPI`.
 |---|---|---|
 | 0 | Done | Ovals accept any width/height. One trim naming scheme. Unknown property keys are load errors. Dead per-port trim properties on star fittings now work. |
 | 1 | Mostly done | Shared `library/fittings/` package behind the `shared:` module prefix; both libraries are type-defs only (smacna keeps `features.py` and its PartScripts). All shared fittings are hollow and layered, with flanges as data. `api.build_fitting` / `measure_fitting` / `build_layered_fitting` added. `tools/geometry_smoke.py` added. **Open:** split `library_api.py` into modules. |
-| 2 to 11 | Not started | |
+| 2 | Started | Step 2 done: the ten existing tables were checked value by value against the reference. Values were right, but the lookups were not: 14-13 B and 14-14 A are keyed by the flow ratio Qb/Qc and were being read with the velocity ratio Vb/Vc (fixed); the elbow turn-angle factor (14-10 Note 1) was not applied, so every elbow was costed as 90 degrees (fixed); the Reynolds correction stopped at 14e4 instead of reaching 1.0 at 20e4 (fixed); two H/W columns of 14-10 D were missing (added). **Open:** `LossTable` infrastructure and digitising the remaining tables. Still not from the reference: 14-14 A only has its 45 and 90 degree branch tables (30 and 60 are in the source), chosen by a split at 67.5 degrees rather than interpolated. |
+| 3 to 11 | Not started | |
 
 Differences from the plan as written below:
 

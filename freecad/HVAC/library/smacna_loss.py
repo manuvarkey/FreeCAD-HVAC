@@ -27,13 +27,19 @@ local-loss-coefficient (zeta) tables, with simple clamped linear/bilinear
 interpolation instead of numpy/scipy so this module has no dependency beyond
 the standard library.
 
-Table values were cross-checked against the open-source reference
+Table values were first cross-checked against the open-source reference
 implementation at https://github.com/TomLXXVI/python-hvac
 (hvac/fluid_flow/fittings/duct/smacna.py), which digitizes the same ASHRAE
-Duct Fitting Database tables (fitting codes A7x/A8x/A9x/A10x/A11x). They have
-not been re-verified against a purchased primary SMACNA/ASHRAE source
-document -- spot-check against a primary reference before relying on this for
-critical fan/AHU sizing decisions.
+Duct Fitting Database tables (fitting codes A7x/A8x/A9x/A10x/A11x), and have
+since been checked value by value against the SMACNA "Duct Design Tables
+and Charts" chapter (Tables 14-10 A/C/D/F, 14-11 A/B, 14-12 A, 14-13 A/B and
+14-14 A). A few entries look like misprints in the source (e.g. 0.27 at
+R/W = 1.0, H/W = 6.0 in 14-10 F; 0.90 at A1/A = 6, 45 deg in 14-11 A); they
+are kept exactly as printed.
+
+A "--" cell in the source (a combination the table does not cover) is
+filled with the last printed value in its row, so a lookup there returns
+that value instead of failing.
 
 Every function here is a pure function of plain floats (no FreeCAD, no unit
 objects) and returns a dimensionless loss coefficient already referenced to
@@ -119,6 +125,17 @@ _ELBOW_ROUND_R_ON_D = [0.5, 0.75, 1.0, 1.5, 2.0, 2.5]
 _ELBOW_ROUND_ZETA = [0.71, 0.33, 0.22, 0.15, 0.13, 0.12]
 
 
+# Table 14-10 Note 1: the smooth-radius elbow tables are for a 90 deg turn;
+# for any other turn angle the coefficient is multiplied by this factor.
+_ELBOW_ANGLE_THETA = [0.0, 20.0, 30.0, 45.0, 60.0, 75.0, 90.0, 110.0, 130.0, 150.0, 180.0]
+_ELBOW_ANGLE_FACTOR = [0.0, 0.31, 0.45, 0.60, 0.78, 0.90, 1.00, 1.13, 1.20, 1.28, 1.40]
+
+
+def elbow_angle_factor(theta_deg):
+    """Multiplier on a 90 deg smooth-radius elbow coefficient for a turn of theta_deg (SMACNA Table 14-10 Note 1)."""
+    return _interp1d(theta_deg, _ELBOW_ANGLE_THETA, _ELBOW_ANGLE_FACTOR)
+
+
 def elbow_zeta_round(r_on_d):
     """90 deg smooth-radius round elbow. r_on_d = centerline radius / diameter. SMACNA A7A."""
     return _interp1d(r_on_d, _ELBOW_ROUND_R_ON_D, _ELBOW_ROUND_ZETA)
@@ -134,9 +151,9 @@ _ELBOW_RECT_ZETA = [
     [0.20, 0.18, 0.16, 0.15, 0.14, 0.13, 0.13, 0.14, 0.14, 0.15, 0.15],
 ]
 
-_RE_ELBOW_CORR_RE = [1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 14.0]  # in units of 1e4
-_RE_ELBOW_CORR_K_LOW = [1.40, 1.26, 1.19, 1.14, 1.09, 1.06, 1.04, 1.0]   # R/W <= 0.5
-_RE_ELBOW_CORR_K_HIGH = [2.0, 1.77, 1.64, 1.56, 1.46, 1.38, 1.30, 1.15]  # R/W >= 0.75
+_RE_ELBOW_CORR_RE = [1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 14.0, 20.0]  # in units of 1e4
+_RE_ELBOW_CORR_K_LOW = [1.40, 1.26, 1.19, 1.14, 1.09, 1.06, 1.04, 1.0, 1.0]   # R/W <= 0.5
+_RE_ELBOW_CORR_K_HIGH = [2.0, 1.77, 1.64, 1.56, 1.46, 1.38, 1.30, 1.15, 1.0]  # R/W >= 0.75
 
 
 def _elbow_reynolds_correction(r_on_w, reynolds):
@@ -182,15 +199,15 @@ def elbow_zeta_round_mitered(theta_deg):
     return _interp1d(theta_deg, _ELBOW_MITERED_ROUND_THETA, _ELBOW_MITERED_ROUND_ZETA)
 
 
-_ELBOW_MITERED_RECT_H_ON_W = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0, 6.0, 8.0]
+_ELBOW_MITERED_RECT_H_ON_W = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0]
 _ELBOW_MITERED_RECT_THETA = [20.0, 30.0, 45.0, 60.0, 75.0, 90.0]
 _ELBOW_MITERED_RECT_ZETA = [
-    [0.08, 0.08, 0.08, 0.07, 0.07, 0.07, 0.06, 0.05, 0.05],
-    [0.18, 0.17, 0.17, 0.16, 0.15, 0.15, 0.13, 0.12, 0.11],
-    [0.38, 0.37, 0.36, 0.34, 0.33, 0.31, 0.27, 0.25, 0.24],
-    [0.60, 0.59, 0.57, 0.55, 0.52, 0.49, 0.43, 0.39, 0.38],
-    [0.89, 0.87, 0.84, 0.81, 0.77, 0.73, 0.63, 0.58, 0.57],
-    [1.30, 1.30, 1.20, 1.20, 1.10, 1.10, 0.92, 0.85, 0.83],
+    [0.08, 0.08, 0.08, 0.07, 0.07, 0.07, 0.06, 0.06, 0.05, 0.05, 0.05],
+    [0.18, 0.17, 0.17, 0.16, 0.15, 0.15, 0.13, 0.13, 0.12, 0.12, 0.11],
+    [0.38, 0.37, 0.36, 0.34, 0.33, 0.31, 0.28, 0.27, 0.26, 0.25, 0.24],
+    [0.60, 0.59, 0.57, 0.55, 0.52, 0.49, 0.46, 0.43, 0.41, 0.39, 0.38],
+    [0.89, 0.87, 0.84, 0.81, 0.77, 0.73, 0.67, 0.63, 0.61, 0.58, 0.57],
+    [1.30, 1.30, 1.20, 1.20, 1.10, 1.10, 0.98, 0.92, 0.89, 0.85, 0.83],
 ]
 
 
@@ -322,7 +339,7 @@ _CONV_WYE45_ZETA_C = [
 ]
 
 _CONV_TEE90_AB_ON_AC = [0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0]
-_CONV_TEE90_VB_ON_VC = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+_CONV_TEE90_QB_ON_QC = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 _CONV_TEE90_ZETA_B = [
     [0.40, -0.37, -0.51, -0.46, -0.50, -0.51, -0.52],
     [3.8, 0.72, 0.17, -0.02, -0.14, -0.18, -0.24],
@@ -358,8 +375,12 @@ def converging_branch_zetas(angle_deg, ab_on_ac, vb_on_vc, vs_on_vc):
         zeta_b_raw = _interp2d(ab_on_ac, vb_on_vc, _CONV_WYE45_AB_ON_AC, _CONV_WYE45_VB_ON_VC, _CONV_WYE45_ZETA_B)
         zeta_c_raw = _interp2d(ab_on_ac, vs_on_vc, _CONV_WYE45_AB_ON_AC, _CONV_WYE45_VS_ON_VC, _CONV_WYE45_ZETA_C)
     else:
-        zeta_b_raw = _interp2d(ab_on_ac, vb_on_vc, _CONV_TEE90_AB_ON_AC, _CONV_TEE90_VB_ON_VC, _CONV_TEE90_ZETA_B)
-        zeta_c_raw = _interp1d(vb_on_vc, _CONV_TEE90_VB_ON_VC, _CONV_TEE90_ZETA_C)
+        # The 90 deg tee table (14-13 B) is keyed by the branch FLOW ratio
+        # Qb/Qc, unlike the 45 deg wye table above (14-13 A), which is keyed
+        # by velocity ratios. Q = V * A, so Qb/Qc = (Vb/Vc) * (Ab/Ac).
+        qb_on_qc = vb_on_vc * ab_on_ac
+        zeta_b_raw = _interp2d(ab_on_ac, qb_on_qc, _CONV_TEE90_AB_ON_AC, _CONV_TEE90_QB_ON_QC, _CONV_TEE90_ZETA_B)
+        zeta_c_raw = _interp1d(qb_on_qc, _CONV_TEE90_QB_ON_QC, _CONV_TEE90_ZETA_C)
 
     zeta_branch = zeta_b_raw / (vb_on_vc ** 2) if vb_on_vc > 0 else zeta_b_raw
     zeta_straight = zeta_c_raw / (vs_on_vc ** 2) if vs_on_vc > 0 else zeta_c_raw
@@ -372,7 +393,7 @@ def converging_branch_zetas(angle_deg, ab_on_ac, vb_on_vc, vs_on_vc):
 # ----------------------------------------------------------------------------
 
 _DIV_AB_ON_AC = [0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1]
-_DIV_VB_ON_VC = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+_DIV_QB_ON_QC = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 _DIV_ZETA_B_WYE45 = [
     [0.78, 0.62, 0.49, 0.40, 0.34, 0.31, 0.32, 0.35, 0.40],
     [0.77, 0.59, 0.47, 0.38, 0.34, 0.32, 0.35, 0.41, 0.50],
@@ -411,7 +432,11 @@ def diverging_branch_zetas(angle_deg, ab_on_ac, vb_on_vc, vs_on_vc):
     module docstring.
     """
     table = _DIV_ZETA_B_WYE45 if angle_deg <= _BRANCH_ANGLE_SPLIT_DEG else _DIV_ZETA_B_TEE90
-    zeta_b_raw = _interp2d(vb_on_vc, ab_on_ac, _DIV_VB_ON_VC, _DIV_AB_ON_AC, table)
+    # The branch tables (14-14 A) are keyed by the branch FLOW ratio Qb/Qc;
+    # only the main coefficient below is keyed by a velocity ratio (Vs/Vc).
+    # Q = V * A, so Qb/Qc = (Vb/Vc) * (Ab/Ac).
+    qb_on_qc = vb_on_vc * ab_on_ac
+    zeta_b_raw = _interp2d(qb_on_qc, ab_on_ac, _DIV_QB_ON_QC, _DIV_AB_ON_AC, table)
     zeta_c_raw = _interp1d(vs_on_vc, _DIV_VS_ON_VC, _DIV_ZETA_C)
 
     zeta_branch = zeta_b_raw / (vb_on_vc ** 2) if vb_on_vc > 0 else zeta_b_raw

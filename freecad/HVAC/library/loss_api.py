@@ -89,8 +89,10 @@ class HVACLossAPI:
     @staticmethod
     def elbow_loss(context):
         """
-        90 deg elbow fitting loss. Expects exactly 2 connected_ports (one
-        inlet, one outlet) and a "CenterlineRadius" entry in properties.
+        Smooth-radius elbow fitting loss, for any turn angle: the 90 deg
+        table value times the turn-angle factor (SMACNA Table 14-10 Note 1).
+        Expects exactly 2 connected_ports (one inlet, one outlet) and a
+        "CenterlineRadius" entry in properties.
         Returns one EXACT LossPath referenced to the outlet's own
         velocity, or UNSUPPORTED if the topology/geometry doesn't support
         the calculation.
@@ -125,6 +127,16 @@ class HVACLossAPI:
                 zeta = smacna_loss.elbow_zeta_rect(height / width, radius / width, reynolds)
             else:
                 return HVACLossAPI._unsupported("unsupported profile '{}'".format(profile))
+
+            # Port directions point outward, so two ports of a straight
+            # run are 180 deg apart: the turn is whatever is missing from that.
+            between = math.degrees(
+                HVACLibraryAPI.angle_between(
+                    HVACLibraryAPI.unit(HVACLibraryAPI.port_direction(inlet)),
+                    HVACLibraryAPI.unit(HVACLibraryAPI.port_direction(outlet)),
+                )
+            )
+            zeta *= smacna_loss.elbow_angle_factor(max(0.0, 180.0 - between))
 
             return HVACLossAPI._exact(
                 [HVACLossAPI._leg_path(outlet, inlet["edge_key"], zeta, source="smacna_elbow")]
