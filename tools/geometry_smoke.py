@@ -15,7 +15,8 @@ the fitting generators broke any type, profile or node layout:
 
 Compare two saved reports (before/after a change) to see what moved. For
 each build the report holds: valid/invalid, total volume, per-layer volume,
-and the trim length returned for each port.
+and the trim length returned for each port. A type's separate trim-measurement
+function is also run and must give the same trims as its build.
 """
 
 import json
@@ -153,7 +154,20 @@ def _build_one(reg, library_id, type_def, family, profile, section):
         layers[layer_id] = volume
         total += volume or 0.0
     trims = {rec["edge_key"]: round(float(rec["length"]), 2) for rec in (result.connection_lengths or [])}
-    return {"status": "ok" if valid else "invalid", "volume": round(total, 1), "layers": layers, "trims": trims}
+    entry = {"status": "ok" if valid else "invalid", "volume": round(total, 1), "layers": layers, "trims": trims}
+
+    # A type with its own trim-measurement function must report exactly the
+    # trims its build reports -- they are meant to share one calculation.
+    if type_def.lengths_module and type_def.lengths_function:
+        try:
+            measured = reg.measure_connection_lengths(library_id, type_def, dict(context))
+            measured = {rec["edge_key"]: round(float(rec["length"]), 2) for rec in (measured or [])}
+        except Exception as exc:
+            measured = "{}: {}".format(type(exc).__name__, exc)
+        if measured != trims:
+            entry["status"] = "trim-mismatch"
+            entry["detail"] = "measure gave {}, build gave {}".format(measured, trims)
+    return entry
 
 
 def run():
@@ -184,7 +198,9 @@ def main(argv):
         # By default only problems are listed; --all lists every build.
         if entry["status"] == "ok" and not show_all:
             continue
-        if entry["status"] in ("ok", "invalid"):
+        if entry["status"] == "trim-mismatch":
+            print("{:8s} {}  {}".format("MISMATCH", key, entry["detail"]))
+        elif entry["status"] in ("ok", "invalid"):
             print(
                 "{:8s} {}  volume={} layers={} trims={}".format(
                     entry["status"], key, entry["volume"], entry["layers"], entry["trims"]
