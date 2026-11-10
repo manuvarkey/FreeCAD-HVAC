@@ -121,7 +121,7 @@
     "function": "build_wye"
   },
   "loss": {
-    "module": "junction_losses",
+    "module": "shared:losses",
     "function": "loss_wye_generic",
     "variants": [
       {
@@ -129,7 +129,7 @@
           "flow_class": {"enum": ["diverging"]},
           "qualifiers": {"common_leg": {"enum": ["run"]}}
         },
-        "module": "junction_losses",
+        "module": "shared:losses",
         "function": "loss_branch_diverging_run"
       },
       {
@@ -137,7 +137,7 @@
           "flow_class": {"enum": ["converging"]},
           "qualifiers": {"common_leg": {"enum": ["run"]}}
         },
-        "module": "junction_losses",
+        "module": "shared:losses",
         "function": "loss_branch_converging_run"
       },
       {
@@ -145,7 +145,7 @@
           "flow_class": {"enum": ["diverging"]},
           "qualifiers": {"common_leg": {"enum": ["branch"]}}
         },
-        "module": "junction_losses",
+        "module": "shared:losses",
         "function": "loss_branch_diverging_branch"
       },
       {
@@ -153,7 +153,7 @@
           "flow_class": {"enum": ["converging"]},
           "qualifiers": {"common_leg": {"enum": ["branch"]}}
         },
-        "module": "junction_losses",
+        "module": "shared:losses",
         "function": "loss_branch_converging_branch"
       }
     ]

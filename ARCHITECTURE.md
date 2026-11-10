@@ -130,8 +130,8 @@ separately along a path.
 ### Fitting-loss model
 
 `analysis/loss.py` is the pure data model a fitting's own loss formula
-(`library/loss_api.py`'s `HVACLossAPI`, called from a library's own
-`junction_losses.py`) returns, and the one every consumer
+(`library/loss_api.py`'s `HVACLossAPI`, called from the shared
+`library/fittings/losses.py` or a library's own loss module) returns, and the one every consumer
 (`analysis/pressure.py`, `analysis/sizing.py`) reads back:
 
 ```

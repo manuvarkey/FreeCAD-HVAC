@@ -37,7 +37,7 @@
     "function": "measure_through_generic"
   },
   "loss": {
-    "module": "junction_losses",
+    "module": "shared:losses",
     "function": "loss_through_generic"
   }
 }

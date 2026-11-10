@@ -133,7 +133,7 @@
     "function": "build_cross"
   },
   "loss": {
-    "module": "junction_losses",
+    "module": "shared:losses",
     "function": "loss_cross_generic"
   }
 }

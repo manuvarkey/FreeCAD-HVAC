@@ -67,6 +67,23 @@ reason to diverge.
   material construction uniform for simple parts within one library.
 - `type_roots`: directories (relative to the library root) scanned for `*.json` type-defs.
 
+### Shared fitting modules (`"shared:"` prefix)
+
+Wherever a type-def names a Python module (`generator`, `connection_lengths`,
+`loss`, a loss variant, a construction feature), a plain name such as
+`"junctions"` means `<generators_package>.junctions` inside the library
+itself. A name with the `shared:` prefix means one of the addon's own shared
+fitting modules under `freecad/HVAC/library/fittings/` instead:
+
+```json
+"loss": {"module": "shared:losses", "function": "loss_elbow_generic"}
+```
+
+Use the shared modules for standard fittings, so a library is only data
+(type-defs) plus whatever code is genuinely its own. A third-party library
+can use them the same way; nothing has to be copied into its `generators/`.
+Only a plain module name may follow the prefix.
+
 ## Type-def JSON (`HVACTypeDef`, see `freecad/HVAC/library/Library.py`)
 
 Common fields, both segments and junctions:
@@ -173,7 +190,7 @@ whenever no variant's constraints are satisfied:
 
 ```json
 "loss": {
-  "module": "junction_losses",
+  "module": "shared:losses",
   "function": "loss_tee_generic",
   "variants": [
     {
@@ -181,7 +198,7 @@ whenever no variant's constraints are satisfied:
         "flow_class": {"enum": ["diverging"]},
         "qualifiers": {"common_leg": {"enum": ["run"]}}
       },
-      "module": "junction_losses",
+      "module": "shared:losses",
       "function": "loss_branch_diverging_run"
     },
     {
@@ -189,7 +206,7 @@ whenever no variant's constraints are satisfied:
         "flow_class": {"enum": ["diverging"]},
         "qualifiers": {"common_leg": {"enum": ["branch"]}}
       },
-      "module": "junction_losses",
+      "module": "shared:losses",
       "function": "loss_branch_diverging_branch"
     }
   ]

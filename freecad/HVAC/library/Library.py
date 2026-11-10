@@ -95,6 +95,11 @@ class HVACLossVariantDef:
     function: str = ""
 
 
+# A type-def module name starting with this prefix is imported from the
+# addon's shared fitting package instead of the library's own generators.
+SHARED_MODULE_PREFIX = "shared:"
+SHARED_FITTINGS_PACKAGE = "freecad.HVAC.library.fittings"
+
 # Selection kinds a type descriptor may declare under "selection.kind".
 SELECTION_KIND_MODEL = "model"
 SELECTION_KIND_PLACEHOLDER = "placeholder"
@@ -707,6 +712,24 @@ class HVACLibraryRegistry:
         return self.select_type(library_id, request, strict=strict)
 
     def import_generator(self, library_id: str, module_name: str):
+        """
+        Import the Python module a type-def names for its generator, trim
+        measurement, loss or feature function.
+
+        A plain name ("junctions") is a module inside the library's own
+        generators_package. A name with the "shared:" prefix
+        ("shared:losses") is one of the addon's shared fitting modules
+        under library/fittings/ instead, so several libraries can use the
+        same standard fitting code without each keeping a copy of it.
+        """
+        module_name = str(module_name or "")
+        if module_name.startswith(SHARED_MODULE_PREFIX):
+            shared_name = module_name[len(SHARED_MODULE_PREFIX) :]
+            # Only a plain module name is allowed -- no dots or path parts.
+            if not shared_name.isidentifier():
+                raise ValueError("Invalid shared fitting module '{}'".format(module_name))
+            return importlib.import_module("{}.{}".format(SHARED_FITTINGS_PACKAGE, shared_name))
+
         lib = self.get_library(library_id)
         if lib is None:
             raise ValueError("Unknown HVAC library '{}'".format(library_id))

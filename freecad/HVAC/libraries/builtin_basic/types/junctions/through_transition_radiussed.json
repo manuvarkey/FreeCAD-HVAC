@@ -37,7 +37,7 @@
     "function": "measure_transition_radiussed"
   },
   "loss": {
-    "module": "junction_losses",
+    "module": "shared:losses",
     "function": "loss_transition_generic"
   }
 }

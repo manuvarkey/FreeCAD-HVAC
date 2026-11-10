@@ -58,7 +58,7 @@
     "function": "measure_wye_mitered"
   },
   "loss": {
-    "module": "junction_losses",
+    "module": "shared:losses",
     "function": "loss_wye_generic"
   }
 }

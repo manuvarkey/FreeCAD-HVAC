@@ -43,7 +43,7 @@
     "function": "measure_vav_generic"
   },
   "loss": {
-    "module": "junction_losses",
+    "module": "shared:losses",
     "function": "loss_vav_generic"
   }
 }

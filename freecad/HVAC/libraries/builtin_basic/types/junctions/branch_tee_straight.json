@@ -44,7 +44,7 @@
     "function": "measure_tee_straight"
   },
   "loss": {
-    "module": "junction_losses",
+    "module": "shared:losses",
     "function": "loss_tee_generic"
   }
 }

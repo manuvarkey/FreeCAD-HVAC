@@ -1,61 +1,41 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # SPDX-FileNotice: Part of the HVAC addon.
 
-################################################################################
-#                                                                              #
-#   Copyright (c) 2026 Francisco Rosa                                          #
-#                                                                              #
-#   This addon is free software; you can redistribute it and/or modify it      #
-#   under the terms of the GNU Lesser General Public License as published      #
-#   by the Free Software Foundation; either version 2.1 of the License, or     #
-#   (at your option) any later version.                                        #
-#                                                                              #
-#   This addon is distributed in the hope that it will be useful,              #
-#   but WITHOUT ANY WARRANTY; without even the implied warranty of             #
-#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.                       #
-#                                                                              #
-#   See the GNU Lesser General Public License for more details.                #
-#                                                                              #
-#   You should have received a copy of the GNU Lesser General Public           #
-#   License along with this addon. If not, see https://www.gnu.org/licenses    #
-#                                                                              #
-################################################################################
-
 """
-Fitting-loss coefficients for the builtin_basic library.
+Standard fitting-loss functions shared by every library.
 
-Each function receives the same context dict as the shape generators in
-junctions.py (see Junction.execute), augmented by the airflow solver with a
+A type-def points at one of these with
+`"loss": {"module": "shared:losses", "function": "loss_elbow_generic"}`.
+A library only needs its own loss module for a fitting whose loss is
+genuinely different from the standard one.
+
+Each function receives the same context dict as the shape generators (see
+Junction.execute), augmented by the airflow solver with a
 "flow_rate_lps"/"velocity_ms"/"reynolds" set of keys on every entry of
 "connected_ports", plus "air_density"/"air_kinematic_viscosity". It returns
 an analysis.loss.LossEvaluation (never a bare dict/float/None) -- see
 library/loss_api.py's own docstring for the LossPath/LossEvaluation/
-LossStatus shapes, and compare a result's own status against
+LossStatus shapes. Compare a result's own status against
 context["loss_api"]'s EXACT/APPROXIMATION/CUSTOM/FALLBACK/UNSUPPORTED
-aliases rather than importing analysis.loss directly. Whatever is returned,
-these functions must not do any pressure-unit arithmetic themselves --
-that's the solver's job.
+aliases. These functions must not do any pressure-unit arithmetic
+themselves -- that's the solver's job.
 
-Elbow/transition/tee losses are computed from real SMACNA/ASHRAE duct
-fitting tables via HVACLossAPI.elbow_loss/transition_loss/branch_loss (see
-library/smacna_loss.py for the table data and its sourcing/accuracy
-caveats). A true Wye has no Tee-style common/straight leg, so it uses the
-separate HVACLossAPI.wye_loss instead -- see that method's own docstring
-for why a Wye isn't routed through the Tee-oriented branch_loss(). Cross
-and multiport fittings use HVACLossAPI.manifold_loss,
-which decomposes the junction into a sequence of the same tee/wye table
-lookups (no dedicated SMACNA table exists for 4+ port fittings) -- see its
-docstring for the single-trunk assumption and what falls back to the
-original flat placeholder (a "true cross" with more than one inlet AND more
-than one outlet, which has no single trunk to decompose against).
+Elbow/transition/tee losses come from SMACNA/ASHRAE duct fitting tables via
+HVACLossAPI.elbow_loss/transition_loss/branch_loss (see
+library/smacna_loss.py for the table data and its accuracy caveats). A true
+Wye has no Tee-style common/straight leg, so it uses HVACLossAPI.wye_loss
+instead. Cross and multiport fittings use HVACLossAPI.manifold_loss, which
+breaks the junction into a sequence of the same tee/wye lookups (no
+dedicated table exists for 4+ port fittings). A "true cross" with more than
+one inlet AND more than one outlet has no single trunk to break down
+against, so it falls back to a flat coefficient.
 """
 
 
 def loss_through_generic(context):
-    # This generic "through" type covers straight/offset/bend families in one
-    # type (unlike the more specific through_elbow_radius/through_transition_
-    # angled/etc.), so it may be a bend, an area change, or both -- try the
-    # elbow (CenterlineRadius-driven) reading first, then fall back to the
+    # A generic "through" type covers straight/offset/bend families in one
+    # type, so it may be a bend, an area change, or both -- try the elbow
+    # (CenterlineRadius-driven) reading first, then fall back to the
     # transition (area-change) reading.
     api = context["loss_api"]
     result = api.elbow_loss(context)
@@ -96,6 +76,7 @@ def loss_wye_generic(context):
 # needing a separate TypeId per flow case -- see each JSON type-def's own
 # "loss.variants" and TOPOLOGY_CLASSIFICATION.md.
 # ----------------------------------------------------------------------
+
 
 def loss_transition_expansion(context):
     return context["loss_api"].transition_loss(context)

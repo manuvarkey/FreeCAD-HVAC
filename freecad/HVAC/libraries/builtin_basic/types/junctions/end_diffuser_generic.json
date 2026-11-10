@@ -52,7 +52,7 @@
     "function": "measure_terminal_body_generic"
   },
   "loss": {
-    "module": "junction_losses",
+    "module": "shared:losses",
     "function": "loss_diffuser_generic"
   }
 }

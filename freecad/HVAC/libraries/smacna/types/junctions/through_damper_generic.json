@@ -39,7 +39,7 @@
     "function": "build_damper_generic"
   },
   "loss": {
-    "module": "junction_losses",
+    "module": "shared:losses",
     "function": "loss_damper_generic"
   }
 }

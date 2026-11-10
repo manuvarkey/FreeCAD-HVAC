@@ -111,7 +111,7 @@
     "file": "models/through_elbow_rectangular.py"
   },
   "loss": {
-    "module": "junction_losses",
+    "module": "shared:losses",
     "function": "loss_elbow_generic"
   }
 }

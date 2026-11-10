@@ -59,7 +59,7 @@
     "function": "measure_tap_saddle"
   },
   "loss": {
-    "module": "junction_losses",
+    "module": "shared:losses",
     "function": "loss_tee_generic"
   }
 }

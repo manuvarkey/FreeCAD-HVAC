@@ -30,7 +30,7 @@
     "function": "measure_straight"
   },
   "loss": {
-    "module": "junction_losses",
+    "module": "shared:losses",
     "function": "loss_transition_generic"
   }
 }
