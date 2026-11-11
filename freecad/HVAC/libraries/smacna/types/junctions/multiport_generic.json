@@ -25,8 +25,12 @@
       "name": "TrimLength",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Trim length for ports",
-      "default": 100.0
+      "description": "Trim length of each port, measured from the node. 0 uses a size-based default",
+      "default": 100.0,
+      "per_port": true,
+      "validation": {
+        "minimum": 0.0
+      }
     },
     {
       "name": "Thickness",
@@ -53,8 +57,9 @@
       "name": "ShowFlange",
       "prop_type": "App::PropertyBool",
       "group": "Options",
-      "description": "Include the flange at every port",
-      "default": true
+      "description": "Include the flange at each port",
+      "default": true,
+      "per_port": true
     },
     {
       "name": "InsulationThickness",
@@ -77,7 +82,9 @@
       },
       {
         "id": "insulation",
-        "roles": ["thermal_insulation"],
+        "roles": [
+          "thermal_insulation"
+        ],
         "default_material_role": "thermal_insulation",
         "thickness_property": "InsulationThickness"
       }

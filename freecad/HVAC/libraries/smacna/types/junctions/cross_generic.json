@@ -25,32 +25,15 @@
   },
   "properties": [
     {
-      "name": "TrimPortA",
+      "name": "TrimLength",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Trim length for port A",
-      "default": 100.0
-    },
-    {
-      "name": "TrimPortB",
-      "prop_type": "App::PropertyLength",
-      "group": "Dimensions",
-      "description": "Trim length for port B",
-      "default": 100.0
-    },
-    {
-      "name": "TrimPortC",
-      "prop_type": "App::PropertyLength",
-      "group": "Dimensions",
-      "description": "Trim length for port C",
-      "default": 100.0
-    },
-    {
-      "name": "TrimPortD",
-      "prop_type": "App::PropertyLength",
-      "group": "Dimensions",
-      "description": "Trim length for port D",
-      "default": 100.0
+      "description": "Trim length of each port, measured from the node. 0 uses a size-based default",
+      "default": 100.0,
+      "per_port": true,
+      "validation": {
+        "minimum": 0.0
+      }
     },
     {
       "name": "Thickness",
@@ -74,32 +57,12 @@
       "default": 1.0
     },
     {
-      "name": "ShowFlangePortA",
+      "name": "ShowFlange",
       "prop_type": "App::PropertyBool",
       "group": "Options",
-      "description": "Include the flange at port A",
-      "default": true
-    },
-    {
-      "name": "ShowFlangePortB",
-      "prop_type": "App::PropertyBool",
-      "group": "Options",
-      "description": "Include the flange at port B",
-      "default": true
-    },
-    {
-      "name": "ShowFlangePortC",
-      "prop_type": "App::PropertyBool",
-      "group": "Options",
-      "description": "Include the flange at port C",
-      "default": true
-    },
-    {
-      "name": "ShowFlangePortD",
-      "prop_type": "App::PropertyBool",
-      "group": "Options",
-      "description": "Include the flange at port D",
-      "default": true
+      "description": "Include the flange at each port",
+      "default": true,
+      "per_port": true
     },
     {
       "name": "InsulationThickness",
@@ -122,7 +85,9 @@
       },
       {
         "id": "insulation",
-        "roles": ["thermal_insulation"],
+        "roles": [
+          "thermal_insulation"
+        ],
         "default_material_role": "thermal_insulation",
         "thickness_property": "InsulationThickness"
       }

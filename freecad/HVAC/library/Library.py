@@ -64,6 +64,9 @@ class HVACPropertyDef:
     editor_mode: int = 0
     required: bool = True
     validation: dict = field(default_factory=dict)
+    # True: one value per connected port instead of one for the whole
+    # fitting (see validation.PER_PORT_LIST_TYPES / PortValues).
+    per_port: bool = False
 
 
 @dataclass
@@ -1191,8 +1194,15 @@ class HVACLibraryRegistry:
                     editor_mode=int(p.get("editor_mode", 0)),
                     required=bool(p.get("required", True)),
                     validation=dict(p.get("validation", {}) or {}),
+                    per_port=bool(p.get("per_port", False)),
                 )
             )
+            if props[-1].per_port and props[-1].prop_type not in validation.PER_PORT_LIST_TYPES:
+                raise ValueError(
+                    "Type-def '{}': property '{}' is per_port, which is not supported for {} (only {})".format(
+                        filepath, props[-1].name, props[-1].prop_type, ", ".join(sorted(validation.PER_PORT_LIST_TYPES))
+                    )
+                )
 
         gen = raw.get("generator", {}) or {}
         lengths = raw.get("connection_lengths", {}) or {}

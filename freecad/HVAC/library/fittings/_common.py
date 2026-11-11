@@ -101,17 +101,22 @@ def _finish(context, envelope, connection_lengths, port_suffixes=None):
     return result
 
 
-def _flange_enabled(params, index, suffix):
+def _flange_enabled(params, index, suffix, port=None):
     """
     Whether one port gets its flange. The first of these properties the type
     declares decides: ShowFlange<Role> (e.g. ShowFlangeBranch), ShowFlange<N>
-    (1-based port number), then one shared ShowFlange. Default: yes.
+    (1-based port number), then ShowFlange -- either one shared switch or a
+    per-port one (its own value for every port). Default: yes.
     """
     names = ["ShowFlange{}".format(suffix)] if suffix else []
     names += ["ShowFlange{}".format(index + 1), "ShowFlange"]
     for name in names:
-        if name in params:
-            return bool(params[name])
+        if name not in params:
+            continue
+        value = params[name]
+        if hasattr(value, "for_port"):
+            value = value.for_port(port) if port is not None else value.default
+        return True if value is None else bool(value)
     return True
 
 
@@ -156,7 +161,7 @@ def _add_flanges(context, result, connection_lengths, port_suffixes):
     flanges = []
     for index, port in enumerate(api.connected_ports(context)):
         edge_key = port.get("edge_key")
-        if edge_key not in lengths or not _flange_enabled(params, index, port_suffixes.get(edge_key)):
+        if edge_key not in lengths or not _flange_enabled(params, index, port_suffixes.get(edge_key), port):
             continue
         end = api.grow_port_section(_trimmed(api, port, lengths[edge_key]), outer_offset)
         flanges.append(api.make_flange(end, api.port_direction(port) * -1.0, flange_thickness, flange_height))

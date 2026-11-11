@@ -46,6 +46,7 @@ from . import _component_results
 from . import _geometry_apply
 from . import _component_appearance
 from . import _custom_loss
+from . import _port_properties
 from . import Construction as _construction
 
 
@@ -145,6 +146,10 @@ class DuctComponent:
                         type_id, library_id
                     )
                 )
+
+            # Per-port properties hold one value per port: line them up
+            # with this sync's ports before reading any of them.
+            _port_properties.sync_port_property_lists(obj, type_def, [p.get("edge_key") for p in ports])
 
             params = reg.resolve_params(type_def, obj=obj)
             is_primary = getattr(obj, "ComponentRole", "") == "Primary"

@@ -116,8 +116,52 @@ KNOWN_VALIDATION_RULE_KEYS = frozenset(
 
 # Every key a type-def property entry may use (see Library.HVACPropertyDef).
 KNOWN_PROPERTY_DEF_KEYS = frozenset(
-    {"name", "prop_type", "group", "description", "default", "editor_mode", "required", "validation"}
+    {"name", "prop_type", "group", "description", "default", "editor_mode", "required", "validation", "per_port"}
 )
+
+# A "per_port" property holds one value for each connected port instead of
+# one value for the whole fitting, so it works for any number of ports. On
+# the FreeCAD object it is stored as a list; this maps the property type
+# the type-def declares (the type of ONE value) to that list type.
+PER_PORT_LIST_TYPES = {
+    "App::PropertyLength": "App::PropertyFloatList",
+    "App::PropertyDistance": "App::PropertyFloatList",
+    "App::PropertyFloat": "App::PropertyFloatList",
+    "App::PropertyAngle": "App::PropertyFloatList",
+    "App::PropertyBool": "App::PropertyBoolList",
+    "App::PropertyInteger": "App::PropertyIntegerList",
+}
+
+# The hidden companion list of a per-port property: which port (edge_key)
+# each stored value belongs to. Values are matched to ports by this key,
+# never by position, so they survive ports being added, removed or reordered.
+PER_PORT_KEYS_SUFFIX = "EdgeKeys"
+
+
+def per_port_keys_name(prop_name):
+    """Name of the companion property holding the edge_key of each value of a per-port property."""
+    return "{}{}".format(prop_name, PER_PORT_KEYS_SUFFIX)
+
+
+class PortValues(dict):
+    """
+    The resolved value of a per-port property: {edge_key: value}, plus the
+    `default` used for any port that has no stored value yet (a newly
+    connected port, or a context built without a FreeCAD object).
+    """
+
+    def __init__(self, values=None, default=None):
+        super().__init__(values or {})
+        self.default = default
+
+    def for_port(self, port):
+        """This property's value for one port (a port dict, or its edge_key)."""
+        edge_key = port.get("edge_key") if isinstance(port, dict) else port
+        return self.get(edge_key, self.default)
+
+    def in_port_order(self, ports):
+        """One value per port, in the given port order."""
+        return [self.for_port(port) for port in ports]
 
 
 def unknown_property_def_keys(raw_property):
@@ -172,6 +216,42 @@ def validate_value(type_id, prop_name, value, rules):
         raise ValueError("{} length must be <= {}".format(prefix, rules["maxLength"]))
 
 
+def _resolve_per_port(type_def, pdef, obj, supplied):
+    """
+    Resolve one per-port property into a PortValues.
+
+    Sources, in order: a supplied value (a {edge_key: value} mapping, or one
+    plain value meant for every port), then the FreeCAD object's own stored
+    list and its companion edge-key list, then nothing but the default.
+    """
+    rules = getattr(pdef, "validation", {})
+    default = normalize_property_value(pdef.prop_type, getattr(pdef, "default", None))
+    by_edge = {}
+
+    if pdef.name in supplied:
+        raw = supplied[pdef.name]
+        if isinstance(raw, dict):
+            by_edge = dict(raw)
+            default = getattr(raw, "default", default)
+        else:
+            # One plain value: it applies to every port.
+            default = normalize_property_value(pdef.prop_type, raw)
+    elif obj is not None and hasattr(obj, pdef.name):
+        values = list(getattr(obj, pdef.name, None) or [])
+        keys = list(getattr(obj, per_port_keys_name(pdef.name), None) or [])
+        # A list that is out of step with its keys can't be trusted; fall back to the default.
+        if len(values) == len(keys):
+            by_edge = dict(zip(keys, values))
+
+    resolved = PortValues(default=default)
+    for edge_key, raw_value in by_edge.items():
+        value = normalize_property_value(pdef.prop_type, raw_value)
+        validate_value(type_def.id, "{}[{}]".format(pdef.name, edge_key), value, rules)
+        resolved[edge_key] = value
+    validate_value(type_def.id, pdef.name, default, rules)
+    return resolved
+
+
 def resolve_params(type_def, obj=None, supplied=None):
     """
     Resolve type properties from supplied values / FreeCAD object / JSON defaults,
@@ -181,6 +261,10 @@ def resolve_params(type_def, obj=None, supplied=None):
     params = {}
 
     for pdef in list(getattr(type_def, "properties", []) or []):
+        if bool(getattr(pdef, "per_port", False)):
+            params[pdef.name] = _resolve_per_port(type_def, pdef, obj, supplied)
+            continue
+
         if pdef.name in supplied:
             raw = supplied[pdef.name]
         elif obj is not None and hasattr(obj, pdef.name):

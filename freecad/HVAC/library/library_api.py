@@ -381,6 +381,82 @@ class HVACLibraryAPI:
 
         return ports[run_a_index], ports[run_b_index], ports[branch_indices[0]]
 
+    @classmethod
+    def port_roles(cls, context):
+        """
+        The connected ports of the current node, by role name. The roles
+        depend only on how many ports there are and how they are arranged:
+
+        - 1 port:  neck
+        - 2 ports: inlet, outlet (by flow direction; port order if unknown)
+        - 3 ports with a straight run (a tee, a lateral): run_a, run_b, branch
+        - 3 ports with no straight run (a wye): main, branch_a, branch_b
+        - 4 ports with a straight run (a cross, a double wye):
+          run_a, run_b, branch_a, branch_b
+        - anything else, including 5 or more ports: port_1 .. port_n
+
+        "Straight run" is the classifier's own collinear pair, so this
+        never disagrees with the family the node was given. For port_1..n
+        the order is geometric (by outward direction), so it does not
+        depend on the order the ports happen to be listed in.
+        """
+        ports = list(cls.connected_ports(context))
+        pairs = cls.collinear_port_index_pairs(context)
+        count = len(ports)
+
+        if count == 1:
+            return {"neck": ports[0]}
+
+        if count == 2:
+            outlet = next((p for p in ports if p.get("flow_into_junction") is False), None)
+            inlet = next((p for p in ports if p.get("flow_into_junction") is True), None)
+            if inlet is None or outlet is None or inlet is outlet:
+                inlet, outlet = ports[0], ports[1]
+            return {"inlet": inlet, "outlet": outlet}
+
+        if count == 3 and pairs:
+            run_a, run_b, branch = cls.run_branch_ports(context)
+            return {"run_a": run_a, "run_b": run_b, "branch": branch}
+
+        if count == 3:
+            wyes = importlib.import_module("{}.fittings.wyes".format(__package__))
+            main, branch_a, branch_b = wyes._wye_port_roles(cls, ports)
+            return {"main": main, "branch_a": branch_a, "branch_b": branch_b}
+
+        if count == 4 and pairs:
+            run_index_a, run_index_b = pairs[0]
+            rest = [ports[i] for i in range(4) if i not in (run_index_a, run_index_b)]
+            rest.sort(key=cls._direction_sort_key)
+            return {"run_a": ports[run_index_a], "run_b": ports[run_index_b], "branch_a": rest[0], "branch_b": rest[1]}
+
+        ordered = sorted(ports, key=cls._direction_sort_key)
+        return {"port_{}".format(i + 1): port for i, port in enumerate(ordered)}
+
+    @classmethod
+    def _direction_sort_key(cls, port):
+        """Sort key from a port's outward direction (rounded, so tiny numeric noise can't reorder ports)."""
+        direction = cls.unit(cls.port_direction(port))
+        return (round(direction.x, 6), round(direction.y, 6), round(direction.z, 6))
+
+    @staticmethod
+    def port_param(context, name, port, default=None):
+        """
+        A property value for one port.
+
+        Works for a per-port property (a type-def property marked
+        `"per_port": true`, resolved to one value per connected port) and
+        for an ordinary property (one value shared by every port), so a
+        generator need not know which of the two a type declares. `default`
+        is returned when the property is missing or not set for that port.
+        """
+        params = context.get("params") or context.get("properties") or {}
+        value = params.get(name)
+        if hasattr(value, "for_port"):
+            value = value.for_port(port)
+        elif isinstance(value, dict):
+            value = value.get(port.get("edge_key"))
+        return default if value is None else value
+
     @staticmethod
     def port_position(port):
         """Return a port's position as a FreeCAD vector."""

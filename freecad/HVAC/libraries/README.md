@@ -98,9 +98,9 @@ declares:
   (both above zero), a flange collar is fused onto the structural layer at
   every end of the fitting. One port's flange can be switched off with a
   boolean property: `ShowFlange<Role>` (the role is that port's trim name
-  without `Trim`, e.g. `ShowFlangeBranch`, `ShowFlangePortA`),
-  `ShowFlange<N>` (1-based port number, e.g. `ShowFlange1` on a two-port
-  fitting), or one shared `ShowFlange` for all ports.
+  without `Trim`, e.g. `ShowFlangeBranch`), `ShowFlange<N>` (1-based port
+  number, e.g. `ShowFlange1` on a two-port fitting), or `ShowFlange`,
+  either per-port (its own switch for every port) or one for all ports.
 
 Code that needs a standard fitting directly (a PartScript, a library's own
 generator) gets the same builders through the API instead of a type-def:
@@ -321,20 +321,49 @@ established groups are `"Dimensions"` (sizes/thicknesses), `"Options"`
 calculation rather than geometry, like `LossCoefficient` or `NeckSize`).
 
 A property entry may only use the keys `name`, `prop_type`, `group`,
-`description`, `default`, `editor_mode`, `required` and `validation`, and
+`description`, `default`, `editor_mode`, `required`, `validation` and
+`per_port`, and
 `validation` may only use the rules `enum`, `minimum`, `maximum`,
 `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength` and
 `maxLength`. Any other key is a load error, so a typo (or a made-up key like
 a top-level `"min"`) can't become a limit that is never enforced.
 
-**Trim property names.** A property holding one port's trim length is named
-`Trim<Role>`, where the role says which port it belongs to: `TrimRunA` /
-`TrimRunB` / `TrimBranch` (tee, tap, lateral tee), `TrimMain` /
-`TrimBranchA` / `TrimBranchB` (wye), and `TrimPortA` .. `TrimPortD` for a
-fitting whose ports have no such role (generic branch, cross -- letters
-follow the order of the connected ports). `TrimLength` is one shared trim
-for every port (multiport), and is also the fallback for any `TrimPort*`
-that is not set.
+**Per-port properties.** A property marked `"per_port": true` holds one
+value for every connected port instead of one for the whole fitting, so the
+same type-def works for any number of ports (a manifold, a plenum):
+
+```json
+{
+  "name": "TrimLength",
+  "prop_type": "App::PropertyLength",
+  "group": "Dimensions",
+  "description": "Trim length of each port",
+  "default": 100.0,
+  "per_port": true
+}
+```
+
+`prop_type` is the type of *one* value; `default` is what a newly connected
+port gets. Supported: `App::PropertyLength`, `App::PropertyDistance`,
+`App::PropertyFloat`, `App::PropertyAngle`, `App::PropertyBool`,
+`App::PropertyInteger`. On the FreeCAD object it appears as a list in port
+order, with a hidden companion list (`<Name>EdgeKeys`) recording which port
+each value belongs to; values follow their port when ports are added,
+removed or reordered, and across a document reload. A generator reads it
+with `api.port_param(context, "TrimLength", port)`, which also works for an
+ordinary single-value property of that name.
+
+**Port roles.** `api.port_roles(context)` returns the connected ports by
+role: `neck` (1 port), `inlet`/`outlet` (2), `run_a`/`run_b`/`branch` (tee),
+`main`/`branch_a`/`branch_b` (wye), `run_a`/`run_b`/`branch_a`/`branch_b`
+(cross), `port_1`..`port_n` (anything else).
+
+**Trim property names.** A fitting whose ports have fixed roles names one
+trim property per role, `Trim<Role>`: `TrimRunA` / `TrimRunB` / `TrimBranch`
+(tee, tap, lateral tee), `TrimMain` / `TrimBranchA` / `TrimBranchB` (wye).
+A fitting whose ports have no such role (generic branch, cross, multiport)
+uses one per-port `TrimLength`. The same goes for flange switches:
+`ShowFlange<Role>` for a role, one per-port `ShowFlange` otherwise.
 
 See `samples/README.md` for the three geometry backends (`partscript`,
 `static`, and the legacy `generator` function -- including its use as a

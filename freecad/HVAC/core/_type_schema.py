@@ -28,7 +28,35 @@ DuctJunction's DuctComponent children). Internal to core/ -- not part of the
 stable library_api.py surface for library/generator authors.
 """
 
+from ..library import validation
 from ..utils import hvaclib
+
+
+def _add_per_port_property(obj, pdef):
+    """Add a per-port property's value list and hidden key list to `obj`. Returns True if either was added."""
+    added = False
+    keys_name = validation.per_port_keys_name(pdef.name)
+    list_type = validation.PER_PORT_LIST_TYPES[pdef.prop_type]
+
+    # A property left over under the same name with another type (e.g. this
+    # used to be one plain value) can't hold a list: replace it.
+    if pdef.name in obj.PropertiesList and obj.getTypeIdOfProperty(pdef.name) != list_type:
+        obj.removeProperty(pdef.name)
+    if pdef.name not in obj.PropertiesList:
+        description = "{} (one value per connected port, in port order)".format(pdef.description)
+        obj.addProperty(list_type, pdef.name, pdef.group, description)
+        added = True
+    if keys_name not in obj.PropertiesList:
+        obj.addProperty(
+            "App::PropertyStringList", keys_name, "HVAC", "Internal: which port each {} value belongs to".format(pdef.name)
+        )
+        added = True
+    try:
+        obj.setEditorMode(pdef.name, int(getattr(pdef, "editor_mode", 0) or 0))
+        obj.setEditorMode(keys_name, 2)
+    except Exception:
+        pass
+    return added
 
 
 def apply_type_schema(obj, library_id, type_id, *, protected_names=()):
@@ -53,6 +81,11 @@ def apply_type_schema(obj, library_id, type_id, *, protected_names=()):
     changed = False
     protected = set(protected_names)
     active_prop_names = {pdef.name for pdef in (getattr(type_def, "properties", []) or [])}
+    # A per-port property also owns a hidden companion list (which port each
+    # value belongs to); it is added and removed together with the property.
+    for pdef in getattr(type_def, "properties", []) or []:
+        if getattr(pdef, "per_port", False):
+            active_prop_names.add(validation.per_port_keys_name(pdef.name))
     new_names = [n for n in active_prop_names if n not in protected]
 
     # Remove properties left over from a *previously* selected type (e.g.
@@ -70,6 +103,14 @@ def apply_type_schema(obj, library_id, type_id, *, protected_names=()):
 
     for pdef in getattr(type_def, "properties", []) or []:
         prop_added = False
+
+        if getattr(pdef, "per_port", False):
+            # Stored as a list (one value per port) plus its companion key
+            # list. They start empty; core/_port_properties.py fills them
+            # once the object's ports are known.
+            if _add_per_port_property(obj, pdef):
+                changed = True
+            continue
 
         if pdef.name not in obj.PropertiesList:
             obj.addProperty(pdef.prop_type, pdef.name, pdef.group, pdef.description)

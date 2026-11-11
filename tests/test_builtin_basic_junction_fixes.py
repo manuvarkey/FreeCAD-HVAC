@@ -25,6 +25,7 @@ import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 from freecad.HVAC.library.fittings import _common, stars, tees, terminals, transitions, wyes
 from freecad.HVAC.library.Library import HVACLibraryRegistry
 from freecad.HVAC.library.library_api import HVACLibraryAPI
+from freecad.HVAC.library.validation import PortValues
 
 LIBRARIES_ROOT = os.path.join(os.path.dirname(__file__), "..", "freecad", "HVAC", "libraries")
 
@@ -327,24 +328,19 @@ def _lengths_by_edge(records):
 
 
 def test_star_cross_uses_each_ports_own_trim():
-    params = {"TrimPortA": 110.0, "TrimPortB": 120.0, "TrimPortC": 130.0, "TrimPortD": 140.0}
+    # TrimLength is a per-port property: its own value for every port, keyed by edge_key.
+    params = {"TrimLength": PortValues({"A": 110.0, "B": 120.0, "C": 130.0, "D": 140.0}, default=100.0)}
     lengths = _lengths_by_edge(stars.measure_cross(_cross_context(params)))
     assert lengths == pytest.approx({"A": 110.0, "B": 120.0, "C": 130.0, "D": 140.0})
 
 
 def test_star_cross_unset_port_trim_falls_back_to_size_based_default():
     # 0.6 x the largest port size (200) is the built-in default for a cross.
-    lengths = _lengths_by_edge(stars.measure_cross(_cross_context({"TrimPortA": 90.0, "TrimPortB": 0.0})))
+    params = {"TrimLength": PortValues({"A": 90.0, "B": 0.0}, default=0.0)}
+    lengths = _lengths_by_edge(stars.measure_cross(_cross_context(params)))
     assert lengths == pytest.approx({"A": 90.0, "B": 120.0, "C": 120.0, "D": 120.0})
 
 
-def test_star_port_trim_names_stop_after_four_ports():
-    # A multiport's 5th+ port has no named trim; it only has the shared TrimLength.
-    assert stars._port_trim_names(5) == ["TrimPortA", "TrimPortB", "TrimPortC", "TrimPortD", None]
-    assert stars._star_trims({"TrimLength": 75.0, "TrimPortA": 50.0}, stars._port_trim_names(5), 999.0) == [
-        50.0,
-        75.0,
-        75.0,
-        75.0,
-        75.0,
-    ]
+def test_star_trim_may_also_be_one_plain_value_for_every_port():
+    lengths = _lengths_by_edge(stars.measure_cross(_cross_context({"TrimLength": 75.0})))
+    assert lengths == pytest.approx({"A": 75.0, "B": 75.0, "C": 75.0, "D": 75.0})

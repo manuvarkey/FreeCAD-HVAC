@@ -35,6 +35,7 @@ from ..core.Junction import DuctJunction, DuctJunctionVirtual
 from ..core.Component import DuctComponent
 from ..core import _construction_schema
 from ..core import _custom_loss
+from ..core import _port_properties
 from ..library.construction import (
     ALL_LAYER_ROLES, ROLE_FLOW_SURFACE, ROLE_STRUCTURAL_SHELL,
     ROLE_THERMAL_INSULATION, ROLE_ACOUSTIC_ABSORBER, ROLE_ACOUSTIC_LINER,
@@ -1521,6 +1522,15 @@ class DuctNetwork:
             if keys_changed:
                 comp.CustomLossCoefficientEdgeKeys = new_keys
                 changed = True
+
+        # Per-port type properties (a plenum's own trim per port, ...) are
+        # stored by edge_key as well, so they need the same carry forward.
+        if edge_key_remap:
+            reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
+            for comp in ([primary] if primary is not None else []) + inline_components:
+                type_def = reg.resolve_type(getattr(comp, "LibraryId", ""), getattr(comp, "TypeId", ""))
+                if type_def is not None and _port_properties.remap_port_property_keys(comp, type_def, edge_key_remap):
+                    changed = True
 
         keep, drop = [], []
         for comp in inline_components:

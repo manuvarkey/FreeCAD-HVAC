@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 from freecad.HVAC.library.fittings import _common, stars
 from freecad.HVAC.library.library_api import HVACLibraryAPI
+from freecad.HVAC.library.validation import PortValues
 
 
 def _port(edge_key, direction):
@@ -63,10 +64,16 @@ def test_star_tee_uses_role_named_trims_matched_to_the_run_pair():
     assert {rec["edge_key"]: rec["length"] for rec in records} == {"A": 110.0, "B": 120.0, "C": 130.0}
 
 
-def test_star_tee_without_role_names_uses_port_letters_in_port_order():
-    context = _tee_context({"TrimPortA": 110.0, "TrimPortB": 120.0, "TrimPortC": 130.0})
+def test_star_tee_without_role_names_uses_the_per_port_trim():
+    context = _tee_context({"TrimLength": PortValues({"C": 110.0, "A": 120.0, "B": 130.0}, default=100.0)})
     records = stars.measure_branch_generic(context)
     assert {rec["edge_key"]: rec["length"] for rec in records} == {"C": 110.0, "A": 120.0, "B": 130.0}
+
+
+def test_per_port_flange_switch_is_read_for_that_port():
+    switches = PortValues({"A": False}, default=True)
+    assert _common._flange_enabled({"ShowFlange": switches}, 0, None, {"edge_key": "A"}) is False
+    assert _common._flange_enabled({"ShowFlange": switches}, 1, None, {"edge_key": "B"}) is True
 
 
 def test_star_layout_reports_each_ports_role_for_flange_switches():

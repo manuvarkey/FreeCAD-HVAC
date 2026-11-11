@@ -18,46 +18,41 @@ from ._common import (
     _trimmed,
 )
 
-# Per-port trim property names for star fittings whose ports have no
-# run/branch role. Letters follow the order of connected_ports.
-_PORT_TRIM_NAMES = ("TrimPortA", "TrimPortB", "TrimPortC", "TrimPortD")
+_TEE_TRIM_NAMES = ("TrimRunA", "TrimRunB", "TrimBranch")
 
 
-def _star_trims(p, names, default_trim):
+def _star_port_roles(api, context, ports, align_branch):
+    """
+    Role of each port, by edge_key, for a type that names its trims by tee
+    role (TrimRunA/TrimRunB/TrimBranch): {"<edge_key>": "RunA", ...}.
+    Empty for every other star fitting, whose ports have no role and whose
+    trim is one per-port TrimLength.
+    """
+    params = _props(context)
+    if not (align_branch and len(ports) == 3 and any(name in params for name in _TEE_TRIM_NAMES)):
+        return {}
+    if not api.collinear_port_index_pairs(context):
+        return {}
+    run_a, run_b, branch = api.run_branch_ports(context)
+    return {run_a.get("edge_key"): "RunA", run_b.get("edge_key"): "RunB", branch.get("edge_key"): "Branch"}
+
+
+def _star_trims(api, context, ports, roles, default_trim):
     """
     One trim length per port of a star fitting.
 
-    Each port uses its own named property when that is set. Otherwise it
-    falls back to the shared TrimLength, and then to default_trim. A port
-    with no name (None, e.g. the 5th port of a multiport) only has the
-    shared fallback.
+    A port with a tee role uses that role's own property (TrimBranch, ...).
+    Any other port uses TrimLength, which may be a per-port property (its
+    own value for every port, any number of ports) or one shared value.
+    A value that is not set (zero or missing) falls back to default_trim.
     """
-    shared = _positive(p.get("JunctionLength", p.get("TrimLength")), default_trim)
-    return [_positive(p.get(name), shared) if name else shared for name in names]
-
-
-def _port_trim_names(count):
-    """TrimPortA.. for the first ports, None for any port beyond the named ones."""
-    return [_PORT_TRIM_NAMES[i] if i < len(_PORT_TRIM_NAMES) else None for i in range(count)]
-
-
-def _star_port_names(api, context, ports, align_branch):
-    """
-    The trim property name of each port, in port order.
-
-    A type that declares the tee names (TrimRunA/TrimRunB/TrimBranch) gets
-    those, matched to the classifier's run pair and branch. Any other star
-    fitting uses the plain TrimPortA.. letters.
-    """
-    names = _port_trim_names(len(ports))
     params = _props(context)
-    tee_names = ("TrimRunA", "TrimRunB", "TrimBranch")
-    if align_branch and len(ports) == 3 and any(name in params for name in tee_names):
-        if api.collinear_port_index_pairs(context):
-            run_a, run_b, branch = api.run_branch_ports(context)
-            by_port = {id(run_a): tee_names[0], id(run_b): tee_names[1], id(branch): tee_names[2]}
-            names = [by_port[id(port)] for port in ports]
-    return names
+    trims = []
+    for port in ports:
+        role = roles.get(port.get("edge_key"))
+        value = params.get("Trim" + role) if role else api.port_param(context, "TrimLength", port)
+        trims.append(_positive(value, default_trim))
+    return trims
 
 
 def _star_junction_layout(context, default_factor, align_branch=False):
@@ -65,26 +60,23 @@ def _star_junction_layout(context, default_factor, align_branch=False):
     ports = api.connected_ports(context)
     if len(ports) < 3:
         raise ValueError("Branch junction requires at least three connected ports")
-    p = _props(context)
     center = api.average_point([api.port_position(port) for port in ports])
     default_trim = max(_size(api, port) for port in ports) * default_factor
-    names = _star_port_names(api, context, ports, align_branch)
-    trims = _star_trims(p, names, default_trim)
-    # Each port's role ("RunA", "PortB", ...) is its trim name without the
-    # "Trim" prefix; a flange switch for that port uses the same role.
-    suffixes = {port.get("edge_key"): name[len("Trim") :] for port, name in zip(ports, names) if name}
-    return ports, center, trims, suffixes
+    # Each port's tee role doubles as the suffix of its flange switch (ShowFlangeBranch, ...).
+    roles = _star_port_roles(api, context, ports, align_branch)
+    trims = _star_trims(api, context, ports, roles, default_trim)
+    return ports, center, trims, roles
 
 
 def measure_star_junction(context, default_factor=0.6, align_branch=False):
     api = context["hvac_api"]
-    ports, center, trims, _suffixes = _star_junction_layout(context, default_factor, align_branch)
+    ports, center, trims, _roles = _star_junction_layout(context, default_factor, align_branch)
     return api.build_trim_rec_from_port_lengths(list(zip(ports, trims)))
 
 
 def _star_junction(context, default_factor=0.6, align_branch=False):
     api = context["hvac_api"]
-    ports, center, trims, suffixes = _star_junction_layout(context, default_factor, align_branch)
+    ports, center, trims, roles = _star_junction_layout(context, default_factor, align_branch)
     branch = None
     if align_branch:
         pairs = api.collinear_port_index_pairs(context)
@@ -104,7 +96,7 @@ def _star_junction(context, default_factor=0.6, align_branch=False):
             legs.append(leg)
         return api.fuse(*legs)
 
-    return _finish(context, envelope, api.build_trim_rec_from_port_lengths(list(zip(ports, trims))), suffixes)
+    return _finish(context, envelope, api.build_trim_rec_from_port_lengths(list(zip(ports, trims))), roles)
 
 
 def measure_branch_generic(context):
