@@ -1060,11 +1060,20 @@ def test_bundled_builtin_basic_radius_tee_selects_alignment_by_profile():
         assert selection.type_def.id == expected
 
 
-def test_bundled_builtin_basic_mixed_profile_cross_uses_generic_model_not_marker():
+def test_bundled_builtin_basic_mixed_profile_cross_reaches_dedicated_cross_model():
+    # The straight cross accepts each built-in profile, including a mixed set of connected ports.
     reg = _load_bundled_registry()
     request = _junction_request("cross", "cross.cross", "Mixed", _mixed_ports(4))
     selection = reg.select_type("builtin_basic", request, strict=True)
-    assert selection.status == "generic_profile"
+    assert selection.status == "exact"
+    assert selection.type_def.id == "cross_tee_straight"
+
+
+def test_bundled_builtin_basic_double_wye_still_uses_the_generic_cross():
+    # No dedicated double-wye model exists yet, so the star-bodied generic cross takes it.
+    reg = _load_bundled_registry()
+    request = _junction_request("cross", "cross.double_wye", "Circular", _ports(4, "Circular"))
+    selection = reg.select_type("builtin_basic", request, strict=True)
     assert selection.type_def.id == "cross_generic"
 
 

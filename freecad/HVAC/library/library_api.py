@@ -1984,6 +1984,7 @@ class HVACLibraryAPI:
         "tee_lateral": ("tees", "build_lateral_tee", "measure_lateral_tee"),
         "wye_mitered": ("wyes", "build_wye_mitered", "measure_wye_mitered"),
         "wye_radius": ("wyes", "build_wye_radius", "measure_wye_radius"),
+        "cross_tee_straight": ("crosses", "build_cross_tee_straight", "measure_cross_tee_straight"),
         "star_branch": ("stars", "build_branch_generic", "measure_branch_generic"),
         "star_wye": ("stars", "build_wye_generic", "measure_wye_generic"),
         "star_cross": ("stars", "build_cross", "measure_cross"),
