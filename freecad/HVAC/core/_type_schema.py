@@ -48,7 +48,10 @@ def _add_per_port_property(obj, pdef):
         added = True
     if keys_name not in obj.PropertiesList:
         obj.addProperty(
-            "App::PropertyStringList", keys_name, "HVAC", "Internal: which port each {} value belongs to".format(pdef.name)
+            "App::PropertyStringList",
+            keys_name,
+            "HVAC",
+            "Internal: which port each {} value belongs to".format(pdef.name),
         )
         added = True
     try:

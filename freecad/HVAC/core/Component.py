@@ -29,25 +29,30 @@ its own library type selection, type-specific properties, and generated
 Shape. See DuctJunction.composeComponents() for how a junction assembles and
 positions its children's local ports each sync.
 """
+
 import json
 import traceback
 
-import FreeCAD, Part
+import FreeCAD
 import FreeCADGui as Gui
-from PySide import QtWidgets, QtCore
+import Part
+from PySide import QtCore, QtWidgets
 from PySide.QtCore import QT_TRANSLATE_NOOP
+
 translate = FreeCAD.Qt.translate
 
-from ..utils import hvaclib
 from ..library.library_api import HVACLibraryAPI
-from . import _type_schema
-from . import _construction_schema
-from . import _component_results
-from . import _geometry_apply
-from . import _component_appearance
-from . import _custom_loss
-from . import _port_properties
+from ..utils import hvaclib
 from . import Construction as _construction
+from . import (
+    _component_appearance,
+    _component_results,
+    _construction_schema,
+    _custom_loss,
+    _geometry_apply,
+    _port_properties,
+    _type_schema,
+)
 
 
 class DuctComponent:
@@ -141,11 +146,7 @@ class DuctComponent:
             reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
             type_def = reg.resolve_type(library_id, type_id)
             if type_def is None:
-                raise ValueError(
-                    "Unknown component type '{}' in library '{}'".format(
-                        type_id, library_id
-                    )
-                )
+                raise ValueError("Unknown component type '{}' in library '{}'".format(type_id, library_id))
 
             # Per-port properties hold one value per port: line them up
             # with this sync's ports before reading any of them.
@@ -156,9 +157,7 @@ class DuctComponent:
 
             context = {
                 "obj": obj,
-                "center_point": HVACLibraryAPI.average_point(
-                    [p["position"] for p in ports]
-                ),
+                "center_point": HVACLibraryAPI.average_point([p["position"] for p in ports]),
                 "params": params,
                 "connected_ports": ports,
                 # Full node topology analysis (collinear_pairs,
@@ -208,9 +207,7 @@ class DuctComponent:
             if "GeometryError" in getattr(obj, "PropertiesList", []):
                 obj.GeometryError = message
             FreeCAD.Console.PrintError(
-                "HVAC - DuctComponent - Execute Error generating component '{}': {}\n".format(
-                    obj.Label, message
-                )
+                "HVAC - DuctComponent - Execute Error generating component '{}': {}\n".format(obj.Label, message)
             )
             FreeCAD.Console.PrintMessage(traceback.format_exc())
 
@@ -447,23 +444,72 @@ class DuctComponent:
         self._addProperty(obj, "App::PropertyString", "ParentJunctionName", "HVAC", "Owning DuctJunction object name")
 
         if "ComponentRole" not in obj.PropertiesList:
-            obj.addProperty(
-                "App::PropertyEnumeration", "ComponentRole", "HVAC", "Primary fitting or an inline device"
-            )
+            obj.addProperty("App::PropertyEnumeration", "ComponentRole", "HVAC", "Primary fitting or an inline device")
             obj.ComponentRole = ["Primary", "Inline"]
 
-        self._addProperty(obj, "App::PropertyString", "AttachedEdgeKey", "HVAC", "Real edge_key this Inline component's chain is attached to (empty for Primary)")
-        self._addProperty(obj, "App::PropertyInteger", "PortSequence", "HVAC", "Order from the Primary outward toward the attached edge (Inline only)")
+        self._addProperty(
+            obj,
+            "App::PropertyString",
+            "AttachedEdgeKey",
+            "HVAC",
+            "Real edge_key this Inline component's chain is attached to (empty for Primary)",
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyInteger",
+            "PortSequence",
+            "HVAC",
+            "Order from the Primary outward toward the attached edge (Inline only)",
+        )
         # Prop_NoRecompute -- documentation only, never affects geometry.
-        self._addProperty(obj, "App::PropertyString", "Number", "HVAC", "Documentation number assigned by Renumber Network (e.g. 'J007-P' or 'J007-01'), blank until first renumbered", attr=16)
+        self._addProperty(
+            obj,
+            "App::PropertyString",
+            "Number",
+            "HVAC",
+            "Documentation number assigned by Renumber Network (e.g. 'J007-P' or 'J007-01'), blank until first renumbered",
+            attr=16,
+        )
         self._addProperty(obj, "App::PropertyString", "LibraryId", "HVAC", "HVAC library id")
         self._addProperty(obj, "App::PropertyString", "TypeId", "HVAC", "Selected fitting type id")
-        self._addProperty(obj, "App::PropertyString", "Profile", "HVAC", "Duct profile at this component's primary/outlet side")
-        self._addProperty(obj, "App::PropertyStringList", "TypeSchemaPropertyNames", "HVAC", "Internal: property names added by the last-applied type schema (for stale cleanup)")
-        self._addProperty(obj, "App::PropertyStringList", "ConstructionLayerIds", "HVAC", "Internal: construction layer ids of the last-applied type (see core/_construction_schema.py)")
-        self._addProperty(obj, "App::PropertyStringList", "ConstructionFeatureIds", "HVAC", "Internal: construction feature ids of the last-applied type (see core/_construction_schema.py)")
-        self._addProperty(obj, "App::PropertyString", "LocalPortsJson", "HVAC", "Internal: this component's local inlet/outlet port geometry, written by the parent junction's composer")
-        self._addProperty(obj, "App::PropertyString", "ConnectionLengthsJson", "HVAC", "This component's own per-port connection (trim) lengths")
+        self._addProperty(
+            obj, "App::PropertyString", "Profile", "HVAC", "Duct profile at this component's primary/outlet side"
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyStringList",
+            "TypeSchemaPropertyNames",
+            "HVAC",
+            "Internal: property names added by the last-applied type schema (for stale cleanup)",
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyStringList",
+            "ConstructionLayerIds",
+            "HVAC",
+            "Internal: construction layer ids of the last-applied type (see core/_construction_schema.py)",
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyStringList",
+            "ConstructionFeatureIds",
+            "HVAC",
+            "Internal: construction feature ids of the last-applied type (see core/_construction_schema.py)",
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyString",
+            "LocalPortsJson",
+            "HVAC",
+            "Internal: this component's local inlet/outlet port geometry, written by the parent junction's composer",
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyString",
+            "ConnectionLengthsJson",
+            "HVAC",
+            "This component's own per-port connection (trim) lengths",
+        )
         self._addProperty(
             obj,
             "App::PropertyString",
@@ -495,10 +541,12 @@ class DuctComponent:
         # it on the very next sync.
         if "FlowBoundary" not in obj.PropertiesList:
             obj.addProperty(
-                "App::PropertyEnumeration", "FlowBoundary", "Airflow",
+                "App::PropertyEnumeration",
+                "FlowBoundary",
+                "Airflow",
                 "Terminal flow condition, mirrored to/from the parent junction: Auto (solved by mass "
                 "balance), Fixed (use Design Flow Rate as-is, 0 included), or Closed (sealed "
-                "termination, always 0 flow)"
+                "termination, always 0 flow)",
             )
             obj.FlowBoundary = ["Auto", "Fixed", "Closed"]
             obj.FlowBoundary = "Auto"
@@ -508,9 +556,12 @@ class DuctComponent:
                 pass
 
         self._addProperty(
-            obj, "App::PropertyBool", "FlowBoundaryLocked", "Airflow",
+            obj,
+            "App::PropertyBool",
+            "FlowBoundaryLocked",
+            "Airflow",
             "Internal: true if the selected library type prescribes and locks this terminal's flow "
-            "condition (e.g. a duct closure/end cap), so the user can't change it"
+            "condition (e.g. a duct closure/end cap), so the user can't change it",
         )
         try:
             obj.setEditorMode("FlowBoundaryLocked", 2)
@@ -519,19 +570,45 @@ class DuctComponent:
 
         if "DesignFlowRate" not in obj.PropertiesList:
             obj.addProperty(
-                "App::PropertyFloat", "DesignFlowRate", "Airflow",
+                "App::PropertyFloat",
+                "DesignFlowRate",
+                "Airflow",
                 "User-specified design flow rate for this terminal (L/s), mirrored to/from the parent "
-                "junction, used when Flow Boundary is 'Fixed' -- 0 is a valid value."
+                "junction, used when Flow Boundary is 'Fixed' -- 0 is a valid value.",
             )
             try:
                 obj.setEditorMode("DesignFlowRate", 2)
             except Exception:
                 pass
 
-        self._addProperty(obj, "App::PropertyFloat", "CalcFlowRate", "Airflow", "Computed flow rate through this component (L/s) -- meaningful only for a 1-port or 2-port component; see CalcPortResultsJson for a multiport Primary")
-        self._addProperty(obj, "App::PropertyFloat", "CalcVelocity", "Airflow", "Computed reference velocity used for this component's pressure drop (m/s) -- meaningful only for a 1-port or 2-port component; see CalcPortResultsJson for a multiport Primary")
-        self._addProperty(obj, "App::PropertyFloat", "CalcLossCoefficient", "Airflow", "Computed loss coefficient (K) from the last calculation -- meaningful only for a 1-port or 2-port component; see CalcPortResultsJson for a multiport Primary")
-        self._addProperty(obj, "App::PropertyFloat", "CalcPressureDrop", "Airflow", "Computed pressure drop across this component (Pa) -- meaningful only for a 1-port or 2-port component; see CalcPortResultsJson for a multiport Primary")
+        self._addProperty(
+            obj,
+            "App::PropertyFloat",
+            "CalcFlowRate",
+            "Airflow",
+            "Computed flow rate through this component (L/s) -- meaningful only for a 1-port or 2-port component; see CalcPortResultsJson for a multiport Primary",
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyFloat",
+            "CalcVelocity",
+            "Airflow",
+            "Computed reference velocity used for this component's pressure drop (m/s) -- meaningful only for a 1-port or 2-port component; see CalcPortResultsJson for a multiport Primary",
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyFloat",
+            "CalcLossCoefficient",
+            "Airflow",
+            "Computed loss coefficient (K) from the last calculation -- meaningful only for a 1-port or 2-port component; see CalcPortResultsJson for a multiport Primary",
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyFloat",
+            "CalcPressureDrop",
+            "Airflow",
+            "Computed pressure drop across this component (Pa) -- meaningful only for a 1-port or 2-port component; see CalcPortResultsJson for a multiport Primary",
+        )
 
         for prop in ("CalcFlowRate", "CalcVelocity", "CalcLossCoefficient", "CalcPressureDrop"):
             try:
@@ -546,7 +623,10 @@ class DuctComponent:
         # solve. Always hidden -- never meant for direct property-editor
         # viewing, same as LocalPortsJson.
         self._addProperty(
-            obj, "App::PropertyString", "CalcPortResultsJson", "Airflow",
+            obj,
+            "App::PropertyString",
+            "CalcPortResultsJson",
+            "Airflow",
             "Internal: per-port calculated results (flow, velocity, K, pressure drop, static "
             "pressure) from the last calculation, keyed by edge_key",
         )
@@ -574,7 +654,9 @@ class DuctComponent:
         # and this is a distinct, core DuctComponent property.
         if "LossCoefficientSource" not in obj.PropertiesList:
             obj.addProperty(
-                "App::PropertyEnumeration", "LossCoefficientSource", "Airflow",
+                "App::PropertyEnumeration",
+                "LossCoefficientSource",
+                "Airflow",
                 "Loss coefficient (K) source for this component: 'Library' uses the selected type's "
                 "own loss formula, 'Custom' uses per-port K values from CustomLossCoefficients instead",
                 16,
@@ -595,13 +677,19 @@ class DuctComponent:
         # _syncCustomLossCoefficients(), called every execute() alongside
         # LocalPortsJson itself.
         self._addProperty(
-            obj, "App::PropertyFloatList", "CustomLossCoefficients", "Airflow",
+            obj,
+            "App::PropertyFloatList",
+            "CustomLossCoefficients",
+            "Airflow",
             "Custom loss coefficients (K), one entry per port CustomLossCoefficientEdgeKeys names "
             "(same order). Used only when LossCoefficientSource is 'Custom'.",
             16,
         )
         self._addProperty(
-            obj, "App::PropertyStringList", "CustomLossCoefficientEdgeKeys", "HVAC",
+            obj,
+            "App::PropertyStringList",
+            "CustomLossCoefficientEdgeKeys",
+            "HVAC",
             "Internal: which local port (edge_key) each CustomLossCoefficients entry belongs to",
         )
         try:

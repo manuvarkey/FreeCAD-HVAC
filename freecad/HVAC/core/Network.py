@@ -22,25 +22,31 @@
 ################################################################################
 
 """This module implements HVAC duct description classes."""
+
 import json
 import traceback
 from dataclasses import asdict
+
 import FreeCAD
 
-from ..utils import hvaclib
-from ..utils import materials as hvac_materials
+from ..core import _construction_schema, _custom_loss, _port_properties
+from ..core.Component import DuctComponent
+from ..core.Junction import DuctJunction, DuctJunctionVirtual
 from ..core.NetworkParser import DuctNetworkParser
 from ..core.Segment import DuctSegment
-from ..core.Junction import DuctJunction, DuctJunctionVirtual
-from ..core.Component import DuctComponent
-from ..core import _construction_schema
-from ..core import _custom_loss
-from ..core import _port_properties
 from ..library.construction import (
-    ALL_LAYER_ROLES, ROLE_FLOW_SURFACE, ROLE_STRUCTURAL_SHELL,
-    ROLE_THERMAL_INSULATION, ROLE_ACOUSTIC_ABSORBER, ROLE_ACOUSTIC_LINER,
-    ROLE_VAPOR_BARRIER, ROLE_OUTER_JACKET, role_property_suffix,
+    ALL_LAYER_ROLES,
+    ROLE_ACOUSTIC_ABSORBER,
+    ROLE_ACOUSTIC_LINER,
+    ROLE_FLOW_SURFACE,
+    ROLE_OUTER_JACKET,
+    ROLE_STRUCTURAL_SHELL,
+    ROLE_THERMAL_INSULATION,
+    ROLE_VAPOR_BARRIER,
+    role_property_suffix,
 )
+from ..utils import hvaclib
+from ..utils import materials as hvac_materials
 
 
 class DuctManagedFolder:
@@ -123,7 +129,7 @@ class DuctNetwork:
         self.requestSync(initial_sync=True)
         # Resotore sync suspension after document restore
         self._sync_suspended = False
-        
+
     def execute(self, obj):
         """Manual recompute of the network triggers deferred synchronization."""
         if self._sync_in_progress:
@@ -139,10 +145,7 @@ class DuctNetwork:
             obj.addProperty("App::PropertyLink", "Base", "HVAC", "Base (internal)")
         if getattr(obj, "Base", None) is None and doc is not None:
             folder_base = DuctManagedFolder.create(
-                doc,
-                f"{obj.Name}_{self.FOLDER_BASE_NAME}",
-                owner=obj,
-                role=self.FOLDER_BASE_NAME,
+                doc, f"{obj.Name}_{self.FOLDER_BASE_NAME}", owner=obj, role=self.FOLDER_BASE_NAME
             )
             folder_base.Label = self.FOLDER_BASE_NAME
             obj.Base = folder_base
@@ -157,10 +160,7 @@ class DuctNetwork:
             obj.addProperty("App::PropertyLink", "Geometry", "HVAC", "Geometry (internal)")
         if getattr(obj, "Geometry", None) is None and doc is not None:
             folder_geometry = DuctManagedFolder.create(
-                doc,
-                f"{obj.Name}_{self.FOLDER_GEOMETRY_NAME}",
-                owner=obj,
-                role=self.FOLDER_GEOMETRY_NAME,
+                doc, f"{obj.Name}_{self.FOLDER_GEOMETRY_NAME}", owner=obj, role=self.FOLDER_GEOMETRY_NAME
             )
             folder_geometry.Label = self.FOLDER_GEOMETRY_NAME
             obj.Geometry = folder_geometry
@@ -169,16 +169,13 @@ class DuctNetwork:
                 obj.Geometry.OwnerNetworkName = obj.Name
             if getattr(obj.Geometry, "FolderRole", "") != self.FOLDER_GEOMETRY_NAME:
                 obj.Geometry.FolderRole = self.FOLDER_GEOMETRY_NAME
-                
+
         # Topology folder
         if "Topology" not in obj.PropertiesList:
             obj.addProperty("App::PropertyLink", "Topology", "HVAC", "Topology (internal)")
         if getattr(obj, "Topology", None) is None and doc is not None:
             folder_topology = DuctManagedFolder.create(
-                doc, 
-                f"{obj.Name}_{self.FOLDER_TOPOLOGY_NAME}",
-                owner=obj, 
-                role=self.FOLDER_TOPOLOGY_NAME
+                doc, f"{obj.Name}_{self.FOLDER_TOPOLOGY_NAME}", owner=obj, role=self.FOLDER_TOPOLOGY_NAME
             )
             folder_topology.Label = self.FOLDER_TOPOLOGY_NAME
             obj.Topology = folder_topology
@@ -201,64 +198,43 @@ class DuctNetwork:
         # -------------------------------------------------
         # Library/type defaults for this network
         # -------------------------------------------------
-        
+
         if "DefaultLibraryId" not in obj.PropertiesList:
             obj.addProperty(
-                "App::PropertyString",
-                "DefaultLibraryId",
-                "HVAC Types",
-                "Default HVAC library for derived geometry"
+                "App::PropertyString", "DefaultLibraryId", "HVAC Types", "Default HVAC library for derived geometry"
             )
-        
+
         if "DefaultSegmentProfile" not in obj.PropertiesList:
             obj.addProperty(
                 "App::PropertyString",
                 "DefaultSegmentProfile",
                 "HVAC Types",
-                "Default segment profile from selected library"
+                "Default segment profile from selected library",
             )
-        
+
         if "DefaultAttachment" not in obj.PropertiesList:
             obj.addProperty(
                 "App::PropertyEnumeration",
                 "DefaultAttachment",
                 "HVAC Types",
-                "Default section attachment for new segments"
+                "Default section attachment for new segments",
             )
             obj.DefaultAttachment = list(hvaclib.ATTACH_MAP.keys())
             obj.DefaultAttachment = "Center"
-        
+
         if "DefaultOffset" not in obj.PropertiesList:
             obj.addProperty(
-                "App::PropertyVector",
-                "DefaultOffset",
-                "HVAC Types",
-                "Default section offset for new segments"
+                "App::PropertyVector", "DefaultOffset", "HVAC Types", "Default section offset for new segments"
             )
-        
+
         if "DefaultDiameter" not in obj.PropertiesList:
-            obj.addProperty(
-                "App::PropertyLength",
-                "DefaultDiameter",
-                "HVAC Types",
-                "Default circular duct diameter"
-            )
-        
+            obj.addProperty("App::PropertyLength", "DefaultDiameter", "HVAC Types", "Default circular duct diameter")
+
         if "DefaultWidth" not in obj.PropertiesList:
-            obj.addProperty(
-                "App::PropertyLength",
-                "DefaultWidth",
-                "HVAC Types",
-                "Default rectangular duct width"
-            )
-        
+            obj.addProperty("App::PropertyLength", "DefaultWidth", "HVAC Types", "Default rectangular duct width")
+
         if "DefaultHeight" not in obj.PropertiesList:
-            obj.addProperty(
-                "App::PropertyLength",
-                "DefaultHeight",
-                "HVAC Types",
-                "Default rectangular duct height"
-            )
+            obj.addProperty("App::PropertyLength", "DefaultHeight", "HVAC Types", "Default rectangular duct height")
 
         # Materials::PropertyMaterial, not App::PropertyLinkGlobal -- see
         # the matching comment in Segment.py's setProperties(). One
@@ -284,28 +260,28 @@ class DuctNetwork:
             lib = hvaclib.HVACLibraryService.get_active_hvac_library()
             if lib:
                 obj.DefaultLibraryId = lib.id
-        
+
         if not getattr(obj, "DefaultSegmentProfile", ""):
             obj.DefaultSegmentProfile = hvaclib.HVACLibraryService.default_segment_profile_for_library(
                 getattr(obj, "DefaultLibraryId", "")
             )
-        
+
         try:
             if obj.DefaultOffset != FreeCAD.Vector(0, 0, 0):
                 pass
         except Exception:
             obj.DefaultOffset = FreeCAD.Vector(0, 0, 0)
-        
+
         if not getattr(obj, "DefaultDiameter", 0):
             obj.DefaultDiameter = 100.0
-        
+
         if not getattr(obj, "DefaultWidth", 0):
             obj.DefaultWidth = 100.0
-        
+
         if not getattr(obj, "DefaultHeight", 0):
             obj.DefaultHeight = 100.0
 
-        # Seed the standard construction-role materials. 
+        # Seed the standard construction-role materials.
         # # FireProtection intentionally has no HVAC material default.
         # Its property remains the persistable unassigned sentinel.
         def _seed_role_default(role, uuid):
@@ -334,7 +310,7 @@ class DuctNetwork:
                 "App::PropertyFloat",
                 "AirDensity",
                 "HVAC Air Properties",
-                "Air density (kg/m3) used for pressure-drop calculation"
+                "Air density (kg/m3) used for pressure-drop calculation",
             )
 
         if "AirKinematicViscosity" not in obj.PropertiesList:
@@ -342,7 +318,7 @@ class DuctNetwork:
                 "App::PropertyFloat",
                 "AirKinematicViscosity",
                 "HVAC Air Properties",
-                "Air kinematic viscosity (m2/s) used for Reynolds number"
+                "Air kinematic viscosity (m2/s) used for Reynolds number",
             )
 
         if "DefaultRoughness" not in obj.PropertiesList:
@@ -350,7 +326,7 @@ class DuctNetwork:
                 "App::PropertyLength",
                 "DefaultRoughness",
                 "HVAC Air Properties",
-                "Fallback absolute roughness when a construction's flow-surface material has no roughness"
+                "Fallback absolute roughness when a construction's flow-surface material has no roughness",
             )
 
         if not getattr(obj, "AirDensity", 0):
@@ -368,18 +344,25 @@ class DuctNetwork:
 
         if "SizingMethod" not in obj.PropertiesList:
             obj.addProperty(
-                "App::PropertyEnumeration",
-                "SizingMethod",
-                "HVAC Duct Sizing",
-                "Method used by the Size Ducts command"
+                "App::PropertyEnumeration", "SizingMethod", "HVAC Duct Sizing", "Method used by the Size Ducts command"
             )
-            obj.SizingMethod = ["ConstantVelocity", "ConstantFrictionRate", "StaticRegain", "PressureBalancedStaticRegain"]
+            obj.SizingMethod = [
+                "ConstantVelocity",
+                "ConstantFrictionRate",
+                "StaticRegain",
+                "PressureBalancedStaticRegain",
+            ]
             obj.SizingMethod = "ConstantVelocity"
         else:
             # Re-assigning the enum's own value list (not its current
             # value) is safe at any time and picks up new options on
             # documents created before this option existed.
-            obj.SizingMethod = ["ConstantVelocity", "ConstantFrictionRate", "StaticRegain", "PressureBalancedStaticRegain"]
+            obj.SizingMethod = [
+                "ConstantVelocity",
+                "ConstantFrictionRate",
+                "StaticRegain",
+                "PressureBalancedStaticRegain",
+            ]
 
         if "TargetVelocity" not in obj.PropertiesList:
             obj.addProperty(
@@ -387,7 +370,7 @@ class DuctNetwork:
                 "TargetVelocity",
                 "HVAC Duct Sizing",
                 "Target duct velocity (m/s) used when SizingMethod is ConstantVelocity, and as the "
-                "starting velocity for sections leaving the balancing terminal when SizingMethod is StaticRegain"
+                "starting velocity for sections leaving the balancing terminal when SizingMethod is StaticRegain",
             )
 
         if "TargetFrictionRate" not in obj.PropertiesList:
@@ -395,7 +378,7 @@ class DuctNetwork:
                 "App::PropertyFloat",
                 "TargetFrictionRate",
                 "HVAC Duct Sizing",
-                "Target friction rate (Pa/m) used when SizingMethod is ConstantFrictionRate"
+                "Target friction rate (Pa/m) used when SizingMethod is ConstantFrictionRate",
             )
 
         if "StaticRegainFactor" not in obj.PropertiesList:
@@ -403,7 +386,7 @@ class DuctNetwork:
                 "App::PropertyFloat",
                 "StaticRegainFactor",
                 "HVAC Duct Sizing",
-                "Fraction of velocity-pressure regain actually recovered (0-1) when SizingMethod is StaticRegain"
+                "Fraction of velocity-pressure regain actually recovered (0-1) when SizingMethod is StaticRegain",
             )
 
         if "MinimumVelocity" not in obj.PropertiesList:
@@ -412,7 +395,7 @@ class DuctNetwork:
                 "MinimumVelocity",
                 "HVAC Duct Sizing",
                 "Velocity floor (m/s) used when SizingMethod is StaticRegain, since regain sizing alone "
-                "can propose impractically large/slow ducts on small or low-velocity branches"
+                "can propose impractically large/slow ducts on small or low-velocity branches",
             )
 
         if "RectangularSizingMode" not in obj.PropertiesList:
@@ -420,7 +403,7 @@ class DuctNetwork:
                 "App::PropertyEnumeration",
                 "RectangularSizingMode",
                 "HVAC Duct Sizing",
-                "How the second dimension of a rectangular/oval duct is determined when sizing"
+                "How the second dimension of a rectangular/oval duct is determined when sizing",
             )
             obj.RectangularSizingMode = ["FixedAspectRatio", "FixedHeight", "FixedWidth"]
             obj.RectangularSizingMode = "FixedAspectRatio"
@@ -430,7 +413,7 @@ class DuctNetwork:
                 "App::PropertyFloat",
                 "TargetAspectRatio",
                 "HVAC Duct Sizing",
-                "Target Width:Height ratio used when RectangularSizingMode is FixedAspectRatio"
+                "Target Width:Height ratio used when RectangularSizingMode is FixedAspectRatio",
             )
 
         if "SizeRoundingIncrement" not in obj.PropertiesList:
@@ -438,7 +421,7 @@ class DuctNetwork:
                 "App::PropertyLength",
                 "SizeRoundingIncrement",
                 "HVAC Duct Sizing",
-                "Computed duct sizes are rounded up to the nearest multiple of this increment"
+                "Computed duct sizes are rounded up to the nearest multiple of this increment",
             )
 
         if not getattr(obj, "TargetVelocity", 0):
@@ -485,7 +468,7 @@ class DuctNetwork:
 
         lib_id = self.getDefaultLibraryId()
         return hvaclib.HVACLibraryService.default_segment_profile_for_library(lib_id)
-        
+
     def getDefaultAttachment(self):
         net = self.Object
         return str(getattr(net, "DefaultAttachment", "Center"))
@@ -495,8 +478,8 @@ class DuctNetwork:
         return FreeCAD.Vector(getattr(net, "DefaultOffset", FreeCAD.Vector(0, 0, 0)))
 
     ## Library defaults management
-    
-    def defaultSegmentSelection(self, kind='straight'):
+
+    def defaultSegmentSelection(self, kind="straight"):
         """
         Return network default segment library/profile/type.
         Used only when creating a new segment or resetting one to defaults.
@@ -510,9 +493,7 @@ class DuctNetwork:
         if profile not in valid_profiles:
             profile = hvaclib.HVACLibraryService.default_segment_profile_for_library(library_id)
 
-        selection = hvaclib.HVACLibraryService.select_segment_type(
-            library_id, profile, curved=(kind != "straight")
-        )
+        selection = hvaclib.HVACLibraryService.select_segment_type(library_id, profile, curved=(kind != "straight"))
         type_id = selection.type_def.id if selection.type_def else ""
 
         return {
@@ -552,28 +533,41 @@ class DuctNetwork:
         if library_id is not None and getattr(network_obj, "DefaultLibraryId", "") != str(library_id):
             network_obj.DefaultLibraryId = str(library_id)
             changed = True
-    
+
         if segment_profile is not None and getattr(network_obj, "DefaultSegmentProfile", "") != str(segment_profile):
             network_obj.DefaultSegmentProfile = str(segment_profile)
             changed = True
-    
-        if default_attachment is not None and str(getattr(network_obj, "DefaultAttachment", "Center")) != str(default_attachment):
+
+        if default_attachment is not None and str(getattr(network_obj, "DefaultAttachment", "Center")) != str(
+            default_attachment
+        ):
             network_obj.DefaultAttachment = str(default_attachment)
             changed = True
-    
-        if default_offset is not None and FreeCAD.Vector(getattr(network_obj, "DefaultOffset", FreeCAD.Vector(0, 0, 0))) != FreeCAD.Vector(default_offset):
+
+        if default_offset is not None and FreeCAD.Vector(
+            getattr(network_obj, "DefaultOffset", FreeCAD.Vector(0, 0, 0))
+        ) != FreeCAD.Vector(default_offset):
             network_obj.DefaultOffset = FreeCAD.Vector(default_offset)
             changed = True
-    
-        if default_diameter is not None and abs(float(getattr(network_obj, "DefaultDiameter", 100.0)) - float(default_diameter)) > 1e-9:
+
+        if (
+            default_diameter is not None
+            and abs(float(getattr(network_obj, "DefaultDiameter", 100.0)) - float(default_diameter)) > 1e-9
+        ):
             network_obj.DefaultDiameter = float(default_diameter)
             changed = True
-    
-        if default_width is not None and abs(float(getattr(network_obj, "DefaultWidth", 100.0)) - float(default_width)) > 1e-9:
+
+        if (
+            default_width is not None
+            and abs(float(getattr(network_obj, "DefaultWidth", 100.0)) - float(default_width)) > 1e-9
+        ):
             network_obj.DefaultWidth = float(default_width)
             changed = True
-    
-        if default_height is not None and abs(float(getattr(network_obj, "DefaultHeight", 100.0)) - float(default_height)) > 1e-9:
+
+        if (
+            default_height is not None
+            and abs(float(getattr(network_obj, "DefaultHeight", 100.0)) - float(default_height)) > 1e-9
+        ):
             network_obj.DefaultHeight = float(default_height)
             changed = True
 
@@ -591,7 +585,7 @@ class DuctNetwork:
             network_obj.touch()
             if network_obj.Document:
                 network_obj.Document.recompute()
-    
+
         return changed
 
     @staticmethod
@@ -643,9 +637,7 @@ class DuctNetwork:
                 # sticky manual TypeId, unlike normal sync (see
                 # HVACLibraryRegistry.resolve_sticky_type).
                 selection = hvaclib.HVACLibraryService.select_segment_type(
-                    default_lib.id,
-                    default_profile,
-                    curved=(kind != "straight"),
+                    default_lib.id, default_profile, curved=(kind != "straight")
                 )
                 default_type_id = selection.type_def.id if selection.type_def else ""
 
@@ -660,12 +652,12 @@ class DuctNetwork:
                 if hasattr(obj, "TypeId") and obj.TypeId != default_type_id:
                     obj.TypeId = default_type_id
                     changed = True
-                
+
                 default_attachment = net.Proxy.getDefaultAttachment()
                 if getattr(obj, "Attachment", "Center") != default_attachment:
                     obj.Attachment = default_attachment
                     changed = True
-                
+
                 default_offset = net.Proxy.getDefaultOffset()
                 if FreeCAD.Vector(getattr(obj, "Offset", FreeCAD.Vector(0, 0, 0))) != default_offset:
                     obj.Offset = default_offset
@@ -732,14 +724,14 @@ class DuctNetwork:
 
         if changed:
             doc.recompute()
-    
+
     ## Object Management
-    
+
     @staticmethod
     def createObject(name):
         from ..ui.NetworkViewProvider import DuctNetworkViewProvider
 
-        net = FreeCAD.ActiveDocument.addObject('App::DocumentObjectGroupPython', name)
+        net = FreeCAD.ActiveDocument.addObject("App::DocumentObjectGroupPython", name)
         DuctNetwork(net)
         DuctNetworkViewProvider(net.ViewObject)
         return net
@@ -758,18 +750,20 @@ class DuctNetwork:
             return False
         if obj in net.Base.OutList:
             return False
-        
+
         net.Base.addObject(obj)
         if getattr(net, "Proxy", None):
             net.Proxy.requestSync()
         net.Document.recompute()
         return True
-        
+
     def addVirtualJunctionObject(self, member_node_keys, member_points):
         obj = self.Object
         doc = obj.Document
         name = doc.getUniqueObjectName("VirtualJunction")
-        vj = DuctJunctionVirtual.create(doc, name, owner=obj, member_node_keys=member_node_keys, member_points=member_points)
+        vj = DuctJunctionVirtual.create(
+            doc, name, owner=obj, member_node_keys=member_node_keys, member_points=member_points
+        )
         obj.Topology.addObject(vj)
         return vj
 
@@ -783,7 +777,7 @@ class DuctNetwork:
             return False
         if obj not in net.Base.OutList:
             return False
-    
+
         net.Base.removeObject(obj)
         if getattr(net, "Proxy", None):
             net.Proxy.requestSync()
@@ -799,8 +793,9 @@ class DuctNetwork:
         if hvaclib.isDuctJunction(obj) and getattr(obj, "Proxy", None):
             for comp in list(obj.Proxy.getComponents()):
                 self.removeGeometryObject(comp)
-        if (hvaclib.isDuctSegment(obj) or hvaclib.isDuctJunction(obj) or hvaclib.isDuctComponent(obj)) \
-                and getattr(obj, "Proxy", None):
+        if (hvaclib.isDuctSegment(obj) or hvaclib.isDuctJunction(obj) or hvaclib.isDuctComponent(obj)) and getattr(
+            obj, "Proxy", None
+        ):
             obj.Proxy._allow_delete = True
         if hasattr(net, "Geometry") and net.Geometry and obj in net.Geometry.OutList:
             net.Geometry.removeObject(obj)
@@ -822,7 +817,7 @@ class DuctNetwork:
             if key:
                 segments[key] = child
         return segments
-        
+
     def collectJunctionObjects(self):
         net = self.Object
         junctions = {}
@@ -851,14 +846,15 @@ class DuctNetwork:
                 continue
             by_parent.setdefault(getattr(child, "ParentJunctionName", ""), []).append(child)
         for lst in by_parent.values():
-            lst.sort(key=lambda c: (
-                0 if getattr(c, "ComponentRole", "") == "Primary" else 1,
-                getattr(c, "AttachedEdgeKey", ""),
-                int(getattr(c, "PortSequence", 0)),
-                c.Name,
-            ))
+            lst.sort(
+                key=lambda c: (
+                    0 if getattr(c, "ComponentRole", "") == "Primary" else 1,
+                    getattr(c, "AttachedEdgeKey", ""),
+                    int(getattr(c, "PortSequence", 0)),
+                    c.Name,
+                )
+            )
         return by_parent
-
 
     def collectVirtualJunctionObjects(self):
         topology_objs = []
@@ -866,29 +862,29 @@ class DuctNetwork:
             if hvaclib.isDuctJunctionVirtual(child):
                 topology_objs.append(child)
         return topology_objs
-        
+
     def getNodeGroups(self, parser):
         """Compile node groups from virtual junction objects and the parser's node ID map."""
         node_groups = []
-        
+
         node_id_by_key = {parser.geometric_node_key(nid): nid for nid in parser.geometric_nodes()}
         virtual_objs = self.collectVirtualJunctionObjects()
-        
+
         for vj in virtual_objs:
             keys = vj.Proxy.getMemberNodeKeys()
             ids = []
-    
+
             for key in keys:
                 nid = node_id_by_key.get(key)
                 if nid is not None:
                     ids.append(nid)
-    
+
             ids = sorted(set(ids))
             if len(ids) >= 2:
                 node_groups.append(ids)
-    
+
         return node_groups
-    
+
     def setActive(self):
         """Set this DuctNetwork as the active container in the 3D view."""
         import FreeCADGui as Gui
@@ -935,7 +931,9 @@ class DuctNetwork:
     def selectAllGeometry(self):
         """Select all generated duct objects under the Geometry folder."""
         self._selectGeometry(
-            lambda child: hvaclib.isDuctSegment(child) or hvaclib.isDuctJunction(child) or hvaclib.isDuctComponent(child)
+            lambda child: (
+                hvaclib.isDuctSegment(child) or hvaclib.isDuctJunction(child) or hvaclib.isDuctComponent(child)
+            )
         )
 
     def selectAllSegments(self):
@@ -970,7 +968,7 @@ class DuctNetwork:
         for obj in list(geometry.OutList):
             if hvaclib.isDuctSegment(obj) or hvaclib.isDuctJunction(obj) or hvaclib.isDuctComponent(obj):
                 self._setGeometryVisibilityDeferred(obj, False)
-                
+
     def _segmentFromBaseObject(self, seg, base_obj):
         return (
             seg is not None
@@ -978,7 +976,7 @@ class DuctNetwork:
             and hvaclib.isDuctSegment(seg)
             and getattr(seg, "SourceObjectName", "") == base_obj.Name
         )
-                
+
     def showAllJunctionGeometry(self):
         # DuctJunction itself has no Shape/visual presence any more -- the
         # thing that actually needs hiding/showing while editing base
@@ -991,7 +989,7 @@ class DuctNetwork:
         for obj in list(self.Object.Geometry.OutList):
             if hvaclib.isDuctComponent(obj):
                 self._setGeometryVisibilityDeferred(obj, False)
-    
+
     def showGeometryForBaseObject(self, base_obj):
         net = self.Object
         geometry = getattr(net, "Geometry", None)
@@ -1000,7 +998,7 @@ class DuctNetwork:
         for seg in list(geometry.OutList):
             if self._segmentFromBaseObject(seg, base_obj):
                 self._setGeometryVisibilityDeferred(seg, True)
-                
+
     def hideGeometryForBaseObject(self, base_obj):
         net = self.Object
         geometry = getattr(net, "Geometry", None)
@@ -1009,7 +1007,7 @@ class DuctNetwork:
         for seg in list(geometry.OutList):
             if self._segmentFromBaseObject(seg, base_obj):
                 self._setGeometryVisibilityDeferred(seg, False)
-    
+
     def setBaseObjectEditing(self, base_obj, editing):
         net = self.Object
         if net is None or base_obj is None:
@@ -1022,24 +1020,24 @@ class DuctNetwork:
             self._hidden_source_names.discard(base_obj.Name)
             self.showGeometryForBaseObject(base_obj)
             self.showAllJunctionGeometry()
-        
+
     @staticmethod
     def isBaseObject(obj):
         if obj is None:
             return False
         if not (hvaclib.isSketch(obj) or hvaclib.isWire(obj)):
             return False
-            
+
         for net in hvaclib.allHVACNetworks(obj.Document):
             base = getattr(net, "Base", None)
             if base and obj in base.OutList:
                 return True
         return False
-        
+
     @staticmethod
     def isGeometryObject(obj):
         return hvaclib.isDuctJunction(obj) or hvaclib.isDuctSegment(obj) or hvaclib.isDuctComponent(obj)
-                
+
     @staticmethod
     def getOwnerNetwork(obj):
         """Return the owning duct network document object for an internal object."""
@@ -1055,7 +1053,7 @@ class DuctNetwork:
                 if base and obj in base.OutList:
                     return net
         return None
-        
+
     @staticmethod
     def getOwnerBaseObject(obj):
         """Return the base object for a given geometry object."""
@@ -1065,23 +1063,25 @@ class DuctNetwork:
             if owner_name and doc:
                 return doc.getObject(owner_name)
         return None
-    
+
     # Functions for syncing object data with the network parser
-    
+
     def syncVirtualJunctions(self, parser, initial_sync=False):
         """Update the MemberNodes property of virtual junction objects
-            from the actual node keys from parser."""
+        from the actual node keys from parser."""
         obj = self.Object
         for vj in self.collectVirtualJunctionObjects():
             # Use quantized point keys to look up new node keys from parser
             stored_points = vj.Proxy.getMemberPoints()
             stored_keys = vj.Proxy.getMemberNodeKeys()
             # Get quantised nodemap from parser
-            geo_nodekey_map = {parser.geometric_node_key(id): point for (id, point) in parser.geometric_node_point_map().items()}
+            geo_nodekey_map = {
+                parser.geometric_node_key(id): point for (id, point) in parser.geometric_node_point_map().items()
+            }
             # Find nodekeys from nodemap
             member_keys = []
             member_points = []
-                        
+
             # If initial_sync, use stored points to udate modified keys
             if initial_sync:
                 for key, point in geo_nodekey_map.items():
@@ -1094,18 +1094,14 @@ class DuctNetwork:
                     if key in stored_keys and key not in member_keys:
                         member_keys.append(key)
                         member_points.append(point)
-            
+
             # Update the MemberNodeKeys property with the new node keys
-            vj.Proxy.updateMetadata(
-                owner=obj, 
-                member_node_keys=member_keys, 
-                member_points=member_points
-            )
+            vj.Proxy.updateMetadata(owner=obj, member_node_keys=member_keys, member_points=member_points)
 
     def syncSegments(self, parser, initial_sync=False):
         """
         Synchronize derived DuctSegment objects with the base geometry.
-    
+
         Segment LibraryId / Profile / TypeId are object-owned values.
         Network defaults are only used when creating a new segment or repairing
         missing/invalid values.
@@ -1115,11 +1111,11 @@ class DuctNetwork:
         geometry = getattr(net, "Geometry", None)
         if doc is None or geometry is None:
             return False
-    
+
         default_lib = self.getDefaultLibrary()
         if default_lib is None:
             return False
-    
+
         changed = False
         existing_segments = self.collectSegmentObjects()
         trim_map = self.collectSegmentTrimMap()
@@ -1160,7 +1156,7 @@ class DuctNetwork:
             # Else find element based on key
             else:
                 segment_obj = existing_segments.get(key)
-    
+
             # If segment does not exist, create a new one
             if segment_obj is None:
                 segment_obj = DuctSegment.create(
@@ -1171,7 +1167,7 @@ class DuctNetwork:
                     source_obj=source_obj,
                     source_index=edge_ref.local_index,
                 )
-                
+
                 # Get and set default segment properties from default library
                 kind = hvaclib.BaseCurveKind(edge_ref.obj_name, edge_ref.local_index)
                 defaults = self.defaultSegmentSelection(kind=kind)
@@ -1185,22 +1181,22 @@ class DuctNetwork:
                     segment_obj.Attachment = defaults["attachment"]
                 if hasattr(segment_obj, "Offset"):
                     segment_obj.Offset = defaults["offset"]
-                
+
                 changed = True
-    
+
                 # If source base object is marked to be hidden, hide the created segment geometry
                 if source_obj.Name in self._hidden_source_names:
                     self._setGeometryVisibilityDeferred(segment_obj, False)
                 else:
                     self._setGeometryVisibilityDeferred(segment_obj, True)
-    
+
             # Add the segment object to the geometry folder if not already present
             if segment_obj not in geometry.OutList:
                 geometry.addObject(segment_obj)
                 changed = True
-            
+
             live_objs.add(segment_obj)
-            
+
             # Compute start and end points based on start/end nodes
             start_node, end_node = parser.edge_nodes(edge_ref)
             raw_start_point, raw_end_point = parser.edge_line(edge_ref)
@@ -1212,11 +1208,11 @@ class DuctNetwork:
             seg_dir.normalize()
             start_point = self.resolveSegmentEndpoint(raw_sp_vec, seg_dir, segment_obj)
             end_point = self.resolveSegmentEndpoint(raw_ep_vec, seg_dir, segment_obj)
-            
+
             # Get trim start/end from the trim map, if available
             trim_entry = trim_map.get(key, {})
             trim_start, trim_end = self.resolveSegmentEndTrims(trim_entry)
-            
+
             # Get library ID, profile and type_id for segment, defaulting to active library if not set
             library_id = getattr(segment_obj, "LibraryId", "") or self.getDefaultLibraryId()
             profile = getattr(segment_obj, "Profile", "")
@@ -1231,10 +1227,7 @@ class DuctNetwork:
             # it's still a compatible real model, otherwise auto-select.
             current_type_id = getattr(segment_obj, "TypeId", "")
             selection = hvaclib.HVACLibraryService.resolve_segment_type(
-                library_id,
-                current_type_id,
-                profile,
-                curved=(kind != "straight"),
+                library_id, current_type_id, profile, curved=(kind != "straight")
             )
             type_id = selection.type_def.id if selection.type_def else ""
 
@@ -1253,20 +1246,20 @@ class DuctNetwork:
                 family=family,
                 type_id=type_id,
                 library_id=library_id,
-                profile=profile
+                profile=profile,
             )
             changed = changed or meta_changed
-    
+
             # Update property schema based on type ID and library ID
             schema_changed = segment_obj.Proxy.applyTypeSchema()
             changed = changed or schema_changed
-    
+
             # If parameters were cached, restore them
             cached_params = self._runtime_param_cache.pop(key, None)
             if cached_params:
                 restored = self._restoreSegmentUserParams(segment_obj, cached_params)
                 changed = changed or restored
-    
+
             # Update label for segment object based on source object and edge index.
             # Once HVAC_RenumberNetwork has assigned this segment a Number,
             # its Label is documentation-owned by that command instead --
@@ -1277,7 +1270,7 @@ class DuctNetwork:
                 if segment_obj.Label != new_label:
                     segment_obj.Label = new_label
                     changed = True
-    
+
         # Remove old segments
         for segment_obj in list(existing_segments.values()):
             if segment_obj not in live_objs:
@@ -1287,9 +1280,9 @@ class DuctNetwork:
                     self._runtime_param_cache[seg_key] = self._segmentUserParams(segment_obj)
                 self.removeGeometryObject(segment_obj)
                 changed = True
-        
+
         return changed
-        
+
     def syncJunctions(self, parser, initial_sync=False):
         """
         Synchronize derived DuctJunction objects with parser nodes, and
@@ -1375,7 +1368,7 @@ class DuctNetwork:
                     node_key=node_key,
                     center_point=point,
                     degree=degree,
-                    topology=topology
+                    topology=topology,
                 )
                 changed = True
 
@@ -1404,10 +1397,17 @@ class DuctNetwork:
             # resolution), retain its Inline components, and compose the
             # whole chain's local ports.
             components_changed = self.syncJunctionComponents(
-                junction_obj, topology, family, match_profile, connected_ports,
-                components_by_parent.get(junction_obj.Name, []), default_lib,
+                junction_obj,
+                topology,
+                family,
+                match_profile,
+                connected_ports,
+                components_by_parent.get(junction_obj.Name, []),
+                default_lib,
                 hide_new=bool(self._hidden_source_names) if is_new_junction else None,
-                flow_class=flow_class, qualifiers=qualifiers, derived_values=derived_values,
+                flow_class=flow_class,
+                qualifiers=qualifiers,
+                derived_values=derived_values,
             )
             changed = changed or components_changed
 
@@ -1430,9 +1430,18 @@ class DuctNetwork:
         return changed
 
     def syncJunctionComponents(
-        self, junction_obj, topology, family, match_profile, connected_ports,
-        existing_components, default_lib, hide_new=None,
-        flow_class="", qualifiers=None, derived_values=None,
+        self,
+        junction_obj,
+        topology,
+        family,
+        match_profile,
+        connected_ports,
+        existing_components,
+        default_lib,
+        hide_new=None,
+        flow_class="",
+        qualifiers=None,
+        derived_values=None,
     ):
         """
         Create/update a junction's Primary DuctComponent (sticky type
@@ -1539,9 +1548,7 @@ class DuctNetwork:
         if drop:
             FreeCAD.Console.PrintWarning(
                 "HVAC - Junction '{}' no longer has edge(s) {}; removing {} inline component(s).\n".format(
-                    junction_obj.Label,
-                    sorted({getattr(c, "AttachedEdgeKey", "") for c in drop}),
-                    len(drop),
+                    junction_obj.Label, sorted({getattr(c, "AttachedEdgeKey", "") for c in drop}), len(drop)
                 )
             )
             for comp in drop:
@@ -1551,8 +1558,13 @@ class DuctNetwork:
 
         if primary is None:
             primary = DuctComponent.create(
-                doc, "{}_Comp0".format(junction_obj.Name),
-                parent_junction=junction_obj, role="Primary", attached_edge_key="", port_sequence=0, owner_network=net,
+                doc,
+                "{}_Comp0".format(junction_obj.Name),
+                parent_junction=junction_obj,
+                role="Primary",
+                attached_edge_key="",
+                port_sequence=0,
+                owner_network=net,
             )
             # DuctComponent.create()'s own setProperties() seeds LibraryId
             # from the registry's global "active" library (whichever loaded
@@ -1593,8 +1605,12 @@ class DuctNetwork:
         type_id = selection.type_def.id if selection.type_def else ""
 
         meta_changed = primary.Proxy.updateMetadata(
-            parent_junction=junction_obj, role="Primary", attached_edge_key="", port_sequence=0,
-            library_id=library_id, type_id=type_id,
+            parent_junction=junction_obj,
+            role="Primary",
+            attached_edge_key="",
+            port_sequence=0,
+            library_id=library_id,
+            type_id=type_id,
         )
         changed = changed or meta_changed
 
@@ -1605,9 +1621,7 @@ class DuctNetwork:
         # Number, its Label is documentation-owned by that command instead --
         # see the matching comment in syncSegments.
         if not getattr(primary, "Number", ""):
-            new_label = DuctComponent.labelFor(
-                "Primary", selection.type_def.label if selection.type_def else ""
-            )
+            new_label = DuctComponent.labelFor("Primary", selection.type_def.label if selection.type_def else "")
             if primary.Label != new_label:
                 primary.Label = new_label
                 changed = True
@@ -1629,7 +1643,7 @@ class DuctNetwork:
             comp.touch()
 
         return changed
-                            
+
     def refreshBaseDirectionOverlay(self, parser):
         obj = self.Object
         try:
@@ -1638,7 +1652,7 @@ class DuctNetwork:
                 vp.refreshBaseDirectionArrows(parser)
         except Exception:
             FreeCAD.Console.PrintError("Error refreshing base direction overlay.\n")
-    
+
     def requestSync(self, initial_sync=None, force_recompute=False):
         from PySide import QtCore
 
@@ -1657,15 +1671,15 @@ class DuctNetwork:
         else:
             FreeCAD.Console.PrintMessage("HVAC - Sync requested.\n")
         QtCore.QTimer.singleShot(0, lambda force_recompute=force_recompute: self._runDeferredSync(force_recompute))
-        
+
     def suspendSync(self):
         self._sync_suspended = True
-    
+
     def resumeSync(self, request_sync=True):
         self._sync_suspended = False
         if request_sync:
             self.requestSync()
-            
+
     def getParser(self, rebuild=False, set_node_groups=True):
         if self._parser is None or rebuild:
             parser = DuctNetworkParser(list(self.Object.Base.OutList))
@@ -1687,34 +1701,32 @@ class DuctNetwork:
             if proxy is not None and hasattr(proxy, "aggregateConnectionLengths"):
                 proxy.aggregateConnectionLengths()
 
-
     def _runDeferredSync(self, force_recompute=False):
         obj = self.Object
         self._sync_scheduled = False
-    
+
         if obj is None or obj.Document is None:
             return
         if self._sync_in_progress:
             return
-        
+
         self._sync_in_progress = True
         try:
-            
-            if self._initial_sync:  
+            if self._initial_sync:
                 # Do not run junction update on initial sync since edge tags will not be updated in segments
                 # Doing so will clear all junctions since edges could not be found
-                
+
                 # Get parser for syncing virtual junctions
                 parser = self.getParser(rebuild=True, set_node_groups=False)
                 # Update VirtualJunction keys
                 self.syncVirtualJunctions(parser, initial_sync=True)
                 # Rebuild parser after syncing virtual junctions
                 parser = self.getParser(rebuild=True)
-                
+
                 # Stage 1: Sync segments first to update edge data after document reload
                 self.syncSegments(parser, initial_sync=True)
                 obj.Document.recompute()
-                
+
                 # Stage 2: Sync junctions/components, so that each component's
                 # execute() writes its own ConnectionLengthsJson
                 self.syncJunctions(parser, initial_sync=True)
@@ -1726,20 +1738,20 @@ class DuctNetwork:
                 # Stage 3: Sync segments which consume the junction trim data
                 self.syncSegments(parser, initial_sync=False)
                 obj.Document.recompute()
-                
-            else:  
+
+            else:
                 # Get parser
                 parser = self.getParser(rebuild=True, set_node_groups=False)
                 # Update VirtualJunction keys
                 self.syncVirtualJunctions(parser, initial_sync=False)
                 # Rebuild parser after syncing virtual junctions
                 parser = self.getParser(rebuild=True)
-                
+
                 # Stage 1: Sync segments first to update edge data
                 changed_segments = self.syncSegments(parser, initial_sync=False)
                 if changed_segments or force_recompute:
                     obj.Document.recompute()
-                    
+
                 # Stage 2: Sync junctions/components, for creating ports; so
                 # that each component's execute() writes its own
                 # ConnectionLengthsJson
@@ -1754,20 +1766,18 @@ class DuctNetwork:
                 changed_segments = self.syncSegments(parser, initial_sync=False)
                 if changed_segments or force_recompute:
                     obj.Document.recompute()
-                    
+
             self._initial_sync = False
-            
+
             # Refresh visual base direction arrows using the same parser
             self.refreshBaseDirectionOverlay(parser)
-    
+
         except Exception as err:
             FreeCAD.Console.PrintError(traceback.format_exc())
-            FreeCAD.Console.PrintError(
-                "HVAC - Failed to update network '{}': {}\n".format(obj.Label, err)
-            )
+            FreeCAD.Console.PrintError("HVAC - Failed to update network '{}': {}\n".format(obj.Label, err))
         finally:
             self._sync_in_progress = False
-        
+
     @staticmethod
     def _segmentUserParams(obj):
         return {
@@ -1786,14 +1796,14 @@ class DuctNetwork:
             "RectangularSizingMode": str(getattr(obj, "RectangularSizingMode", "UseNetworkDefault")),
             "TargetAspectRatio": float(getattr(obj, "TargetAspectRatio", 0.0)),
         }
-    
+
     @staticmethod
     def _restoreSegmentUserParams(obj, params):
         if not isinstance(params, dict):
             return False
-    
+
         changed = False
-    
+
         def set_if_needed(prop, value):
             nonlocal changed
             try:
@@ -1802,7 +1812,7 @@ class DuctNetwork:
                     changed = True
             except Exception:
                 pass
-    
+
         if "LibraryId" in params:
             set_if_needed("LibraryId", params["LibraryId"])
         if "Profile" in params:
@@ -1833,7 +1843,7 @@ class DuctNetwork:
             set_if_needed("TargetAspectRatio", params["TargetAspectRatio"])
 
         return changed
-    
+
     @staticmethod
     def applyTypeSelection(objects, library_id="", type_id=""):
         """
@@ -1843,7 +1853,7 @@ class DuctNetwork:
         doc = FreeCAD.ActiveDocument
         if doc is None:
             return
-        
+
         nets_to_sync = set()
         reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
         changed = False
@@ -1897,7 +1907,7 @@ class DuctNetwork:
                     changed = proxy.applyTypeSchema() or changed
                 except Exception:
                     pass
-            
+
             # Touch the modified obects for recomputation
             try:
                 obj.touch()
@@ -1910,7 +1920,7 @@ class DuctNetwork:
                 proxy = getattr(net, "Proxy", None)
                 if proxy:
                     proxy.requestSync(force_recompute=True)
-     
+
     @staticmethod
     def applyAddInlineComponent(junction, edge_key, library_id, type_id):
         """
@@ -1940,9 +1950,12 @@ class DuctNetwork:
         name_index = len(junction.Proxy.getComponents())
 
         component = DuctComponent.create(
-            doc, "{}_Comp{}".format(junction.Name, name_index),
-            parent_junction=junction, role="Inline",
-            attached_edge_key=edge_key, port_sequence=next_port_sequence,
+            doc,
+            "{}_Comp{}".format(junction.Name, name_index),
+            parent_junction=junction,
+            role="Inline",
+            attached_edge_key=edge_key,
+            port_sequence=next_port_sequence,
             owner_network=net,
         )
         net.Geometry.addObject(component)
@@ -1982,27 +1995,27 @@ class DuctNetwork:
         doc = FreeCAD.ActiveDocument
         if doc is None:
             return
-    
+
         nets_to_sync = set()
         changed = False
         for obj in objects or []:
             if obj is None or not hvaclib.isDuctSegment(obj):
                 continue
-    
+
             net = DuctNetwork.getOwnerNetwork(obj)
             if net is not None:
                 nets_to_sync.add(net)
-    
+
             if attachment is not None and getattr(obj, "Attachment", "") != attachment:
                 obj.Attachment = attachment
                 changed = True
-            if offset is not None and getattr(obj, "Offset", FreeCAD.Vector(0,0,0)) != offset:
+            if offset is not None and getattr(obj, "Offset", FreeCAD.Vector(0, 0, 0)) != offset:
                 obj.Offset = offset
                 changed = True
-            if profile_x_axis is not None and getattr(obj, "ProfileXAxis", FreeCAD.Vector(0,0,0)) != profile_x_axis:
+            if profile_x_axis is not None and getattr(obj, "ProfileXAxis", FreeCAD.Vector(0, 0, 0)) != profile_x_axis:
                 obj.ProfileXAxis = profile_x_axis
                 changed = True
-    
+
             try:
                 obj.touch()
             except Exception:
@@ -2037,11 +2050,11 @@ class DuctNetwork:
                     setattr(obj, prop_name, material)
 
     ## Trim map generation from junctions
-    
+
     def collectSegmentTrimMap(self):
         """
         Collect trim contributions from all junctions.
-    
+
         Returns:
             {
                 "edge_key": {
@@ -2053,46 +2066,46 @@ class DuctNetwork:
         """
         net = self.Object
         trim_map = {}
-    
+
         geometry = getattr(net, "Geometry", None)
         if geometry is None:
             return trim_map
-    
+
         for obj in list(geometry.OutList):
             if not hvaclib.isDuctJunction(obj):
                 continue
-    
+
             raw = getattr(obj, "ConnectionLengthsJson", "") or "[]"
             try:
                 items = json.loads(raw)
             except Exception:
                 continue
-    
+
             if not isinstance(items, list):
                 continue
-    
+
             for item in items:
                 if not isinstance(item, dict):
                     continue
-    
+
                 edge_key = str(item.get("edge_key", "") or "")
                 seg_end = str(item.get("segment_end", "") or "")
                 if not edge_key or seg_end not in ("start", "end"):
                     continue
-    
+
                 try:
                     length = float(item.get("length", 0.0) or 0.0)
                 except Exception:
                     length = 0.0
-    
+
                 if length < 0:
                     length = 0.0
-    
+
                 trim_map.setdefault(edge_key, {"start": 0.0, "end": 0.0})
                 trim_map[edge_key][seg_end] = max(trim_map[edge_key][seg_end], length)
-    
+
         return trim_map
-        
+
     @staticmethod
     def resolveSegmentEndpoint(base_point, direction, seg_obj):
         return hvaclib.compute_port_position(
@@ -2100,10 +2113,10 @@ class DuctNetwork:
             direction,
             hvaclib.get_segment_section_params(seg_obj),
             getattr(seg_obj, "Attachment", "Center"),
-            getattr(seg_obj, "Offset", FreeCAD.Vector(0,0,0)),
-            getattr(seg_obj, "ProfileXAxis", FreeCAD.Vector(0, 0, 0))
+            getattr(seg_obj, "Offset", FreeCAD.Vector(0, 0, 0)),
+            getattr(seg_obj, "ProfileXAxis", FreeCAD.Vector(0, 0, 0)),
         )
-    
+
     @staticmethod
     def resolveSegmentEndTrims(trim_entry):
         """
@@ -2111,15 +2124,15 @@ class DuctNetwork:
         """
         if not trim_entry:
             return 0.0, 0.0
-    
+
         ts = max(0.0, float(trim_entry.get("start", 0.0) or 0.0))
         te = max(0.0, float(trim_entry.get("end", 0.0) or 0.0))
         return ts, te
 
 
-#=================================================
+# =================================================
 # General functions
-#=================================================
+# =================================================
 
 
 def create_new_duct_network(name="DuctNetwork", set_active=True):
@@ -2130,6 +2143,7 @@ def create_new_duct_network(name="DuctNetwork", set_active=True):
     if set_active:
         # Set as active network and enable edit mode
         activate_duct_network(net, set_edit=False)
+
 
 def activate_duct_network(net, set_edit=False):
     if hvaclib.isDuctNetwork(net):
@@ -2143,11 +2157,13 @@ def activate_duct_network(net, set_edit=False):
             pass
         hvaclib.refreshState()
 
+
 def modify_duct_network(net):
     """Modify the selected HVAC duct network object"""
     # Set as active network and enable edit mode
     activate_duct_network(net, set_edit=True)
     FreeCAD.Console.PrintMessage("HVAC - Edit DuctNetwork completed")
+
 
 def delete_duct_networks(nets, remove_internal_only=False):
     """Delete the selected HVAC duct network object"""
@@ -2155,20 +2171,20 @@ def delete_duct_networks(nets, remove_internal_only=False):
     for net in nets:
         if net.Document != doc:
             continue
-            
+
         if hasattr(net, "Proxy") and net.Proxy:
             net.Proxy._allow_internal_delete = True
-            
+
         if hasattr(net, "Geometry") and net.Geometry:
             for obj in list(net.Geometry.OutList):
                 net.Proxy.removeGeometryObject(obj)
             doc.removeObject(net.Geometry.Name)
-            
+
         if hasattr(net, "Base") and net.Base:
             for obj in list(net.Base.OutList):
                 net.Base.removeObject(obj)
             doc.removeObject(net.Base.Name)
-            
+
         if not remove_internal_only:
             doc.removeObject(net.Name)
     hvaclib.refreshState()
