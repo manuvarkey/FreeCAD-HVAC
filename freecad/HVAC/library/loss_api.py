@@ -38,6 +38,9 @@ from ..analysis import physics as airflow
 from ..analysis.loss import LossEvaluation, LossPath, LossStatus
 from . import smacna_loss
 from .library_api import HVACLibraryAPI
+from .loss_tables import entries_exits as entry_exit_tables
+from .loss_tables import obstructions as obstruction_tables
+from .loss_tables import table as loss_table
 
 
 class HVACLossAPI:
@@ -762,6 +765,358 @@ class HVACLossAPI:
             return HVACLossAPI._exact([HVACLossAPI._leg_path(outlet, inlet["edge_key"], k, source="inline_device")])
         except Exception as exc:
             return HVACLossAPI._unsupported("unexpected error computing inline device loss: {}".format(exc))
+
+    # ------------------------------------------------------------------
+    # Table-driven entries, exits, screens, dampers and obstructions
+    # (SMACNA Tables 14-15 to 14-18, see library/loss_tables/).
+    #
+    # Each reads its geometry from the type's own properties. Lengths are
+    # in mm and angles in degrees, like every other property.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _from_lookup(port, other_edge_key, lookup, source, notes=()):
+        """
+        One-path LossEvaluation from a table Lookup. EXACT when the point
+        was inside the printed table; otherwise APPROXIMATION with a
+        warning saying why (off the printed range, a blank cell, or any
+        extra `notes` the caller adds).
+        """
+        path = HVACLossAPI._leg_path(port, other_edge_key, lookup.value, source=source)
+        reasons = list(notes)
+        if lookup.clamped:
+            reasons.append("outside the printed range of the table")
+        if lookup.filled:
+            reasons.append("in a cell the table leaves blank")
+        if reasons:
+            return HVACLossAPI._approximation([path], "{}: {}".format(source, "; ".join(reasons)))
+        return HVACLossAPI._exact([path])
+
+    @staticmethod
+    def _reference_diameter_mm(port):
+        """
+        The "D" the tables divide lengths by: the diameter of a round duct,
+        2HW / (H + W) for a rectangular one. Returns (D, note); the note is
+        set for a profile the tables are not printed for (oval is treated
+        like a rectangle of the same width and height).
+        """
+        profile = HVACLibraryAPI.port_profile(port)
+        if profile == "Circular":
+            return float(HVACLibraryAPI.port_diameter(port)), None
+        width, height = float(HVACLibraryAPI.port_width(port)), float(HVACLibraryAPI.port_height(port))
+        if width <= 0.0 or height <= 0.0:
+            return 0.0, None
+        note = None if profile == "Rectangular" else "table is not printed for a {} duct".format(profile)
+        return 2.0 * height * width / (height + width), note
+
+    @staticmethod
+    def _screen_lookup(properties):
+        """The Table 14-17 lookup for an optional screen/plate in an opening, or None if there is none."""
+        free_area = float(properties.get("ScreenFreeArea", 0.0) or 0.0)
+        if free_area <= 0.0 or free_area >= 1.0:
+            return None
+        return obstruction_tables.screen(free_area)
+
+    @staticmethod
+    def _single_port(context, entering):
+        """
+        The one port of a terminal fitting, checked against the flow
+        direction the fitting is for. Returns (port, None) or (None, reason).
+        `entering` = air enters the duct system here.
+        """
+        ports = HVACLibraryAPI.connected_ports(context)
+        if len(ports) != 1:
+            return None, "expected exactly 1 connected port, found {}".format(len(ports))
+        port = ports[0]
+        # Air entering the system flows out of this terminal node into its duct.
+        flows_into_node = port.get("flow_into_junction")
+        if flows_into_node is None:
+            return None, "flow direction at the terminal is not known"
+        if bool(flows_into_node) == bool(entering):
+            kind = "an entry" if entering else "an exit"
+            return None, "this is {} fitting, but air flows the other way here".format(kind)
+        return port, None
+
+    @staticmethod
+    def entry_loss(context):
+        """
+        Loss of an entry: air entering the duct system from a room or from
+        outdoors (SMACNA Table 14-15). properties["EntryType"] picks the shape:
+
+        - "duct_in_wall" (default): plain duct end. WallThickness,
+          ProjectionLength (how far it sticks out of the wall; 0 = flush).
+        - "bellmouth": rounded lip (round ducts). LipRadius, EndWall.
+        - "conical": cone or pyramid. ConeAngle (included), ConeLength, EndWall.
+        - "intake_hood": weather hood. HoodAngle (0 or 15), HoodHeight.
+        - "tapered_hood": capture hood. HoodAngle (included).
+        - "canopy_hood": kitchen canopy, one fixed coefficient.
+
+        ScreenFreeArea (0 to 1) adds a screen in the opening; OpeningAreaRatio
+        is that opening's area over the duct area (default 1).
+        """
+        try:
+            port, problem = HVACLossAPI._single_port(context, entering=True)
+            if port is None:
+                return HVACLossAPI._unsupported(problem)
+            properties = context.get("properties") or {}
+            kind = str(properties.get("EntryType", "") or "duct_in_wall")
+            diameter, note = HVACLossAPI._reference_diameter_mm(port)
+            if diameter <= 0.0:
+                return HVACLossAPI._unsupported("invalid duct size")
+            rectangular = HVACLibraryAPI.port_profile(port) != "Circular"
+            notes = [note] if note else []
+
+            def length(name):
+                return max(float(properties.get(name, 0.0) or 0.0), 0.0)
+
+            end_wall = bool(properties.get("EndWall", False))
+            if kind == "duct_in_wall":
+                lookup = entry_exit_tables.entry_duct_in_wall(
+                    length("WallThickness") / diameter, length("ProjectionLength") / diameter
+                )
+            elif kind == "bellmouth":
+                if rectangular:
+                    notes.append("bellmouth table is printed for round ducts")
+                lookup = entry_exit_tables.entry_bellmouth(length("LipRadius") / diameter, end_wall)
+            elif kind == "conical":
+                lookup = entry_exit_tables.entry_conical(length("ConeAngle"), length("ConeLength") / diameter, end_wall)
+            elif kind == "intake_hood":
+                lookup = entry_exit_tables.entry_intake_hood(length("HoodAngle"), length("HoodHeight") / diameter)
+            elif kind == "tapered_hood":
+                lookup = entry_exit_tables.entry_hood_tapered(length("HoodAngle"), rectangular)
+            elif kind == "canopy_hood":
+                lookup = loss_table.Lookup(entry_exit_tables.ENTRY_CANOPY_HOOD_C)
+            else:
+                return HVACLossAPI._unsupported("unknown EntryType '{}'".format(kind))
+
+            screen = HVACLossAPI._screen_lookup(properties)
+            if screen is not None:
+                ratio = float(properties.get("OpeningAreaRatio", 1.0) or 1.0)
+                lookup = entry_exit_tables.with_screen(lookup, screen, ratio)
+            return HVACLossAPI._from_lookup(port, None, lookup, "smacna_entry_" + kind, notes)
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing entry loss: {}".format(exc))
+
+    @staticmethod
+    def exit_loss(context):
+        """
+        Loss of an exit: air leaving the duct system (SMACNA Table 14-16).
+        properties["ExitType"] picks the shape:
+
+        - "abrupt" (default): plain duct end, C = 1.
+        - "conical": round diffusing cone. ConeAngle (included), AreaRatio
+          (exit area over duct area).
+        - "plane_diffuser": rectangular, one pair of sides diverging. ConeAngle, AreaRatio.
+        - "pyramidal_diffuser": rectangular, all sides diverging. ConeAngle, AreaRatio.
+        - "exhaust_hood": weather hood. HoodAngle (0 or 15), HoodHeight.
+
+        ScreenFreeArea (0 to 1) adds a screen in the exit opening.
+        """
+        try:
+            port, problem = HVACLossAPI._single_port(context, entering=False)
+            if port is None:
+                return HVACLossAPI._unsupported(problem)
+            properties = context.get("properties") or {}
+            kind = str(properties.get("ExitType", "") or "abrupt")
+            diameter, note = HVACLossAPI._reference_diameter_mm(port)
+            if diameter <= 0.0:
+                return HVACLossAPI._unsupported("invalid duct size")
+            rectangular = HVACLibraryAPI.port_profile(port) != "Circular"
+            notes = [note] if note else []
+
+            def value(name, default=0.0):
+                return max(float(properties.get(name, default) or default), 0.0)
+
+            area_ratio = max(value("AreaRatio", 1.0), 1.0)
+            opening_ratio = 1.0
+            if kind == "abrupt":
+                lookup = loss_table.Lookup(entry_exit_tables.EXIT_ABRUPT_C)
+            elif kind == "conical":
+                if rectangular:
+                    notes.append("conical exit table is printed for round ducts")
+                lookup = entry_exit_tables.exit_conical_round(value("ConeAngle"), area_ratio)
+                opening_ratio = area_ratio
+            elif kind in ("plane_diffuser", "pyramidal_diffuser"):
+                if not rectangular:
+                    notes.append("diffuser exit table is printed for rectangular ducts")
+                table_fn = (
+                    entry_exit_tables.exit_plane_diffuser_rect
+                    if kind == "plane_diffuser"
+                    else entry_exit_tables.exit_pyramidal_diffuser_rect
+                )
+                lookup = table_fn(value("ConeAngle"), area_ratio)
+                opening_ratio = area_ratio
+            elif kind == "exhaust_hood":
+                lookup = entry_exit_tables.exit_exhaust_hood(value("HoodAngle"), value("HoodHeight") / diameter)
+            else:
+                return HVACLossAPI._unsupported("unknown ExitType '{}'".format(kind))
+
+            screen = HVACLossAPI._screen_lookup(properties)
+            if screen is not None:
+                lookup = entry_exit_tables.with_screen(lookup, screen, opening_ratio)
+            return HVACLossAPI._from_lookup(port, None, lookup, "smacna_exit_" + kind, notes)
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing exit loss: {}".format(exc))
+
+    @staticmethod
+    def _inline_ports(context):
+        """(inlet, outlet) of a two-port inline fitting, or (None, reason)."""
+        ports = HVACLibraryAPI.connected_ports(context)
+        if len(ports) != 2:
+            return None, "expected exactly 2 connected ports, found {}".format(len(ports))
+        outlet = next((p for p in ports if p.get("flow_into_junction") is False), None)
+        if outlet is None:
+            return None, "could not resolve outlet direction"
+        inlet = next(p for p in ports if p is not outlet)
+        return (inlet, outlet), None
+
+    @staticmethod
+    def screen_loss(context):
+        """
+        Loss of a screen or perforated plate across the duct (SMACNA Table
+        14-17). properties["FreeAreaRatio"] is the open fraction (0 to 1).
+        A perforated plate also sets PlateThickness and HoleDiameter; with
+        no HoleDiameter the fitting is treated as a wire screen.
+        """
+        try:
+            pair, problem = HVACLossAPI._inline_ports(context)
+            if pair is None:
+                return HVACLossAPI._unsupported(problem)
+            inlet, outlet = pair
+            properties = context.get("properties") or {}
+            free_area = float(properties.get("FreeAreaRatio", 0.0) or 0.0)
+            if free_area <= 0.0 or free_area > 1.0:
+                return HVACLossAPI._unsupported("FreeAreaRatio must be above 0 and at most 1")
+            hole = float(properties.get("HoleDiameter", 0.0) or 0.0)
+            if hole > 0.0:
+                thickness = float(properties.get("PlateThickness", 0.0) or 0.0)
+                lookup = obstruction_tables.perforated_plate(free_area, thickness / hole)
+                source = "smacna_perforated_plate"
+            else:
+                lookup = obstruction_tables.screen(free_area)
+                source = "smacna_screen"
+            return HVACLossAPI._from_lookup(outlet, inlet["edge_key"], lookup, source)
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing screen loss: {}".format(exc))
+
+    @staticmethod
+    def damper_loss(context):
+        """
+        Loss of a damper at its current blade position (SMACNA Table 14-18
+        A to G). properties["DamperType"] picks the kind:
+
+        - "butterfly" (default): single thin blade. BladeAngle (0 = fully open).
+        - "butterfly_airfoil": single airfoil blade, rectangular. BladeAngle.
+        - "gate": sliding gate. GateOpening = open height over duct height (0 to 1).
+        - "parallel_blade" / "opposed_blade": multi-blade, rectangular.
+          BladeAngle, BladeCount; the blades run along the duct width.
+        """
+        try:
+            pair, problem = HVACLossAPI._inline_ports(context)
+            if pair is None:
+                return HVACLossAPI._unsupported(problem)
+            inlet, outlet = pair
+            properties = context.get("properties") or {}
+            kind = str(properties.get("DamperType", "") or "butterfly")
+            angle = max(float(properties.get("BladeAngle", 0.0) or 0.0), 0.0)
+            profile = HVACLibraryAPI.port_profile(outlet)
+            round_duct = profile == "Circular"
+            notes = []
+            if profile not in ("Circular", "Rectangular"):
+                notes.append("table is not printed for a {} duct".format(profile))
+
+            if kind == "butterfly":
+                table_kind = "thin_plate_round" if round_duct else "thin_plate_rect"
+                lookup = obstruction_tables.butterfly_damper(table_kind, angle)
+            elif kind == "butterfly_airfoil":
+                if round_duct:
+                    notes.append("airfoil blade table is printed for rectangular ducts")
+                lookup = obstruction_tables.butterfly_damper("airfoil_rect", angle)
+            elif kind == "gate":
+                opening = float(properties.get("GateOpening", 1.0) or 0.0)
+                if opening <= 0.0:
+                    return HVACLossAPI._unsupported("GateOpening must be above 0 (a closed gate passes no air)")
+                if round_duct:
+                    lookup = obstruction_tables.gate_damper_round(opening)
+                else:
+                    width, height = HVACLibraryAPI.port_width(outlet), HVACLibraryAPI.port_height(outlet)
+                    if width <= 0.0 or height <= 0.0:
+                        return HVACLossAPI._unsupported("invalid duct size")
+                    lookup = obstruction_tables.gate_damper_rect(height / width, opening)
+            elif kind in ("parallel_blade", "opposed_blade"):
+                if round_duct:
+                    return HVACLossAPI._unsupported("multi-blade damper tables are for rectangular ducts")
+                width, height = HVACLibraryAPI.port_width(outlet), HVACLibraryAPI.port_height(outlet)
+                blades = int(properties.get("BladeCount", 0) or 0)
+                if width <= 0.0 or height <= 0.0 or blades <= 0:
+                    return HVACLossAPI._unsupported("invalid duct size or BladeCount")
+                l_on_r = obstruction_tables.blade_l_on_r(blades, width, width, height)
+                lookup = obstruction_tables.multi_blade_damper(kind == "opposed_blade", l_on_r, angle)
+            else:
+                return HVACLossAPI._unsupported("unknown DamperType '{}'".format(kind))
+            return HVACLossAPI._from_lookup(outlet, inlet["edge_key"], lookup, "smacna_damper_" + kind, notes)
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing damper loss: {}".format(exc))
+
+    @staticmethod
+    def obstruction_loss(context):
+        """
+        Loss of a smooth cylinder (a pipe, a rod) crossing the duct (SMACNA
+        Table 14-18 H). properties: ObstructionDiameter, and OffsetFromCentre
+        (distance of the cylinder axis from the duct centreline; 0 = centred).
+        In a rectangular duct the cylinder runs along the width and is
+        offset along the height.
+
+        Needs the air's kinematic viscosity and the duct velocity from the
+        solver context. With no flow the coefficient cannot be read (it
+        depends on the Reynolds number), so a zero loss is returned.
+        """
+        try:
+            pair, problem = HVACLossAPI._inline_ports(context)
+            if pair is None:
+                return HVACLossAPI._unsupported(problem)
+            inlet, outlet = pair
+            properties = context.get("properties") or {}
+            d_mm = float(properties.get("ObstructionDiameter", 0.0) or 0.0)
+            offset_mm = abs(float(properties.get("OffsetFromCentre", 0.0) or 0.0))
+            if d_mm <= 0.0:
+                return HVACLossAPI._unsupported("ObstructionDiameter not set")
+
+            # Step 1: the length of cylinder inside the duct, and the duct depth it is offset along.
+            profile = HVACLibraryAPI.port_profile(outlet)
+            notes = []
+            if profile == "Circular":
+                depth = float(HVACLibraryAPI.port_diameter(outlet))
+                if offset_mm >= depth / 2.0:
+                    return HVACLossAPI._unsupported("the obstruction lies outside the duct")
+                inside_length = 2.0 * math.sqrt((depth / 2.0) ** 2 - offset_mm**2)
+            else:
+                inside_length = float(HVACLibraryAPI.port_width(outlet))
+                depth = float(HVACLibraryAPI.port_height(outlet))
+                if profile != "Rectangular":
+                    notes.append("table is not printed for a {} duct".format(profile))
+            area_mm2 = HVACLibraryAPI.port_area(outlet) * 1.0e6
+            if depth <= 0.0 or inside_length <= 0.0 or area_mm2 <= 0.0:
+                return HVACLossAPI._unsupported("invalid duct size")
+
+            # Step 2: Reynolds number of the cylinder itself.
+            velocity = float(outlet.get("velocity_ms", 0.0) or 0.0)
+            viscosity = float(context.get("air_kinematic_viscosity", 0.0) or 0.0)
+            if velocity <= 1.0e-9:
+                zero = HVACLossAPI._leg_path(outlet, inlet["edge_key"], 0.0, source="smacna_obstruction")
+                return HVACLossAPI._exact([zero])
+            if viscosity <= 0.0:
+                return HVACLossAPI._unsupported("no air viscosity available")
+            reynolds = velocity * airflow.mm_to_m(d_mm) / viscosity
+
+            # Step 3: table lookup. The source limits the table to Sm/A < 0.3.
+            sm_on_a = d_mm * inside_length / area_mm2
+            if sm_on_a >= 0.3:
+                notes.append("the obstruction blocks more of the duct than the table covers")
+            lookup = obstruction_tables.cylinder(reynolds, sm_on_a, offset_mm / depth)
+            return HVACLossAPI._from_lookup(outlet, inlet["edge_key"], lookup, "smacna_obstruction", notes)
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing obstruction loss: {}".format(exc))
 
     @staticmethod
     def uniform_fallback_loss(context, k, warning=None):

@@ -128,3 +128,30 @@ def loss_damper_generic(context):
 
 def loss_vav_generic(context):
     return context["loss_api"].inline_device_loss(context)
+
+
+# ----------------------------------------------------------------------
+# Table-driven terminal and inline fittings (SMACNA Tables 14-15 to
+# 14-18). Each reads its shape from the type's own properties -- see the
+# matching HVACLossAPI method for the property names.
+# ----------------------------------------------------------------------
+
+
+def loss_entry(context):
+    return context["loss_api"].entry_loss(context)
+
+
+def loss_exit(context):
+    return context["loss_api"].exit_loss(context)
+
+
+def loss_screen(context):
+    return context["loss_api"].screen_loss(context)
+
+
+def loss_damper(context):
+    return context["loss_api"].damper_loss(context)
+
+
+def loss_obstruction(context):
+    return context["loss_api"].obstruction_loss(context)
