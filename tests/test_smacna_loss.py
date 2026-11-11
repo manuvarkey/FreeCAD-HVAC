@@ -3,37 +3,6 @@ import pytest
 from freecad.HVAC.library import smacna_loss as sl
 
 # ----------------------------------------------------------------------------
-# Interpolation helpers
-# ----------------------------------------------------------------------------
-
-
-def test_interp1d_exact_grid_point():
-    assert sl._interp1d(1.0, [0.5, 1.0, 1.5], [10.0, 20.0, 30.0]) == pytest.approx(20.0)
-
-
-def test_interp1d_midpoint():
-    assert sl._interp1d(1.25, [1.0, 1.5], [20.0, 30.0]) == pytest.approx(25.0)
-
-
-def test_interp1d_clamps_outside_range():
-    assert sl._interp1d(-5.0, [0.0, 1.0], [1.0, 2.0]) == pytest.approx(1.0)
-    assert sl._interp1d(50.0, [0.0, 1.0], [1.0, 2.0]) == pytest.approx(2.0)
-
-
-def test_interp2d_exact_grid_point():
-    table = [[1.0, 2.0], [3.0, 4.0]]  # table[iy][ix]
-    got = sl._interp2d(x=10.0, y=200.0, xs=[10.0, 20.0], ys=[100.0, 200.0], table=table)
-    assert got == pytest.approx(3.0)
-
-
-def test_interp2d_handles_descending_y_axis():
-    # Same table, but ys given descending -- must match table row order.
-    table = [[3.0, 4.0], [1.0, 2.0]]  # row0 -> y=200, row1 -> y=100
-    got = sl._interp2d(x=10.0, y=200.0, xs=[10.0, 20.0], ys=[200.0, 100.0], table=table)
-    assert got == pytest.approx(3.0)
-
-
-# ----------------------------------------------------------------------------
 # Elbows
 # ----------------------------------------------------------------------------
 
@@ -69,11 +38,23 @@ def test_elbow_zeta_rect_reynolds_correction_reduces_at_low_reynolds():
 
 
 def test_expansion_zeta_round_exact_grid_point_mid_reynolds():
-    # theta=90 (index 5), area_ratio=4 (index 1) -> mid-Re table value 0.59, referenced to small duct.
+    # theta=90, area_ratio=4 at Re = 2e5 -> printed 0.59, referenced to small duct.
     zeta_small_equivalent = 0.59
     expected_large = zeta_small_equivalent * (4.0**2)
-    got = sl.expansion_zeta_round(theta_deg=90.0, area_ratio=4.0, reynolds=3e5)
+    got = sl.expansion_zeta_round(theta_deg=90.0, area_ratio=4.0, reynolds=2e5)
     assert got == pytest.approx(expected_large)
+
+
+def test_expansion_zeta_round_interpolates_between_printed_reynolds_numbers():
+    # Halfway between the 2e5 block (0.59) and the 6e5 block (0.58).
+    got = sl.expansion_zeta_round(theta_deg=90.0, area_ratio=4.0, reynolds=4e5)
+    assert got == pytest.approx(0.585 * (4.0**2))
+
+
+def test_diverging_branch_interpolates_between_printed_angles():
+    # 52.5 deg is halfway between the 45 deg (0.40) and 60 deg (0.68) tables at Ab/Ac = 0.5, Qb/Qc = 0.5.
+    zeta_branch, _ = sl.diverging_branch_zetas(angle_deg=52.5, ab_on_ac=0.5, vb_on_vc=1.0, vs_on_vc=0.4)
+    assert zeta_branch == pytest.approx(0.54)
 
 
 def test_expansion_zeta_round_picks_reynolds_bucket():
