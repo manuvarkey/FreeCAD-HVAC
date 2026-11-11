@@ -527,6 +527,25 @@ type. If the request means something else, revisit.
 | 8 | Loss tables as Python literals or JSON data files | Python modules, simpler to test and diff |
 | 9 | Plenum registered per topology (four type-defs, one builder) | Yes, keeps the id convention intact |
 
+Answers received (12 November 2026):
+
+- **1 and 2 (table rows above): accepted.** Cross ids are `cross_tee_straight`,
+  `cross_double_wye_mitered`, `cross_double_wye_radius`. The three
+  `through_transition_angled/mitered/radiussed` types are retired for
+  `concentric/eccentric/offset`.
+- **3, "Generic Ports":** fittings with an arbitrary number of ports must be
+  modellable. Stage 3 stands as written (port roles plus per-port
+  properties), with the weight on the variable-order case: `port_1..port_n`
+  roles and `per_port` properties are the core, not an add-on. Named
+  `TrimPortA..D` properties on generic cross/branch types become `per_port`
+  too, so no type is capped at four ports.
+- **4, "custom geometry for fittings":** the user selects a FreeCAD geometry
+  object and defines custom ports on it to describe a fitting. Stage 10
+  stands, with these points fixed: the source is a document object (not
+  only a file); ports are defined by the user on that object (position,
+  direction, profile and size per port), not inferred; and the port count
+  is arbitrary, so it builds on Stage 3's per-port mechanism.
+
 ## 5. Suggested order of work
 
 Stage 0, then Stage 1 and Stage 2 in parallel, then 3, 4, 5, 6, 7.
