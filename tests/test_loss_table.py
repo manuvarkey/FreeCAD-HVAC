@@ -20,7 +20,10 @@ def _table_1d():
 
 def _table_2d():
     return t.LossTable(
-        "T2", "two axes", [("y", [0.0, 10.0]), ("x", [0.0, 1.0, 2.0])], [[0.0, 1.0, 2.0], [10.0, 11.0, 12.0]],
+        "T2",
+        "two axes",
+        [("y", [0.0, 10.0]), ("x", [0.0, 1.0, 2.0])],
+        [[0.0, 1.0, 2.0], [10.0, 11.0, 12.0]],
         t.REF_DOWNSTREAM,
     )
 
@@ -52,7 +55,10 @@ def test_clamp_on_any_axis_is_flagged():
 
 def test_axes_may_be_listed_descending_as_printed():
     table = t.LossTable(
-        "T3", "descending", [("y", [10.0, 0.0]), ("x", [2.0, 1.0, 0.0])], [[12.0, 11.0, 10.0], [2.0, 1.0, 0.0]],
+        "T3",
+        "descending",
+        [("y", [10.0, 0.0]), ("x", [2.0, 1.0, 0.0])],
+        [[12.0, 11.0, 10.0], [2.0, 1.0, 0.0]],
         t.REF_UPSTREAM,
     )
     assert table(0.0, 0.0) == 0.0
@@ -62,8 +68,11 @@ def test_axes_may_be_listed_descending_as_printed():
 
 def test_blank_cells_are_filled_from_the_row_and_flagged():
     table = t.LossTable(
-        "T4", "blanks", [("y", [0.0, 1.0]), ("x", [0.0, 1.0, 2.0, 3.0])],
-        [[None, 1.0, 2.0, None], [5.0, 6.0, 7.0, 8.0]], t.REF_UPSTREAM,
+        "T4",
+        "blanks",
+        [("y", [0.0, 1.0]), ("x", [0.0, 1.0, 2.0, 3.0])],
+        [[None, 1.0, 2.0, None], [5.0, 6.0, 7.0, 8.0]],
+        t.REF_UPSTREAM,
     )
     trailing = table.lookup(0.0, 3.0)
     assert (trailing.value, trailing.filled) == (2.0, True)
@@ -111,3 +120,30 @@ def test_combine_carries_flags_from_every_lookup():
     result = t.combine(3.0, table.lookup(1.0), table.lookup(99.0))
     assert result.value == 3.0
     assert result.clamped and not result.filled
+
+
+def test_table_family_interpolates_between_neighbouring_tables_and_clamps_outside():
+    low = t.LossTable("F1", "low", [("x", [0.0, 1.0])], [0.0, 10.0], t.REF_UPSTREAM)
+    high = t.LossTable("F2", "high", [("x", [0.0, 1.0])], [100.0, 110.0], t.REF_UPSTREAM)
+    family = t.TableFamily("k", {2.0: high, 1.0: low})
+    assert family.lookup(1.0, 0.5).value == pytest.approx(5.0)
+    assert family.lookup(1.5, 0.5).value == pytest.approx(55.0)
+    assert family.lookup(1.5, 0.5).exact
+    outside = family.lookup(3.0, 0.5)
+    assert outside.value == pytest.approx(105.0)
+    assert outside.clamped
+    assert family.lookup(1.5, 7.0).clamped
+
+
+def test_table_rows_use_the_nearest_row_and_flag_anything_not_printed():
+    a = t.LossTable("R1", "a", [("x", [0.0, 1.0])], [1.0, 2.0], t.REF_UPSTREAM)
+    b = t.LossTable("R2", "b", [("x", [0.0, 1.0])], [10.0, 20.0], t.REF_UPSTREAM)
+    rows = t.TableRows(("p", "q"), [((0.5, 0.5), a), ((1.0, 0.5), b)])
+    exact = rows.lookup((0.5, 0.5), 1.0)
+    assert (exact.value, exact.exact) == (2.0, True)
+    near = rows.lookup((0.505, 0.5), 1.0)
+    assert near.exact
+    other = rows.lookup((0.9, 0.5), 0.0)
+    assert (other.value, other.clamped) == (10.0, True)
+    with pytest.raises(ValueError):
+        rows.lookup((0.5,), 0.0)

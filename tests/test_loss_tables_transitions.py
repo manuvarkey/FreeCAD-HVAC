@@ -10,8 +10,14 @@ from freecad.HVAC.library.loss_tables import transitions as tr
 
 @pytest.mark.parametrize(
     "re, area, theta, c",
-    [(0.5e5, 2, 16, 0.14), (0.5e5, 16, 180, 0.88), (2e5, 6, 45, 0.90), (2e5, 10, 20, 0.24), (6e5, 4, 30, 0.38),
-     (6e5, 16, 180, 0.89)],
+    [
+        (0.5e5, 2, 16, 0.14),
+        (0.5e5, 16, 180, 0.88),
+        (2e5, 6, 45, 0.90),
+        (2e5, 10, 20, 0.24),
+        (6e5, 4, 30, 0.38),
+        (6e5, 16, 180, 0.89),
+    ],
 )
 def test_14_11a_round_conical(re, area, theta, c):
     assert tr.expansion_round(theta, area, re).value == pytest.approx(c)
@@ -48,10 +54,16 @@ def test_14_11e_sides_straight(area, theta, c):
 
 @pytest.mark.parametrize(
     "kind, theta, area, c",
-    [("symmetric_sides_straight", 10, 1.5, 0.05), ("symmetric_sides_straight", 35, 4.0, 0.50),
-     ("asymmetric_top_level", 25, 3.0, 0.23), ("asymmetric_top_10_down", 20, 2.5, 0.24),
-     ("asymmetric_top_10_down", 35, 3.5, 0.66), ("asymmetric_top_10_up", 30, 2.0, 0.18),
-     ("pyramidal", 15, 1.5, 0.23), ("pyramidal", 30, 4.0, 0.69)],
+    [
+        ("symmetric_sides_straight", 10, 1.5, 0.05),
+        ("symmetric_sides_straight", 35, 4.0, 0.50),
+        ("asymmetric_top_level", 25, 3.0, 0.23),
+        ("asymmetric_top_10_down", 20, 2.5, 0.24),
+        ("asymmetric_top_10_down", 35, 3.5, 0.66),
+        ("asymmetric_top_10_up", 30, 2.0, 0.18),
+        ("pyramidal", 15, 1.5, 0.23),
+        ("pyramidal", 30, 4.0, 0.69),
+    ],
 )
 def test_14_11f_to_j_fan_transitions(kind, theta, area, c):
     assert tr.expansion_at_fan(kind, theta, area).value == pytest.approx(c)

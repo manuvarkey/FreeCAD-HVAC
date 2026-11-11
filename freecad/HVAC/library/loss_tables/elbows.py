@@ -9,7 +9,7 @@ Every coefficient multiplies the velocity pressure of the upstream section.
 to use the coefficient of a similar elbow when both legs have equal velocity.
 """
 
-from .table import REF_UPSTREAM, LossTable, Lookup, combine
+from .table import REF_UPSTREAM, Lookup, LossTable, combine
 
 # The source prints an "infinity" column in a few tables. It is kept as a
 # very large coordinate, so any real ratio above the last finite column
@@ -245,7 +245,28 @@ TURNING_VANES = {
 # L = distance between the two turns. Printed for W/H = 1 (see Note 4).
 # ----------------------------------------------------------------------------
 
-_DOUBLE_ELBOW_L = [0, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.4, 2.8, 3.2, 4.0, 5.0, 6.0, 7.0, 9.0, 10.0, INFINITY]
+_DOUBLE_ELBOW_L = [
+    0,
+    0.4,
+    0.6,
+    0.8,
+    1.0,
+    1.2,
+    1.4,
+    1.6,
+    1.8,
+    2.0,
+    2.4,
+    2.8,
+    3.2,
+    4.0,
+    5.0,
+    6.0,
+    7.0,
+    9.0,
+    10.0,
+    INFINITY,
+]
 
 Z_SHAPED_RECT = LossTable(
     "14-10I",

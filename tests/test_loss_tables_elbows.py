@@ -85,8 +85,14 @@ def test_14_10f_reynolds_correction_rows():
 
 @pytest.mark.parametrize(
     "vanes, r_on_w, h_on_w, c",
-    [(1, 0.05, 0.25, 0.52), (1, 0.50, 8.0, 0.05), (2, 0.20, 1.5, 0.05), (2, 0.05, 7.0, 0.48), (3, 0.10, 8.0, 0.09),
-     (3, 0.30, 0.25, 0.03)],
+    [
+        (1, 0.05, 0.25, 0.52),
+        (1, 0.50, 8.0, 0.05),
+        (2, 0.20, 1.5, 0.05),
+        (2, 0.05, 7.0, 0.48),
+        (3, 0.10, 8.0, 0.09),
+        (3, 0.30, 0.25, 0.03),
+    ],
 )
 def test_14_10g_splitter_vanes(vanes, r_on_w, h_on_w, c):
     assert e.smooth_rect_splitter_vanes(vanes, r_on_w, h_on_w).value == pytest.approx(c)
@@ -94,8 +100,12 @@ def test_14_10g_splitter_vanes(vanes, r_on_w, h_on_w, c):
 
 @pytest.mark.parametrize(
     "design, velocity, c",
-    [("single_r50_s38", 5.0, 0.24), ("single_r114_s83", 12.5, 0.22), ("double_r50_s56", 7.5, 0.52),
-     ("double_r114_s83", 10.0, 0.24)],
+    [
+        ("single_r50_s38", 5.0, 0.24),
+        ("single_r114_s83", 12.5, 0.22),
+        ("double_r50_s56", 7.5, 0.52),
+        ("double_r114_s83", 10.0, 0.24),
+    ],
 )
 def test_14_10h_turning_vanes(design, velocity, c):
     assert e.mitered_rect_turning_vanes(design, velocity).value == pytest.approx(c)

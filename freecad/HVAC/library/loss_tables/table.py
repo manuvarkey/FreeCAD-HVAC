@@ -194,6 +194,64 @@ class LossTable:
         return "LossTable({!r}, axes={})".format(self.table_id, self.axis_names)
 
 
+class TableFamily:
+    """
+    Several tables of the same fitting that differ by one more parameter the
+    source does not print on a regular grid (e.g. one block per As/Ac, each
+    block with its own list of Ab/Ac rows).
+
+    `tables` maps that parameter's value to its table. A lookup interpolates
+    between the two neighbouring tables, and is clamped (and flagged) outside
+    the first and last one.
+    """
+
+    def __init__(self, parameter, tables):
+        self.parameter = str(parameter)
+        self._keys = sorted(float(key) for key in tables)
+        self._tables = {float(key): table for key, table in tables.items()}
+
+    def lookup(self, key, *point):
+        low, high, fraction, clamped = LossTable._bracket(float(key), self._keys)
+        first = self._tables[self._keys[low]].lookup(*point)
+        if low == high or fraction == 0.0:
+            return Lookup(first.value, first.clamped or clamped, first.filled)
+        second = self._tables[self._keys[high]].lookup(*point)
+        value = first.value + fraction * (second.value - first.value)
+        return Lookup(value, clamped or first.clamped or second.clamped, first.filled or second.filled)
+
+
+class TableRows:
+    """
+    A table whose rows are a handful of specific fittings (each identified by
+    a combination of ratios, e.g. Ab/As = 0.5 with Ab/Ac = 0.5) rather than
+    points on an axis one could interpolate along.
+
+    `rows` is a list of (key_tuple, table). A lookup uses the row whose key
+    is nearest to the requested one. Unless the request matches a printed
+    row (within `tolerance` on every ratio), the result is flagged as
+    clamped, since the source has no data for that combination.
+    """
+
+    def __init__(self, key_names, rows, tolerance=0.02):
+        self.key_names = tuple(key_names)
+        self._rows = [(tuple(float(k) for k in key), table) for key, table in rows]
+        self.tolerance = float(tolerance)
+
+    def lookup(self, key, *point):
+        key = tuple(float(k) for k in key)
+        if len(key) != len(self.key_names):
+            raise ValueError("Expected {} row ratios ({})".format(len(self.key_names), ", ".join(self.key_names)))
+
+        def distance(row_key):
+            # Relative distance, so a ratio of 2.0 and one of 0.25 weigh the same.
+            return max(abs(a - b) / max(abs(b), 1.0e-9) for a, b in zip(key, row_key))
+
+        row_key, table = min(self._rows, key=lambda row: distance(row[0]))
+        result = table.lookup(*point)
+        matched = distance(row_key) <= self.tolerance
+        return Lookup(result.value, result.clamped or not matched, result.filled)
+
+
 def combine(value, *lookups):
     """
     A Lookup for a coefficient computed from several table lookups (e.g. a
