@@ -77,6 +77,6 @@
   },
   "loss": {
     "module": "shared:losses",
-    "function": "loss_tee_generic"
+    "function": "loss_tee_45_entry"
   }
 }

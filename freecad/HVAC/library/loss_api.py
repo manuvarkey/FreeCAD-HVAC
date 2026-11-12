@@ -41,9 +41,11 @@ from .fittings import taps as tap_fittings
 from .library_api import HVACLibraryAPI
 from .loss_tables import elbows as elbow_tables
 from .loss_tables import entries_exits as entry_exit_tables
+from .loss_tables import junctions_converging as converging_tables
 from .loss_tables import junctions_diverging as diverging_tables
 from .loss_tables import obstructions as obstruction_tables
 from .loss_tables import table as loss_table
+from .loss_tables import transitions as transition_tables
 
 
 class HVACLossAPI:
@@ -239,11 +241,24 @@ class HVACLossAPI:
     @staticmethod
     def transition_loss(context):
         """
-        Area-change (expansion/contraction) transition fitting loss. Expects
-        exactly 2 connected_ports and a "TransitionLength" entry in
-        properties. Returns one EXACT LossPath referenced to the outlet's
-        own velocity, or UNSUPPORTED if the topology/geometry doesn't
-        support the calculation.
+        Loss of a transition: a change of duct size, and possibly of shape,
+        along a straight axis (SMACNA Tables 14-11 and 14-12).
+
+        - Round to round: expansion 14-11 A (by Reynolds number), contraction 14-12 A.
+        - Rectangular to rectangular: expansion 14-11 E when only one pair of
+          sides diverges ("sides straight"), else 14-11 B (pyramidal);
+          contraction 14-12 A. The angle is the larger of the two side-pair
+          angles (the "major angle" of the tables).
+        - Round to rectangular, either way: the equivalent angle of 14-11 C/D,
+          then 14-11 B for an expansion or 14-12 A for a contraction (the
+          latter is not printed for this shape: approximation).
+        - Oval is read as the rectangle of the same width and height: approximation.
+
+        properties["TransitionLength"] is the body length; 0 uses the duct
+        size (at least 100 mm), as the geometry does. Returns one LossPath
+        referenced to the outlet's velocity: EXACT when every lookup was
+        inside a table printed for this fitting, APPROXIMATION (with the
+        reason) when not, UNSUPPORTED when it cannot be worked out.
         """
         try:
             ports = HVACLibraryAPI.connected_ports(context)
@@ -261,52 +276,85 @@ class HVACLossAPI:
 
             area_ratio = max(area_in, area_out) / min(area_in, area_out)
             if area_ratio <= 1.05:
-                # Essentially the same size on both sides (e.g. a lateral
-                # offset) -- SMACNA's tables start at an area ratio of 2:1
-                # and don't cover this case; treat as negligible loss rather
-                # than clamping to the table's (much larger) minimum entry.
+                # Essentially the same size on both sides: the tables start at
+                # an area ratio of 2:1 and don't cover this, so the loss is
+                # taken as negligible rather than clamped to their first row.
                 return HVACLossAPI._exact(
                     [HVACLossAPI._leg_path(outlet, inlet["edge_key"], 0.0, source="smacna_transition")]
                 )
 
-            length_mm = float((context.get("properties") or {}).get("TransitionLength", 0.0) or 0.0)
-            if length_mm > 0.0:
-                d_eq_in = 2.0 * math.sqrt(area_in / math.pi)
-                d_eq_out = 2.0 * math.sqrt(area_out / math.pi)
-                theta_deg = math.degrees(2.0 * math.atan(abs(d_eq_out - d_eq_in) / (2.0 * airflow.mm_to_m(length_mm))))
+            profile_in, profile_out = HVACLibraryAPI.port_profile(inlet), HVACLibraryAPI.port_profile(outlet)
+            known = ("Circular", "Rectangular", "Oval")
+            if profile_in not in known or profile_out not in known:
+                return HVACLossAPI._unsupported(
+                    "no transition table for profile '{}'".format(
+                        profile_out if profile_out not in known else profile_in
+                    )
+                )
+            notes = []
+            if "Oval" in (profile_in, profile_out):
+                notes.append("oval duct read as the rectangle of the same width and height")
+
+            # Step 1: the body length, defaulting the way the geometry does.
+            def size(port):
+                if HVACLibraryAPI.port_profile(port) == "Circular":
+                    return float(HVACLibraryAPI.port_diameter(port))
+                return max(float(HVACLibraryAPI.port_width(port)), float(HVACLibraryAPI.port_height(port)))
+
+            length = float((context.get("properties") or {}).get("TransitionLength", 0.0) or 0.0)
+            if length <= 0.0:
+                length = max(size(inlet), size(outlet), 100.0)
+
+            def included_angle(change):
+                return math.degrees(2.0 * math.atan(abs(change) / (2.0 * length)))
+
+            expanding = area_out > area_in
+            small, large = (inlet, outlet) if expanding else (outlet, inlet)
+            round_small = HVACLibraryAPI.port_profile(small) == "Circular"
+            round_large = HVACLibraryAPI.port_profile(large) == "Circular"
+
+            # Step 2: the angle, and for an expansion which table.
+            single_plane = False
+            if round_small and round_large:
+                theta = included_angle(size(large) - size(small))
+            elif not round_small and not round_large:
+                d_w = float(HVACLibraryAPI.port_width(large)) - float(HVACLibraryAPI.port_width(small))
+                d_h = float(HVACLibraryAPI.port_height(large)) - float(HVACLibraryAPI.port_height(small))
+                theta = max(included_angle(d_w), included_angle(d_h))
+                tolerance = 0.01 * size(large)
+                single_plane = (abs(d_w) <= tolerance) != (abs(d_h) <= tolerance)
             else:
-                theta_deg = 180.0  # no transition length -> treat as an abrupt change
-            theta_deg = max(0.0, min(theta_deg, 180.0))
+                round_port, rect_port = (small, large) if round_small else (large, small)
+                theta = transition_tables.round_rect_equivalent_angle(
+                    float(HVACLibraryAPI.port_diameter(round_port)),
+                    float(HVACLibraryAPI.port_width(rect_port)),
+                    float(HVACLibraryAPI.port_height(rect_port)),
+                    length,
+                )
 
-            profile = HVACLibraryAPI.port_profile(outlet)
-            if profile not in ("Circular", "Rectangular"):
-                # Oval/Generic/custom profile -- unlike branch (tee/wye)
-                # fittings, no SMACNA table or documented approximation
-                # covers this shape for a straight-axis area change
-                # (expansion_zeta_rect is a literal rectangular table, A8B;
-                # never silently reused here). A library-specific
-                # loss.variant can still supply its own formula for this
-                # case (see validation.resolve_loss_variant).
-                return HVACLossAPI._unsupported("no transition table for profile '{}'".format(profile))
-
-            if area_out > area_in:
-                # Expanding (diverging): downstream duct is larger.
-                if profile == "Circular":
+            # Step 3: the table. Expansion tables are printed against the
+            # smaller (upstream) duct's velocity; the loss is referenced to
+            # the outlet, whose velocity is area_ratio times lower.
+            if expanding:
+                if round_small and round_large:
                     reynolds = float(inlet.get("reynolds", 0.0) or 0.0)
                     if reynolds <= 0.0:
                         return HVACLossAPI._unsupported("no Reynolds number available (zero flow?)")
-                    zeta = smacna_loss.expansion_zeta_round(theta_deg, area_ratio, reynolds)
+                    lookup = transition_tables.expansion_round(theta, area_ratio, reynolds)
+                    source = "smacna_transition_round"
+                elif single_plane:
+                    lookup = transition_tables.expansion_rect_sides_straight(theta, area_ratio)
+                    source = "smacna_transition_sides_straight"
                 else:
-                    zeta = smacna_loss.expansion_zeta_rect(theta_deg, area_ratio)
+                    lookup = transition_tables.expansion_rect_pyramidal(theta, area_ratio)
+                    source = "smacna_transition_pyramidal"
+                lookup = loss_table.Lookup(lookup.value * area_ratio**2, lookup.clamped, lookup.filled)
             else:
-                # Contracting (converging): downstream duct is smaller.
-                # SMACNA A9A explicitly covers both round and rectangular
-                # with the one table.
-                zeta = smacna_loss.contraction_zeta(theta_deg, area_ratio)
-
-            return HVACLossAPI._exact(
-                [HVACLossAPI._leg_path(outlet, inlet["edge_key"], zeta, source="smacna_transition")]
-            )
+                if round_small != round_large:
+                    notes.append("contraction table is not printed for round to rectangular, 14-11 C/D angle used")
+                lookup = transition_tables.contraction(theta, area_ratio)
+                source = "smacna_contraction"
+            return HVACLossAPI._from_lookup(outlet, inlet["edge_key"], lookup, source, notes)
         except Exception as exc:
             return HVACLossAPI._unsupported("unexpected error computing transition loss: {}".format(exc))
 
@@ -435,9 +483,15 @@ class HVACLossAPI:
         port's direction is closest to anti-parallel with the common port's
         direction (the straight-through continuation of the duct run).
 
-        Returns two EXACT LossPaths (branch, straight), each referenced to
-        that leg's own velocity, or UNSUPPORTED for an ambiguous/degenerate
-        flow pattern or invalid geometry.
+        properties["BranchStyle"] picks how the branch is joined (see
+        _tee_zetas for the table each reads): "straight" (default),
+        "conical", "45_entry", "damper", "45_entry_damper", "extractor".
+
+        Returns two LossPaths (branch, straight), each referenced to that
+        leg's own velocity: EXACT when every lookup was inside a printed
+        table made for this fitting, APPROXIMATION (with the reason) when
+        not, UNSUPPORTED for an ambiguous/degenerate flow pattern or
+        invalid geometry.
         """
         try:
             ports = HVACLibraryAPI.connected_ports(context)
@@ -472,9 +526,12 @@ class HVACLossAPI:
             if a_common <= 0.0 or a_branch <= 0.0:
                 return HVACLossAPI._unsupported("invalid common/branch area")
 
+            # The tables' branch angle is between the branch and the main
+            # flow, i.e. how far the branch leg is from lining up with the
+            # common leg (0 = straight on, 90 = square). Measuring it from the
+            # straight leg instead would give 180 minus that angle.
             branch_dir = HVACLibraryAPI.vec(branch["direction"])
-            straight_dir = HVACLibraryAPI.vec(straight["direction"])
-            angle_deg = HVACLossAPI._leg_angle_deg(branch_dir, straight_dir)
+            angle_deg = HVACLossAPI._leg_angle_deg(branch_dir, primary_dir)
 
             ab_on_ac = a_branch / a_common
             vb_on_vc = float(branch.get("velocity_ms", 0.0) or 0.0) / v_common
@@ -487,22 +544,145 @@ class HVACLossAPI:
                     context, primary, straight, branch, diverging, angle_deg, ab_on_ac, vb_on_vc, vs_on_vc
                 )
 
-            if diverging:
-                zeta_branch, zeta_straight = smacna_loss.diverging_branch_zetas(angle_deg, ab_on_ac, vb_on_vc, vs_on_vc)
-            else:
-                zeta_branch, zeta_straight = smacna_loss.converging_branch_zetas(
-                    angle_deg, ab_on_ac, vb_on_vc, vs_on_vc
-                )
-
-            source = "smacna_branch_diverging" if diverging else "smacna_branch_converging"
-            return HVACLossAPI._exact(
-                [
-                    HVACLossAPI._leg_path(branch, primary["edge_key"], zeta_branch, source=source),
-                    HVACLossAPI._leg_path(straight, primary["edge_key"], zeta_straight, source=source),
-                ]
+            zeta_branch, zeta_straight, source, reasons = HVACLossAPI._tee_zetas(
+                context, primary, straight, branch, diverging, angle_deg, ab_on_ac, vb_on_vc, vs_on_vc
             )
+            paths = [
+                HVACLossAPI._leg_path(branch, primary["edge_key"], zeta_branch, source=source),
+                HVACLossAPI._leg_path(straight, primary["edge_key"], zeta_straight, source=source),
+            ]
+            if reasons:
+                return HVACLossAPI._approximation(paths, "{}: {}".format(source, "; ".join(reasons)))
+            return HVACLossAPI._exact(paths)
         except Exception as exc:
             return HVACLossAPI._unsupported("unexpected error computing branch loss: {}".format(exc))
+
+    # Tee kinds by BranchStyle: (diverging table key, converging table key);
+    # None where SMACNA has no table for that style and direction.
+    _RECT_TEE_KINDS = {
+        "straight": ("rect_branch", "rect_branch"),
+        "45_entry": ("rect_branch_45_entry", "rect_branch_45_entry"),
+        "damper": ("rect_branch_damper", None),
+        "45_entry_damper": ("rect_branch_45_entry_damper", None),
+        "extractor": ("rect_branch_extractor", None),
+    }
+
+    @staticmethod
+    def _tee_zetas(context, common, straight, branch, diverging, angle_deg, ab_on_ac, vb_on_vc, vs_on_vc):
+        """
+        (zeta_branch, zeta_straight, source, reasons) for an ordinary tee,
+        each zeta referenced to its own leg's velocity. `reasons` lists why
+        the result is only an approximation (empty when it is exact).
+
+        Which table is read:
+
+        - A rectangular run of constant size (As = Ac) with a branch about
+          square to it uses the rectangular-main tables: diverging 14-14 Q
+          (rectangular branch) / T (round branch) / N, P, R, S (the
+          BranchStyle variants) / V (conical branch); converging 14-13 D /
+          C / F, which are printed for one set of proportions only
+          (Ab/As 0.5, As/Ac 1.0, Ab/Ac 0.5).
+        - Everything else uses the round tables: diverging 14-14 A (B or C
+          for a conical branch), converging 14-13 A (45 deg) or B (90 deg).
+          For a duct that is not round, that is an approximation.
+
+        Both 14-13 and 14-14 are printed against the common duct's velocity
+        (upstream for diverging, downstream for converging; the common duct
+        either way), so the conversion to each leg's own velocity is the same.
+        """
+        properties = context.get("properties") or {}
+        style = HVACLossAPI._choice(properties.get("BranchStyle"), "straight")
+        reasons = []
+        profiles = {HVACLibraryAPI.port_profile(p) for p in (common, straight, branch)}
+        main_rect = all(HVACLibraryAPI.port_profile(p) == "Rectangular" for p in (common, straight))
+        branch_round = HVACLibraryAPI.port_profile(branch) == "Circular"
+        qb_on_qc = vb_on_vc * ab_on_ac
+
+        def own(lookup, v_on_vc):
+            value = lookup.value
+            return value / (v_on_vc**2) if v_on_vc > 0 else value
+
+        def flags(*lookups):
+            if any(lookup.clamped for lookup in lookups):
+                reasons.append("outside the printed range of the table")
+            if any(lookup.filled for lookup in lookups):
+                reasons.append("in a cell the table leaves blank")
+
+        a_common, a_straight = HVACLibraryAPI.port_area(common), HVACLibraryAPI.port_area(straight)
+        constant_run = a_common > 0.0 and abs(a_straight - a_common) <= 0.05 * a_common
+        square = abs(angle_deg - 90.0) <= 10.0
+
+        # Step 1: a rectangular main with a square branch -> the rectangular-main tables.
+        if main_rect and square:
+            if diverging and constant_run:
+                if style == "conical":
+                    branch_l, main_l = diverging_tables.tee_rect_main_conical_branch(vb_on_vc, vs_on_vc)
+                    source = "smacna_tee_rect_conical"
+                else:
+                    if style not in HVACLossAPI._RECT_TEE_KINDS:
+                        raise ValueError("unknown BranchStyle '{}'".format(style))
+                    kind = HVACLossAPI._RECT_TEE_KINDS[style][0]
+                    if branch_round:
+                        if style == "straight":
+                            kind = "round_branch"
+                        else:
+                            reasons.append("the {} table is printed for a rectangular branch".format(style))
+                    branch_l, main_l = diverging_tables.tee_rect_main(kind, vb_on_vc, qb_on_qc, vs_on_vc)
+                    source = "smacna_tee_rect_" + kind
+                flags(branch_l, main_l)
+                return own(branch_l, vb_on_vc), own(main_l, vs_on_vc), source, reasons
+            if not diverging and style != "conical":
+                if style not in HVACLossAPI._RECT_TEE_KINDS:
+                    raise ValueError("unknown BranchStyle '{}'".format(style))
+                kind = HVACLossAPI._RECT_TEE_KINDS[style][1]
+                if kind is None:
+                    reasons.append("no converging table for a {} branch, plain one used".format(style))
+                    kind = "rect_branch"
+                if branch_round:
+                    kind = "round_branch" if kind == "rect_branch" else kind
+                ab_on_as = HVACLibraryAPI.port_area(branch) / a_straight if a_straight > 0.0 else 0.0
+                as_on_ac = a_straight / a_common if a_common > 0.0 else 0.0
+                printed = converging_tables.RECT_TEE_AREA_RATIOS
+                if all(abs(got - want) <= 0.1 * want for got, want in zip((ab_on_as, as_on_ac, ab_on_ac), printed)):
+                    vc_ms = float(common.get("velocity_ms", 0.0) or 0.0)
+                    branch_l, main_l = converging_tables.tee_rect_main(kind, qb_on_qc, vc_ms)
+                    flags(branch_l, main_l)
+                    return own(branch_l, vb_on_vc), own(main_l, vs_on_vc), "smacna_tee_rect_" + kind, reasons
+                reasons.append("rectangular converging tee tables are printed for Ab/As 0.5, As/Ac 1.0, Ab/Ac 0.5 only")
+            elif diverging:
+                reasons.append("rectangular tee tables assume the run keeps its size")
+
+        # Step 2: the round tables.
+        if profiles != {"Circular"}:
+            reasons.append("round tee tables used for a {} tee".format("/".join(sorted(profiles))))
+        if diverging:
+            if style == "conical":
+                variant = "conical_wye_45" if angle_deg <= 67.5 else "conical_tee_90"
+                branch_l, main_l = diverging_tables.round_variant(variant, vb_on_vc, vs_on_vc)
+                source = "smacna_tee_" + variant
+            else:
+                if style not in ("straight",):
+                    if style not in HVACLossAPI._RECT_TEE_KINDS:
+                        raise ValueError("unknown BranchStyle '{}'".format(style))
+                    reasons.append("no round table for a {} branch, plain one used".format(style))
+                branch_l, main_l = diverging_tables.round_tee_or_wye(angle_deg, ab_on_ac, qb_on_qc, vs_on_vc)
+                source = "smacna_branch_diverging"
+        else:
+            if style != "straight":
+                if style != "conical" and style not in HVACLossAPI._RECT_TEE_KINDS:
+                    raise ValueError("unknown BranchStyle '{}'".format(style))
+                reasons.append("no converging table for a {} branch, plain one used".format(style))
+            if angle_deg <= 67.5:
+                branch_l, main_l = converging_tables.wye_45_round(ab_on_ac, vb_on_vc, vs_on_vc)
+                if abs(angle_deg - 45.0) > 10.0:
+                    reasons.append("converging tables are printed for 45 and 90 degrees only")
+            else:
+                branch_l, main_l = converging_tables.tee_90_round(ab_on_ac, qb_on_qc)
+                if abs(angle_deg - 90.0) > 10.0:
+                    reasons.append("converging tables are printed for 45 and 90 degrees only")
+            source = "smacna_branch_converging"
+        flags(branch_l, main_l)
+        return own(branch_l, vb_on_vc), own(main_l, vs_on_vc), source, reasons
 
     @staticmethod
     def _port_half_extent_mm(port, direction):
@@ -601,8 +781,9 @@ class HVACLossAPI:
             return HVACLossAPI._exact(paths)
 
         # No table: plain tee, plus the branch elbow at the branch's own velocity.
-        zeta_fn = smacna_loss.diverging_branch_zetas if diverging else smacna_loss.converging_branch_zetas
-        zeta_branch, zeta_straight = zeta_fn(angle_deg, ab_on_ac, vb_on_vc, vs_on_vc)
+        zeta_branch, zeta_straight, _source, _reasons = HVACLossAPI._tee_zetas(
+            context, common, straight, branch, diverging, angle_deg, ab_on_ac, vb_on_vc, vs_on_vc
+        )
         properties = context.get("properties") or {}
         if HVACLibraryAPI.port_profile(branch) == "Circular":
             size = float(HVACLibraryAPI.port_diameter(branch))
@@ -731,10 +912,10 @@ class HVACLossAPI:
         calculation a bullhead tee/wye needs (see
         _no_straight_leg_branch_zetas): each non-common leg is evaluated
         independently against the common leg with the diverging/converging
-        branch-zeta tables. This is a reasonable engineering APPROXIMATION,
-        not a dedicated SMACNA Wye table result (SMACNA's own branch tables
-        are keyed by one branch's angle against a straight run, not by two
-        symmetric legs) -- never presented as an EXACT table value.
+        branch-zeta tables. A symmetric wye (equal legs at equal angles
+        whose areas add up to the common duct's) reads its own tables
+        instead (see _symmetric_wye_loss); anything else is a reasonable
+        engineering APPROXIMATION, never presented as an EXACT table value.
 
         Expects exactly 3 connected_ports. Returns one LossPath per leg,
         each already referenced to that leg's own velocity, or UNSUPPORTED
@@ -750,12 +931,67 @@ class HVACLossAPI:
                 return HVACLossAPI._unsupported("ambiguous/degenerate flow pattern (no single common port)")
             common, legs, diverging = split
 
+            symmetric = HVACLossAPI._symmetric_wye_loss(common, legs, diverging)
+            if symmetric is not None:
+                return symmetric
+
             paths = HVACLossAPI._no_straight_leg_branch_zetas(common, legs, diverging)
             if paths is None:
                 return HVACLossAPI._unsupported("invalid port geometry (zero/invalid duct area)")
             return HVACLossAPI._approximation(paths)
         except Exception as exc:
             return HVACLossAPI._unsupported("unexpected error computing wye loss: {}".format(exc))
+
+    @staticmethod
+    def _symmetric_wye_loss(common, legs, diverging):
+        """
+        The table result for a symmetric wye, or None when this wye is not one.
+
+        SMACNA prints one fitting for two equal branches at equal angles
+        whose areas add up to the common duct's (A1b = A2b, Ac = A1b + A2b):
+        14-14 Y diverging (keyed by each branch's velocity ratio) and
+        14-13 I converging (keyed by each branch's share of the flow). Both
+        are printed against the common duct's velocity. A wye within 5 % of
+        those proportions and 5 degrees of symmetry reads them.
+        """
+        a_common = HVACLibraryAPI.port_area(common)
+        areas = [HVACLibraryAPI.port_area(leg) for leg in legs]
+        if a_common <= 0.0 or min(areas) <= 0.0:
+            return None
+        common_dir = HVACLibraryAPI.vec(common["direction"])
+        angles = [HVACLossAPI._leg_angle_deg(HVACLibraryAPI.vec(leg["direction"]), common_dir) for leg in legs]
+        equal_legs = abs(areas[0] - areas[1]) <= 0.05 * max(areas)
+        adds_up = abs(sum(areas) - a_common) <= 0.05 * a_common
+        if not (equal_legs and adds_up and abs(angles[0] - angles[1]) <= 5.0):
+            return None
+
+        v_common = float(common.get("velocity_ms", 0.0) or 0.0)
+        source = "smacna_wye_symmetric"
+        if v_common <= 1e-9:
+            return HVACLossAPI._exact(
+                [HVACLossAPI._leg_path(leg, common["edge_key"], 0.0, source=source) for leg in legs]
+            )
+
+        paths, lookups = [], []
+        for leg, area, angle in zip(legs, areas, angles):
+            v_on_vc = float(leg.get("velocity_ms", 0.0) or 0.0) / v_common
+            if diverging:
+                lookup = diverging_tables.wye_symmetric(angle, v_on_vc)
+            else:
+                # This branch's share of the flow: Q = V * A.
+                lookup = converging_tables.wye_symmetric(angle, v_on_vc * area / a_common)
+            lookups.append(lookup)
+            zeta = lookup.value / (v_on_vc**2) if v_on_vc > 0 else lookup.value
+            paths.append(HVACLossAPI._leg_path(leg, common["edge_key"], zeta, source=source))
+
+        reasons = []
+        if any(lookup.clamped for lookup in lookups):
+            reasons.append("outside the printed range of the table")
+        if any(lookup.filled for lookup in lookups):
+            reasons.append("in a cell the table leaves blank")
+        if reasons:
+            return HVACLossAPI._approximation(paths, "{}: {}".format(source, "; ".join(reasons)))
+        return HVACLossAPI._exact(paths)
 
     @staticmethod
     def manifold_loss(context):
@@ -822,10 +1058,8 @@ class HVACLossAPI:
             ordered = sorted(
                 secondaries, key=lambda p: primary_dir.dot(HVACLibraryAPI.vec(p["direction"])), reverse=True
             )
-            # Reference direction for every branch-angle lookup: the
-            # straightest real secondary (matches branch_loss, which uses
-            # the "straight" port's own direction rather than the primary's).
-            straight_dir = HVACLibraryAPI.vec(ordered[-1]["direction"])
+            # Every branch angle is measured from the primary (common) leg,
+            # as in branch_loss: 0 = in line with it, 90 = square to it.
 
             zeta_fn = smacna_loss.diverging_branch_zetas if diverging else smacna_loss.converging_branch_zetas
             result = {}
@@ -833,7 +1067,7 @@ class HVACLossAPI:
 
             def _angle_deg(branch_port):
                 branch_dir = HVACLibraryAPI.vec(branch_port["direction"])
-                return HVACLossAPI._leg_angle_deg(branch_dir, straight_dir)
+                return HVACLossAPI._leg_angle_deg(branch_dir, primary_dir)
 
             if diverging:
                 remaining_flow_lps = float(primary.get("flow_rate_lps", 0.0) or 0.0)

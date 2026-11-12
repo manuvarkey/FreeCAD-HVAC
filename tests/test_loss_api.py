@@ -141,24 +141,37 @@ def test_elbow_loss_wrong_port_count_returns_unsupported():
 
 
 def test_transition_loss_expansion_round():
+    # 200 -> 400 over 500 mm: included angle 2 atan(100 / 500) = 22.6 deg.
     inlet = _port("IN", (-1, 0, 0), True, profile="Circular", diameter=200.0, reynolds=3e5)
     outlet = _port("OUT", (1, 0, 0), False, profile="Circular", diameter=400.0)
-    context = {"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 1000.0}}
+    context = {"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 500.0}}
     result = api.transition_loss(context)
 
-    area_in = airflow.circular_area(airflow.mm_to_m(200.0))
-    area_out = airflow.circular_area(airflow.mm_to_m(400.0))
-    area_ratio = area_out / area_in
-    d_eq_in = 2.0 * math.sqrt(area_in / math.pi)
-    d_eq_out = 2.0 * math.sqrt(area_out / math.pi)
-    theta_deg = math.degrees(2.0 * math.atan(abs(d_eq_out - d_eq_in) / (2.0 * 1.0)))
-    expected = smacna_loss.expansion_zeta_round(theta_deg, area_ratio, 3e5)
+    theta_deg = math.degrees(2.0 * math.atan(100.0 / 500.0))
+    expected = smacna_loss.expansion_zeta_round(theta_deg, 4.0, 3e5)
 
     assert result.status == api.EXACT
     assert _paths_by_edge(result) == pytest.approx({"OUT": expected})
     path = _path_for(result, "OUT")
     assert path.from_edge_key == "IN"
     assert path.to_edge_key == "OUT"
+
+
+def test_transition_loss_expansion_flatter_than_the_table_is_an_approximation():
+    # Over 1000 mm the angle is 11.4 deg, below the table's first column (16 deg).
+    inlet = _port("IN", (-1, 0, 0), True, profile="Circular", diameter=200.0, reynolds=3e5)
+    outlet = _port("OUT", (1, 0, 0), False, profile="Circular", diameter=400.0)
+    result = api.transition_loss({"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 1000.0}})
+    assert result.status == api.APPROXIMATION
+    assert "printed range" in result.warning
+
+
+def test_transition_loss_without_a_length_uses_the_duct_size_like_the_geometry():
+    inlet = _port("IN", (-1, 0, 0), True, profile="Circular", diameter=200.0, reynolds=3e5)
+    outlet = _port("OUT", (1, 0, 0), False, profile="Circular", diameter=400.0)
+    unset = api.transition_loss({"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 0.0}})
+    by_size = api.transition_loss({"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 400.0}})
+    assert _paths_by_edge(unset) == pytest.approx(_paths_by_edge(by_size))
 
 
 def test_transition_loss_contraction_uses_outlet_reference():
@@ -188,27 +201,67 @@ def test_transition_loss_same_size_is_negligible():
     assert _paths_by_edge(result) == {"OUT": 0.0}
 
 
-def test_transition_loss_expansion_rectangular():
+def test_transition_loss_expansion_rectangular_pyramidal():
+    # 200 x 200 -> 400 x 400 over 400 mm: both pairs of sides at 2 atan(100 / 400) = 28.1 deg, A1/A = 4.
     inlet = _port("IN", (-1, 0, 0), True, profile="Rectangular", width=200.0, height=200.0)
     outlet = _port("OUT", (1, 0, 0), False, profile="Rectangular", width=400.0, height=400.0)
-    context = {"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 1000.0}}
-    result = api.transition_loss(context)
+    result = api.transition_loss({"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 400.0}})
+    theta = math.degrees(2.0 * math.atan(100.0 / 400.0))
     assert result.status == api.EXACT
-    assert _paths_by_edge(result)["OUT"] > 0.0
+    assert _paths_by_edge(result) == pytest.approx({"OUT": smacna_loss.expansion_zeta_rect(theta, 4.0)})
+    assert _path_for(result, "OUT").source == "smacna_transition_pyramidal"
 
 
-def test_transition_loss_oval_profile_returns_unsupported_not_a_rectangular_guess():
-    # Oval/custom profiles: geometry classification stays valid (see
-    # NetworkParser), but no validated SMACNA table exists for a
-    # straight-axis Oval area change -- must cleanly return UNSUPPORTED
-    # rather than silently reusing the rectangular table (expansion_zeta_rect
-    # is a literal SMACNA A8B rectangular-only table).
+def test_transition_loss_rectangular_with_one_pair_of_sides_straight_reads_14_11e():
+    # 200 x 300 -> 800 x 300 over 600 mm: only the width changes; 2 atan(300 / 600) = 53.1 deg, A1/A = 4.
+    from freecad.HVAC.library.loss_tables import transitions
+
+    inlet = _port("IN", (-1, 0, 0), True, profile="Rectangular", width=200.0, height=300.0)
+    outlet = _port("OUT", (1, 0, 0), False, profile="Rectangular", width=800.0, height=300.0)
+    result = api.transition_loss({"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 600.0}})
+    theta = math.degrees(2.0 * math.atan(300.0 / 600.0))
+    expected = transitions.expansion_rect_sides_straight(theta, 4.0).value * 16.0
+    assert _paths_by_edge(result) == pytest.approx({"OUT": expected})
+    assert _path_for(result, "OUT").source == "smacna_transition_sides_straight"
+
+
+def test_transition_loss_rectangular_angle_is_the_major_one():
+    # 200 x 200 -> 600 x 300 over 400 mm: width pair at 2 atan(200 / 400), height pair at 2 atan(50 / 400).
+    inlet = _port("IN", (-1, 0, 0), True, profile="Rectangular", width=200.0, height=200.0)
+    outlet = _port("OUT", (1, 0, 0), False, profile="Rectangular", width=600.0, height=300.0)
+    result = api.transition_loss({"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 400.0}})
+    theta = math.degrees(2.0 * math.atan(200.0 / 400.0))
+    assert _paths_by_edge(result) == pytest.approx({"OUT": smacna_loss.expansion_zeta_rect(theta, 4.5)})
+
+
+def test_transition_loss_round_to_rectangular_expansion_uses_the_14_11c_angle():
+    from freecad.HVAC.library.loss_tables import transitions
+
+    inlet = _port("IN", (-1, 0, 0), True, profile="Circular", diameter=200.0)
+    outlet = _port("OUT", (1, 0, 0), False, profile="Rectangular", width=500.0, height=300.0)
+    result = api.transition_loss({"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 400.0}})
+    area_ratio = (0.5 * 0.3) / (math.pi * 0.1**2)
+    theta = transitions.round_rect_equivalent_angle(200.0, 500.0, 300.0, 400.0)
+    expected = smacna_loss.expansion_zeta_rect(theta, area_ratio)
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == pytest.approx({"OUT": expected})
+
+
+def test_transition_loss_round_to_rectangular_contraction_is_an_approximation():
+    inlet = _port("IN", (-1, 0, 0), True, profile="Rectangular", width=500.0, height=300.0)
+    outlet = _port("OUT", (1, 0, 0), False, profile="Circular", diameter=200.0)
+    result = api.transition_loss({"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 400.0}})
+    assert result.status == api.APPROXIMATION
+    assert "14-11 C/D" in result.warning
+
+
+def test_transition_loss_oval_is_read_as_a_rectangle_and_flagged():
     inlet = _port("IN", (-1, 0, 0), True, profile="Oval", width=200.0, height=100.0)
     outlet = _port("OUT", (1, 0, 0), False, profile="Oval", width=400.0, height=200.0)
-    context = {"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 1000.0}}
-    result = api.transition_loss(context)
-    assert result.status == api.UNSUPPORTED
-    assert result.paths == []
+    oval = api.transition_loss({"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 300.0}})
+    assert oval.status == api.APPROXIMATION
+    assert "oval" in oval.warning
+    assert _paths_by_edge(oval)["OUT"] > 0.0
 
 
 # ----------------------------------------------------------------------------
@@ -258,11 +311,9 @@ def test_branch_loss_converging_wye45():
     ab_on_ac = (150.0 / 300.0) ** 2
     vb_on_vc = 3.0 / 5.0
     vs_on_vc = 4.0 / 5.0
-    # angle between branch and straight directions: dot = (-cos45)(-1) = cos45 -> 45 deg apart
-    # -> theta = 180 - 45 = 135... but branch should resolve near 45 deg entry.
-    dot = (-cos45) * (-1.0) + sin45 * 0.0
-    angle_deg = 180.0 - math.degrees(math.acos(max(-1.0, min(1.0, dot))))
-    zeta_branch, zeta_straight = smacna_loss.converging_branch_zetas(angle_deg, ab_on_ac, vb_on_vc, vs_on_vc)
+    # The branch enters at 45 deg to the main flow: its leg is 45 deg away
+    # from lining up with the common outlet leg, so the 45 deg wye table applies.
+    zeta_branch, zeta_straight = smacna_loss.converging_branch_zetas(45.0, ab_on_ac, vb_on_vc, vs_on_vc)
 
     assert result.status == api.EXACT
     assert _paths_by_edge(result) == pytest.approx({"BRANCH": zeta_branch, "STRAIGHT": zeta_straight})

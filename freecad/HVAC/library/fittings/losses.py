@@ -71,6 +71,20 @@ def loss_tee_generic(context):
     return context["loss_api"].branch_loss(context)
 
 
+def loss_tee_conical(context):
+    # A tap whose collar flares out toward the run (a saddle tap): the
+    # conical-branch tee tables (SMACNA 14-14 B, C; 14-14 V on a
+    # rectangular main). There is no converging table; the plain one is used.
+    return context["loss_api"].branch_loss(_with_properties(context, BranchStyle="conical"))
+
+
+def loss_tee_45_entry(context):
+    # A tap with a 45 degree entry (a shoe tap): SMACNA 14-14 N diverging
+    # and 14-13 F converging on a rectangular main. On a round main there
+    # is no such table; the plain one is used.
+    return context["loss_api"].branch_loss(_with_properties(context, BranchStyle="45_entry"))
+
+
 def loss_wye_generic(context):
     # A true Wye has no Tee-style common/straight leg, so this routes to
     # the Wye-specific API rather than branch_loss() (see HVACLossAPI.
