@@ -25,14 +25,49 @@
       "group": "Dimensions",
       "description": "Wall thickness. 0 builds the air space as a solid body instead of a hollow shell",
       "default": 1.0,
-      "validation": {"minimum": 0.0}
+      "validation": {
+        "minimum": 0.0
+      }
     },
     {
-      "name": "BodyLength",
+      "name": "BoxLength",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "VAV box body length",
-      "default": 0.0
+      "description": "Casing length along the duct. 0 uses twice the duct size",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "BoxWidth",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Casing width. 0 uses 1.5 times the duct size",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "BoxHeight",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Casing height. 0 uses 1.5 times the duct size",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "CollarLength",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Length of the inlet and outlet collars. 0 uses a quarter of the duct size",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
     },
     {
       "name": "LossCoefficient",
@@ -44,11 +79,11 @@
   ],
   "generator": {
     "module": "shared:inline",
-    "function": "build_vav_generic"
+    "function": "build_vav_box"
   },
   "connection_lengths": {
     "module": "shared:inline",
-    "function": "measure_vav_generic"
+    "function": "measure_vav_box"
   },
   "loss": {
     "module": "shared:losses",

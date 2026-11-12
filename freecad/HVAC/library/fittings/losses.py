@@ -123,7 +123,14 @@ def loss_diffuser_generic(context):
 
 
 def loss_damper_generic(context):
-    return context["loss_api"].inline_device_loss(context)
+    # DamperType "Coefficient" (or a type with no DamperType at all) uses the
+    # user's own K; any other choice reads the damper tables for that kind
+    # of damper at its current blade position.
+    properties = context.get("properties") or {}
+    kind = str(properties.get("DamperType", "") or "").strip().lower()
+    if kind in ("", "coefficient"):
+        return context["loss_api"].inline_device_loss(context)
+    return context["loss_api"].damper_loss(context)
 
 
 def loss_vav_generic(context):

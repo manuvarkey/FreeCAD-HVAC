@@ -101,6 +101,34 @@ def _finish(context, envelope, connection_lengths, port_suffixes=None):
     return result
 
 
+def _structural_layer_def(context, result):
+    """
+    The construction layer rigid attachments (flanges, an internal rod, ...)
+    belong to: the structural shell if one was built, otherwise the
+    innermost layer that has a shape. None when the result has no layers.
+    """
+    layers = result.get("layers") or {}
+    built = [
+        layer_def
+        for layer_def in (context.get("construction_layers") or [])
+        if (layers.get(layer_def.id) or {}).get("shape") is not None
+    ]
+    if not built:
+        return None
+    return next((ld for ld in built if "structural_shell" in list(getattr(ld, "roles", []) or [])), built[0])
+
+
+def _fuse_into_structure(context, result, shape):
+    """Fuse an extra solid onto the fitting: its structural layer, or its single shape when it has no layers."""
+    api = context["hvac_api"]
+    host = _structural_layer_def(context, result)
+    if host is not None:
+        layers = result["layers"]
+        layers[host.id] = {"shape": api.refine(api.fuse(layers[host.id]["shape"], shape))}
+    elif result.get("shape") is not None:
+        result["shape"] = api.refine(api.fuse(result["shape"], shape))
+
+
 def _flange_enabled(params, index, suffix, port=None):
     """
     Whether one port gets its flange. The first of these properties the type
@@ -137,17 +165,11 @@ def _add_flanges(context, result, connection_lengths, port_suffixes):
     if flange_thickness <= _EPS or flange_height <= _EPS:
         return
 
-    # Step 1: find the layer the flanges belong to -- the structural shell
-    # if one was built, otherwise the innermost layer that has a shape.
+    # Step 1: find the layer the flanges belong to.
     layers = result.get("layers") or {}
-    built = [
-        layer_def
-        for layer_def in (context.get("construction_layers") or [])
-        if (layers.get(layer_def.id) or {}).get("shape") is not None
-    ]
-    if not built:
+    host = _structural_layer_def(context, result)
+    if host is None:
         return
-    host = next((ld for ld in built if "structural_shell" in list(getattr(ld, "roles", []) or [])), built[0])
 
     # Step 2: wall build-up from the air boundary to the host's outer face.
     outer_offset = 0.0

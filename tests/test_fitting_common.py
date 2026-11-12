@@ -112,3 +112,32 @@ def test_offset_does_not_change_the_callers_params():
     params = {"OffsetLength": 400.0}
     offsets.measure_offset_angled({"hvac_api": HVACLibraryAPI, "params": params, "connected_ports": _offset_ports()})
     assert params == {"OffsetLength": 400.0}
+
+
+# ----------------------------------------------------------------------------
+# VAV box sizes
+# ----------------------------------------------------------------------------
+
+
+def _vav_context(params):
+    ports = [_port("A", (-1.0, 0.0, 0.0)), _port("B", (1.0, 0.0, 0.0))]
+    return {"hvac_api": HVACLibraryAPI, "params": params, "connected_ports": ports}
+
+
+def test_vav_box_sizes_default_from_the_duct_size():
+    from freecad.HVAC.library.fittings import inline
+
+    # Duct 200: casing 400 long (2 x), 300 x 300 (1.5 x), collars 50 (0.25 x).
+    _ports, length, width, height, trim = inline._vav_box_layout(_vav_context({}))
+    assert (length, width, height) == (400.0, 300.0, 300.0)
+    assert trim == 250.0
+
+
+def test_vav_box_trim_is_half_the_casing_plus_the_collar():
+    from freecad.HVAC.library.fittings import inline
+
+    params = {"BoxLength": 600.0, "BoxWidth": 500.0, "BoxHeight": 350.0, "CollarLength": 80.0}
+    _ports, length, width, height, trim = inline._vav_box_layout(_vav_context(params))
+    assert (length, width, height, trim) == (600.0, 500.0, 350.0, 380.0)
+    records = inline.measure_vav_box(_vav_context(params))
+    assert [rec["length"] for rec in records] == [380.0, 380.0]

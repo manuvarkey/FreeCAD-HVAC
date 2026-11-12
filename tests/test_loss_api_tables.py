@@ -285,3 +285,45 @@ def test_obstruction_with_no_flow_is_a_zero_loss():
     result = api.obstruction_loss(_inline({"ObstructionDiameter": 20.0}, velocity_ms=0.0))
     assert result.status == api.EXACT
     assert _k(result) == 0.0
+
+
+# ----------------------------------------------------------------------------
+# Drop-down display names, and the shared damper loss function
+# ----------------------------------------------------------------------------
+
+
+def test_choice_turns_a_display_name_into_the_method_key():
+    assert api._choice("Opposed blade", "butterfly") == "opposed_blade"
+    assert api._choice("Butterfly airfoil", "butterfly") == "butterfly_airfoil"
+    assert api._choice("", "butterfly") == "butterfly"
+    assert api._choice(None, "abrupt") == "abrupt"
+
+
+def test_damper_loss_accepts_the_drop_down_display_names():
+    rect = dict(profile="Rectangular", Width=500.0, Height=500.0)
+    result = api.damper_loss(_inline({"DamperType": "Opposed blade", "BladeAngle": 30.0, "BladeCount": 4}, **rect))
+    assert _k(result) == pytest.approx(7.3)
+
+
+def _shared_damper_loss(properties, **port_kwargs):
+    from freecad.HVAC.library.fittings import losses
+
+    context = _inline(properties, **port_kwargs)
+    context["loss_api"] = api
+    return losses.loss_damper_generic(context)
+
+
+def test_shared_damper_loss_uses_the_users_coefficient_by_default():
+    for properties in (
+        {"LossCoefficient": 0.35},
+        {"DamperType": "Coefficient", "LossCoefficient": 0.35, "BladeAngle": 40.0},
+    ):
+        result = _shared_damper_loss(properties)
+        assert _k(result) == pytest.approx(0.35)
+        assert result.paths[0].source == "inline_device"
+
+
+def test_shared_damper_loss_reads_the_table_for_a_real_damper_type():
+    result = _shared_damper_loss({"DamperType": "Butterfly", "LossCoefficient": 0.35, "BladeAngle": 30.0})
+    assert _k(result) == pytest.approx(4.5)
+    assert result.paths[0].source == "smacna_damper_butterfly"

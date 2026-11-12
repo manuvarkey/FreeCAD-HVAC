@@ -1994,7 +1994,8 @@ class HVACLibraryAPI:
         "terminal_body": ("terminals", "build_terminal_body_generic", "measure_terminal_body_generic"),
         "duct_closure": ("terminals", "build_duct_closure_generic", "measure_duct_closure_generic"),
         "inline_damper": ("inline", "build_damper_generic", "measure_damper_generic"),
-        "inline_vav": ("inline", "build_vav_generic", "measure_vav_generic"),
+        "inline_vav": ("inline", "build_vav_box", "measure_vav_box"),
+        "inline_obstruction": ("inline", "build_obstruction_generic", "measure_obstruction_generic"),
         "through": ("through", "build_through_generic", "measure_through_generic"),
     }
 

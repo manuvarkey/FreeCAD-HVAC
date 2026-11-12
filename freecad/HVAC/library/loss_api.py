@@ -915,6 +915,16 @@ class HVACLossAPI:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _choice(value, default):
+        """
+        A drop-down choice as the key these methods use: lower case with
+        underscores, so a type-def may show "Opposed blade" for
+        "opposed_blade". Empty or missing gives `default`.
+        """
+        key = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+        return key or default
+
+    @staticmethod
     def _from_lookup(port, other_edge_key, lookup, source, notes=()):
         """
         One-path LossEvaluation from a table Lookup. EXACT when the point
@@ -999,7 +1009,7 @@ class HVACLossAPI:
             if port is None:
                 return HVACLossAPI._unsupported(problem)
             properties = context.get("properties") or {}
-            kind = str(properties.get("EntryType", "") or "duct_in_wall")
+            kind = HVACLossAPI._choice(properties.get("EntryType"), "duct_in_wall")
             diameter, note = HVACLossAPI._reference_diameter_mm(port)
             if diameter <= 0.0:
                 return HVACLossAPI._unsupported("invalid duct size")
@@ -1057,7 +1067,7 @@ class HVACLossAPI:
             if port is None:
                 return HVACLossAPI._unsupported(problem)
             properties = context.get("properties") or {}
-            kind = str(properties.get("ExitType", "") or "abrupt")
+            kind = HVACLossAPI._choice(properties.get("ExitType"), "abrupt")
             diameter, note = HVACLossAPI._reference_diameter_mm(port)
             if diameter <= 0.0:
                 return HVACLossAPI._unsupported("invalid duct size")
@@ -1157,7 +1167,7 @@ class HVACLossAPI:
                 return HVACLossAPI._unsupported(problem)
             inlet, outlet = pair
             properties = context.get("properties") or {}
-            kind = str(properties.get("DamperType", "") or "butterfly")
+            kind = HVACLossAPI._choice(properties.get("DamperType"), "butterfly")
             angle = max(float(properties.get("BladeAngle", 0.0) or 0.0), 0.0)
             profile = HVACLibraryAPI.port_profile(outlet)
             round_duct = profile == "Circular"
