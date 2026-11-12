@@ -135,10 +135,21 @@ def _terminal_layout(context, kind):
             layout["neck"] = _neck_length(props, 0.25 * size)
 
     elif kind == "hood":
-        # A duct end with a plate over it: HoodHeight clear of the opening, twice the duct size across.
+        # SMACNA 14-15 F / 14-16 A: the duct end flares at the included
+        # HoodAngle over one duct size (0 = a straight end), and a conical
+        # roof twice the duct size across, rising 0.3 x the duct size, stands
+        # HoodHeight clear of the opening.
         layout["neck"] = _neck_length(props, 0.25 * size)
+        growth = min(size * _half_angle_tan(_number(props, "HoodAngle")), 3.0 * size)
+        if growth > _EPS:
+            layout.update(body=size, face=_grown_section(profile, params, growth))
         height = _positive(props.get("HoodHeight"), 0.5 * size)
-        layout["cap"] = {"distance": height, "growth": 0.5 * size, "thickness": max(0.01 * size, 2.0)}
+        layout["cap"] = {
+            "distance": height,
+            "growth": 0.5 * size,
+            "rise": 0.3 * size,
+            "thickness": max(0.01 * size, 2.0),
+        }
 
     elif kind == "square":
         face = _positive(props.get("FaceSize"), 2.0 * size)
@@ -249,11 +260,24 @@ def _build_terminal(context, kind):
     # Step 3: a weather hood's plate, standing clear of the opening on the far side of the node.
     cap = layout["cap"]
     if cap:
+        # A conical (round) or pyramidal (rectangular, oval) roof of sheet
+        # thickness: the roof solid less itself moved down by the thickness.
         outside = axis * -1.0
-        plate = api.profile_from_port(
-            api.copy_port(port, position=api.port_position(port) + outside * cap["distance"]), cap["growth"]
+        base_centre = api.port_position(port) + outside * cap["distance"]
+        base_profile, base_params = _grown_section(duct_profile, duct_params, cap["growth"])
+        apex_profile, apex_params = _scaled_section(base_profile, base_params, 0.02, 0.02)
+        base = api.make_profile(base_profile, base_params, center=base_centre, direction=axis, profile_x_axis=x_axis)
+        apex = api.make_profile(
+            apex_profile,
+            apex_params,
+            center=base_centre + outside * cap["rise"],
+            direction=axis,
+            profile_x_axis=x_axis,
         )
-        _fuse_into_structure(context, result, api.extrude(plate, outside * cap["thickness"], solid=True))
+        roof = api.loft([base, apex], solid=True, ruled=True)
+        under = roof.copy()
+        under.translate(axis * cap["thickness"])
+        _fuse_into_structure(context, result, api.refine(roof.cut(under)))
     return result
 
 

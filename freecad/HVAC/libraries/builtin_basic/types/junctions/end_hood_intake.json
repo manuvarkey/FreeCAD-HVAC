@@ -49,7 +49,7 @@
       "name": "HoodAngle",
       "prop_type": "App::PropertyAngle",
       "group": "Parameters",
-      "description": "Slope of the hood plate. The loss is tabulated for 0 and 15 degrees",
+      "description": "Included flare angle of the duct end under the hood, over one duct size (0 = straight end). The loss is tabulated for 0 and 15 degrees",
       "default": 0.0,
       "validation": {
         "minimum": 0.0,
