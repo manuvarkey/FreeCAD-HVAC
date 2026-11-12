@@ -35,6 +35,7 @@ translate = FreeCAD.Qt.translate
 
 from ..utils import hvaclib
 from ..ui import Toolbar
+from ..core import _component_results
 from ..library.construction import ROLE_FLOW_SURFACE, ROLE_STRUCTURAL_SHELL
 
 
@@ -1229,6 +1230,11 @@ def _buildLegendBarCoinNode(label, min_value, max_value, row_index=0, steps=24):
     return root
 
 
+def _element_label(obj):
+    """Number, else Label, else Name -- how results name a duct or node."""
+    return str(getattr(obj, "Number", "") or getattr(obj, "Label", "") or getattr(obj, "Name", ""))
+
+
 class AirflowResultObserver:
     """
     Session-scoped 3D overlay, active while a Calculate Airflow results
@@ -1251,8 +1257,11 @@ class AirflowResultObserver:
     Reuses TerminalFlowRateObserver's own Coin builder functions
     (buildPortHighlightCoinNode/buildFlowRateLabelCoinNode/
     buildTerminalFlowArrowCoinNode) rather than duplicating geometry code.
-    Purely visual and entirely non-pickable (unlike TerminalFlowRateObserver,
-    there is no click handling at all here) -- like that overlay, this
+    No click handling (unlike TerminalFlowRateObserver); the only input it
+    reads is mouse movement, for the hover tooltip: once the mouse rests
+    (HOVER_DELAY_MS) it ray-picks its own planes and boxes, else asks the
+    view for the duct or fitting under the cursor, and shows that result as
+    a QToolTip (text from core/_component_results.py). Like that overlay, this
     never touches the document/undo stack, with one deliberate exception:
     while either visualization is enabled, every segment/component's own
     ShapeAppearance in the network is temporarily overridden to a neutral
@@ -1278,6 +1287,10 @@ class AirflowResultObserver:
     TRANSPARENCY = 0.4
     COLOR_TEXT = (0, 0, 0)
     LEGEND_STEPS = 24  # gradient slices drawn across the legend bar
+
+    # Result tooltip (Stage 9 item 1): shown once the mouse has rested this long.
+    HOVER_DELAY_MS = 350
+    HOVER_PICK_RADIUS = 4
 
     JUNCTION_COLOR_FIELDS = ("flow_rate", "static_pressure")
     JUNCTION_COLOR_LABELS = {
@@ -1307,16 +1320,25 @@ class AirflowResultObserver:
         self.segment_color_by = self.SEGMENT_COLOR_FIELDS[0]
         self.segment_range_override = None  # (min, max), or None for auto -- manual range: TODO, not yet exposed in the UI
 
+        # Hover tooltips: overlay nodes to describe, the last mouse position,
+        # and an idle timer so picking only happens once the mouse rests.
+        self._hover_root = None
+        self._hover_targets = []  # [(SoNode, callable returning the tooltip text), ...]
+        self._hover_pos = None
+        self._hover_timer = None
+
     def start(self):
         vobj = getattr(self.network_obj, "ViewObject", None)
         if vobj is None:
             return
         self._root = coin.SoSeparator()
         vobj.RootNode.addChild(self._root)
+        self._attachHover(vobj)
         self._attachLegend()
         self.refresh()
 
     def stop(self):
+        self._detachHover()
         self._restoreAppearance()
         if self._root is not None:
             try:
@@ -1355,6 +1377,7 @@ class AirflowResultObserver:
         if self._root is None:
             return
         self._root.removeAllChildren()
+        self._hover_targets = []
 
         active = self.junction_enabled or self.segment_enabled
         if active:
@@ -1529,6 +1552,9 @@ class AirflowResultObserver:
         )
         if plane_node is not None:
             self._root.addChild(plane_node)
+            self._hover_targets.append(
+                (plane_node, lambda: self._portTooltip(junction, port, junc_res, port_row_by_edge, seg_by_key))
+            )
 
         width, height = hvaclib.get_section_extents(display_port.get("section_params", {}) or {})
         dimension = max(width, height) if (width > 0.0 and height > 0.0) else 100.0
@@ -1691,6 +1717,7 @@ class AirflowResultObserver:
             )
             if overlay_node is not None:
                 self._root.addChild(overlay_node)
+                self._hover_targets.append((overlay_node, lambda s=seg_res: self._segmentTooltip(s)))
 
             # Text sits on the box's own top (longitudinal) face -- not a
             # cross-sectional plane at one end -- running along the duct's
@@ -1733,6 +1760,102 @@ class AirflowResultObserver:
             )
             if loss_label is not None:
                 self._root.addChild(loss_label)
+
+    # ------------------------------------------------------------------
+    # Hover tooltips (Stage 9 item 1)
+    # ------------------------------------------------------------------
+
+    def _attachHover(self, vobj):
+        self._hover_root = coin.SoSeparator()
+        callback = coin.SoEventCallback()
+        callback.addEventCallback(coin.SoLocation2Event.getClassTypeId(), self._onMouseMove)
+        self._hover_root.addChild(callback)
+        vobj.RootNode.addChild(self._hover_root)
+        self._hover_timer = QtCore.QTimer()
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.timeout.connect(self._onHoverIdle)
+
+    def _detachHover(self):
+        if self._hover_timer is not None:
+            self._hover_timer.stop()
+            self._hover_timer = None
+        if self._hover_root is not None:
+            try:
+                vobj = getattr(self.network_obj, "ViewObject", None)
+                if vobj is not None:
+                    vobj.RootNode.removeChild(self._hover_root)
+            except Exception:
+                pass
+        self._hover_root = None
+        self._hover_targets = []
+        QtWidgets.QToolTip.hideText()
+
+    def _onMouseMove(self, user_data, event_callback):
+        # Never handled here: the move still reaches FreeCAD (preselection, navigation).
+        event = event_callback.getEvent()
+        self._hover_pos = event.getPosition()
+        if self._hover_timer is not None:
+            self._hover_timer.start(self.HOVER_DELAY_MS)
+
+    def _onHoverIdle(self):
+        try:
+            text = self._hoverText()
+        except Exception as e:
+            FreeCAD.Console.PrintLog("HVAC - result tooltip: {}\n".format(e))
+            text = ""
+        if text:
+            QtWidgets.QToolTip.showText(QtGui.QCursor.pos(), text)
+        else:
+            QtWidgets.QToolTip.hideText()
+
+    def _hoverText(self):
+        """Tooltip for what is under the cursor: an overlay plane or box first, else a duct or fitting of this network."""
+        view = Gui.ActiveDocument.ActiveView if Gui.ActiveDocument else None
+        if view is None:
+            return ""
+        if self._hover_targets and self._hover_pos is not None and self._root is not None:
+            region = view.getViewer().getSoRenderManager().getViewportRegion()
+            pick = coin.SoRayPickAction(region)
+            pick.setPoint(self._hover_pos)
+            pick.setRadius(self.HOVER_PICK_RADIUS)
+            pick.apply(self._root)
+            picked = pick.getPickedPoint()
+            if picked is not None:
+                path = picked.getPath()
+                for node, describe in self._hover_targets:
+                    if path.containsNode(node):
+                        return describe()
+
+        info = view.getObjectInfo(view.getCursorPos())
+        if not info:
+            return ""
+        obj = FreeCAD.ActiveDocument.getObject(info.get("Object", "")) if FreeCAD.ActiveDocument else None
+        if obj is None or hvaclib.getOwnerNetwork(obj) != self.network_obj:
+            return ""
+        if hvaclib.isDuctSegment(obj):
+            seg_res = next((s for s in self._allSegmentResults() if s.obj == obj), None)
+            return self._segmentTooltip(seg_res) if seg_res is not None else ""
+        if hvaclib.isDuctComponent(obj):
+            rows = [row for comp in self.result.components for row in comp.component_ports if row.component_obj == obj]
+            return _component_results.component_tooltip(_element_label(obj), rows)
+        return ""
+
+    def _segmentTooltip(self, seg_res):
+        obj = seg_res.obj
+        return _component_results.segment_tooltip(
+            _element_label(obj), seg_res, float(getattr(obj, "EffectiveLength", 0.0) or 0.0)
+        )
+
+    def _portTooltip(self, junction, port, junc_res, port_row_by_edge, seg_by_key):
+        edge_key = port.get("edge_key")
+        seg_res = seg_by_key.get(edge_key)
+        leg = _element_label(seg_res.obj) if seg_res is not None else str(edge_key)
+        return _component_results.port_tooltip(
+            "Node {}, leg {}".format(_element_label(junction), leg),
+            self._junctionPortFlow(port, junc_res, port_row_by_edge, seg_by_key),
+            self._junctionPortStaticPressure(port, junc_res, port_row_by_edge),
+            port_row_by_edge.get(edge_key),
+        )
 
     # ------------------------------------------------------------------
     # Temporary neutral appearance override

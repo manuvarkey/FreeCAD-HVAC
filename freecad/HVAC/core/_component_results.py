@@ -132,3 +132,72 @@ def write_port_results(comp_obj, port_results):
     comp_obj.CalcVelocity = result.velocity_ms
     comp_obj.CalcLossCoefficient = result.loss_coefficient if result.loss_coefficient is not None else 0.0
     comp_obj.CalcPressureDrop = result.pressure_drop_pa
+
+
+# ----------------------------------------------------------------------------
+# Result tooltips (Stage 9 item 1): plain text for the airflow result
+# overlay's hover tooltip. No FreeCAD here, so they are unit-testable; the
+# observer (ui/Observer.py) only finds what is under the cursor.
+# ----------------------------------------------------------------------------
+
+
+def _fmt(value, unit, digits=1):
+    if value is None:
+        return "-"
+    return "{:.{d}f} {}".format(float(value), unit, d=digits)
+
+
+def segment_tooltip(label, seg_res, length_mm=0.0):
+    """Tooltip text for one duct segment's airflow result (an AirflowSolver.SegmentResult)."""
+    length_m = float(length_mm or 0.0) / 1000.0
+    friction_rate = seg_res.friction_loss_pa / length_m if length_m > 1e-9 else None
+    lines = [
+        "Duct {}".format(label),
+        "Flow: {}".format(_fmt(seg_res.flow_lps, "L/s")),
+        "Velocity: {}".format(_fmt(seg_res.velocity_ms, "m/s", 2)),
+        "Friction rate: {}".format(_fmt(friction_rate, "Pa/m", 2)),
+        "Friction loss: {}".format(_fmt(seg_res.friction_loss_pa, "Pa")),
+        "Fitting loss: {}".format(_fmt(seg_res.fitting_loss_pa, "Pa")),
+        "Total loss: {}".format(_fmt(seg_res.total_loss_pa, "Pa")),
+        "Cumulative pressure: {}".format(_fmt(seg_res.cumulative_pressure_pa, "Pa")),
+    ]
+    if length_m > 1e-9:
+        lines.insert(1, "Length: {}".format(_fmt(length_m, "m", 2)))
+    return "\n".join(lines)
+
+
+def port_tooltip(title, flow_lps, static_pressure_pa, row=None):
+    """
+    Tooltip text for one port of a solved node: its own flow and static
+    pressure, plus the fitting result on that leg when there is one (an
+    AirflowSolver.ComponentPortRow): velocity, K, pressure drop and the loss
+    status and path it came from.
+    """
+    lines = [title, "Flow: {}".format(_fmt(flow_lps, "L/s")), "Static pressure: {}".format(_fmt(static_pressure_pa, "Pa"))]
+    if row is not None:
+        lines += [
+            "Velocity: {}".format(_fmt(row.velocity_ms, "m/s", 2)),
+            "K: {}".format("-" if row.loss_coefficient is None else "{:.3f}".format(row.loss_coefficient)),
+            "Pressure drop: {}".format(_fmt(row.pressure_drop_pa, "Pa")),
+            "Loss: {}{}".format(row.status or "-", " ({})".format(row.path_label) if row.path_label else ""),
+        ]
+    return "\n".join(lines)
+
+
+def component_tooltip(label, rows):
+    """Tooltip text for a fitting: one block per leg with a result (ComponentPortRow), or a note when none."""
+    if not rows:
+        return "{}\nNo fitting loss on any leg".format(label)
+    blocks = [label]
+    for row in rows:
+        blocks.append(
+            "{}: {}, {}, K {}, drop {}, {}".format(
+                row.path_label or row.leg_label,
+                _fmt(row.flow_lps, "L/s"),
+                _fmt(row.velocity_ms, "m/s", 2),
+                "-" if row.loss_coefficient is None else "{:.3f}".format(row.loss_coefficient),
+                _fmt(row.pressure_drop_pa, "Pa"),
+                row.status or "-",
+            )
+        )
+    return "\n".join(blocks)
