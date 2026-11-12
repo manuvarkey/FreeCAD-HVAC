@@ -1069,10 +1069,18 @@ def test_bundled_builtin_basic_mixed_profile_cross_reaches_dedicated_cross_model
     assert selection.type_def.id == "cross_tee_straight"
 
 
-def test_bundled_builtin_basic_double_wye_still_uses_the_generic_cross():
-    # No dedicated double-wye model exists yet, so the star-bodied generic cross takes it.
+def test_bundled_builtin_basic_double_wye_reaches_the_radius_double_wye():
+    # Two dedicated double-wye models exist; the smooth-radius one has the higher priority.
     reg = _load_bundled_registry()
     request = _junction_request("cross", "cross.double_wye", "Circular", _ports(4, "Circular"))
+    selection = reg.select_type("builtin_basic", request, strict=True)
+    assert selection.status == "exact"
+    assert selection.type_def.id == "cross_double_wye_radius"
+
+
+def test_bundled_builtin_basic_irregular_cross_still_uses_the_generic_cross():
+    reg = _load_bundled_registry()
+    request = _junction_request("cross", "cross.generic", "Circular", _ports(4, "Circular"))
     selection = reg.select_type("builtin_basic", request, strict=True)
     assert selection.type_def.id == "cross_generic"
 

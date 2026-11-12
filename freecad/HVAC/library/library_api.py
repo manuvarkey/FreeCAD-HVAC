@@ -1985,6 +1985,8 @@ class HVACLibraryAPI:
         "wye_mitered": ("wyes", "build_wye_mitered", "measure_wye_mitered"),
         "wye_radius": ("wyes", "build_wye_radius", "measure_wye_radius"),
         "cross_tee_straight": ("crosses", "build_cross_tee_straight", "measure_cross_tee_straight"),
+        "double_wye_radius": ("crosses", "build_double_wye_radius", "measure_double_wye_radius"),
+        "double_wye_mitered": ("crosses", "build_double_wye_mitered", "measure_double_wye_mitered"),
         "star_branch": ("stars", "build_branch_generic", "measure_branch_generic"),
         "star_wye": ("stars", "build_wye_generic", "measure_wye_generic"),
         "star_cross": ("stars", "build_cross", "measure_cross"),
