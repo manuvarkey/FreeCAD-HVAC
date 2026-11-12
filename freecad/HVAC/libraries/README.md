@@ -128,6 +128,26 @@ Common fields, both segments and junctions:
 | `generator` | legacy alternative to `geometry`: `{"module": "...", "function": "..."}` |
 | `connection_lengths` | optional: `{"module": "...", "function": "..."}` -- a lightweight, independent per-port trim *measurement* function (parsed onto `HVACTypeDef.lengths_module`/`lengths_function`; see below) |
 | `loss_module` / `loss_function` | optional: fitting-loss coefficient function for the airflow solver; its context provides `HVACLossAPI` as `context["loss_api"]`. May instead (or also) declare `loss.variants` for flow-dependent formulas -- see below |
+| `friction` | optional, segments only: `{"module": "...", "function": "..."}` -- a straight-duct friction model factory (see below) |
+
+### `friction`: straight-duct friction models
+
+A segment type can replace or correct the network's friction model
+(`DuctNetwork.FrictionModel`: `DarcyAltshulTsal`, the default,
+`DarcyColebrook`, `Table` from the CSV in `FrictionTableFile`, or
+`Expression` from `FrictionExpression`; see `freecad/HVAC/analysis/friction.py`).
+The factory is called once per segment per solve with a context holding
+`properties`, `obj`, `roughness_mm`, `base_model` (the network's model; None
+means the default) and `friction` (the `analysis.friction` module), and
+returns any object with
+`rate_pa_per_m(flow_m3_s, area_m2, dh_m, roughness_m, density_kg_m3, kinematic_viscosity_m2_s)`.
+A factory that only corrects the network's model should wrap `base_model`
+(e.g. `friction.ScaledFriction(base_model, factor)`), so a project-wide
+table still applies underneath.
+
+Shipped: `shared:friction` / `friction_flex_compressed`, used by
+`builtin_basic/circular_flex` (manual only): the network's model times the
+SMACNA Fig. 14-4 correction for `CompressionPercent`.
 
 ### `connection_lengths`: independent trim measurement
 

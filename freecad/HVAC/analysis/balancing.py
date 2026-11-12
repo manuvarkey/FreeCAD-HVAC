@@ -44,6 +44,7 @@ rather than forcing an unrealistic duct size to close it.
 from dataclasses import dataclass, field
 from typing import List
 
+from . import friction as friction_models
 from . import physics
 from .model import NetworkModel, SectionModel, SizingSettings
 from .pressure import PressureSolver
@@ -204,10 +205,15 @@ class PressureBalanceCoordinator:
         if area_m2 <= 0.0 or dh_m <= 0.0:
             return 0.0
         velocity_ms = physics.velocity_from_flow(physics.lps_to_m3s(flow_lps), area_m2)
-        reynolds = physics.reynolds_number(velocity_ms, dh_m, air.kinematic_viscosity_m2_s)
-        roughness_m = physics.mm_to_m(seg.roughness_mm)
-        friction_factor = physics.friction_factor_altshul_tsal(reynolds, roughness_m / dh_m)
-        return physics.darcy_weisbach_pressure_loss(friction_factor, 1.0, dh_m, air.density_kg_m3, velocity_ms)
+        return friction_models.rate_pa_per_m(
+            seg.friction_model,
+            physics.lps_to_m3s(flow_lps),
+            area_m2,
+            dh_m,
+            physics.mm_to_m(seg.roughness_mm),
+            air.density_kg_m3,
+            air.kinematic_viscosity_m2_s,
+        )
 
     def _assemble_results(self, result, network, comp, base, sections, tree):
         """Final SegmentSizeResult per edge, using the last successfully-solved pressure pass for velocity/Reynolds."""

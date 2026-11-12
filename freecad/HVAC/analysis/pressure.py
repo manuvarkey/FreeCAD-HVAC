@@ -62,6 +62,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from . import paths as paths_mod
+from . import friction as friction_models
 from . import physics
 from .flow import FlowComponent, FlowSolveError
 from .loss import LossPath, LossStatus
@@ -504,12 +505,15 @@ class PressureSolver:
         velocity_ms = physics.velocity_from_flow(physics.lps_to_m3s(flow_lps), area_m2)
         roughness_m = physics.mm_to_m(seg.roughness_mm)
         reynolds = physics.reynolds_number(velocity_ms, dh_m, air.kinematic_viscosity_m2_s)
-        relative_roughness = roughness_m / dh_m
-        friction_factor = physics.friction_factor_altshul_tsal(reynolds, relative_roughness)
-
         length_m = physics.mm_to_m(seg.length_mm)
-        friction_loss_pa = physics.darcy_weisbach_pressure_loss(
-            friction_factor, length_m, dh_m, air.density_kg_m3, velocity_ms
+        friction_loss_pa = length_m * friction_models.rate_pa_per_m(
+            seg.friction_model,
+            physics.lps_to_m3s(flow_lps),
+            area_m2,
+            dh_m,
+            roughness_m,
+            air.density_kg_m3,
+            air.kinematic_viscosity_m2_s,
         )
 
         return SegmentResult(

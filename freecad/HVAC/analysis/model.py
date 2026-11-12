@@ -183,6 +183,11 @@ class SegmentModel:
     junction_loss_pa: float = 0.0
     component_loss_pa: float = 0.0
     cumulative_pressure_pa: float = 0.0
+    # An analysis.friction model (anything with rate_pa_per_m); None means
+    # the default, Darcy-Weisbach with Altshul-Tsal. Built once by the
+    # FreeCAD adapter from the segment type-def's "friction" entry or the
+    # network's FrictionModel property.
+    friction_model: Optional[object] = None
 
     @property
     def total_loss_pa(self):

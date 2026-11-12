@@ -35,8 +35,10 @@ or a library type-def.
 """
 
 import json
+import os
 import re
 
+from ..analysis import friction as friction_models
 from ..analysis.model import AirState, ComponentModel, NetworkModel, NodeModel, PortModel, SectionModel, SegmentModel
 from ..library.library_api import HVACLibraryAPI
 from ..utils import hvaclib
@@ -96,6 +98,7 @@ def build_network_model(net_obj):
         kinematic_viscosity_m2_s=float(getattr(net_obj, "AirKinematicViscosity", 1.51e-5) or 1.51e-5),
     )
     default_roughness_mm = float(getattr(net_obj, "DefaultRoughness", 0.09) or 0.0)
+    base_friction = network_friction_model(net_obj)
 
     edges = {}
     for u, v, edge_ref in parser.analysis_graph.edges(data="key"):
@@ -104,6 +107,7 @@ def build_network_model(net_obj):
     segments = {}
     for edge_key, seg_obj in segment_map.items():
         segments[edge_key] = _build_segment_model(seg_obj, default_roughness_mm)
+        segments[edge_key].friction_model = segment_friction_model(reg, seg_obj, base_friction, segments[edge_key])
 
     nodes = {}
     component_map = {}
@@ -273,6 +277,57 @@ def _build_node_model(node_key, junction_obj, ja, segment_map, reg, air, compone
         run_edge_pairs=run_edge_pairs,
         allow_size_change=bool(getattr(junction_obj, "AllowSizeChange", True)),
     )
+
+
+def network_friction_model(net_obj):
+    """
+    The network-wide friction model from its FrictionModel property, or None
+    for the default (Darcy-Weisbach with Altshul-Tsal). Raises ValueError
+    with a readable message when the table file or the expression is bad.
+    """
+    choice = str(getattr(net_obj, "FrictionModel", "DarcyAltshulTsal") or "DarcyAltshulTsal")
+    if choice == "DarcyAltshulTsal":
+        return None
+    if choice == "DarcyColebrook":
+        return friction_models.DarcyWeisbach(friction_models.COLEBROOK)
+    if choice == "Table":
+        path = str(getattr(net_obj, "FrictionTableFile", "") or "")
+        if not path:
+            raise ValueError("FrictionModel is Table but FrictionTableFile is empty")
+        try:
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError as exc:
+            raise ValueError("Cannot read FrictionTableFile '{}': {}".format(path, exc)) from None
+        return friction_models.TableFriction.from_csv(text, label="friction table {}".format(os.path.basename(path)))
+    if choice == "Expression":
+        return friction_models.ExpressionFriction(getattr(net_obj, "FrictionExpression", ""))
+    raise ValueError("Unknown FrictionModel '{}'".format(choice))
+
+
+def segment_friction_model(reg, seg_obj, base_model, seg_model):
+    """
+    The segment's friction model: its type-def's own "friction" factory
+    (given the network's model to wrap) when it declares one, else the
+    network's model.
+    """
+    library_id = getattr(seg_obj, "LibraryId", "")
+    type_id = getattr(seg_obj, "TypeId", "")
+    type_def = reg.resolve_type(library_id, type_id) if library_id and type_id else None
+    if type_def is None or not getattr(type_def, "friction_module", ""):
+        return base_model
+    properties = {}
+    for pdef in getattr(type_def, "properties", []) or []:
+        properties[pdef.name] = getattr(seg_obj, pdef.name, getattr(pdef, "default", None))
+    context = {
+        "obj": seg_obj,
+        "properties": properties,
+        "roughness_mm": seg_model.roughness_mm,
+        "base_model": base_model,
+        "type_id": type_id,
+        "library_id": library_id,
+    }
+    return reg.call_friction(library_id, type_def, context)
 
 
 def build_loss_evaluator(

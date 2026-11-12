@@ -339,6 +339,41 @@ class DuctNetwork:
             obj.DefaultRoughness = 0.09  # mm, galvanized steel
 
         # -------------------------------------------------
+        # Straight-duct friction model (analysis/friction.py). A segment
+        # type that declares its own "friction" factory (e.g. a flexible
+        # duct) wraps or replaces this one.
+        # -------------------------------------------------
+
+        if "FrictionModel" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyEnumeration",
+                "FrictionModel",
+                "HVAC Air Properties",
+                "Straight-duct friction: Darcy-Weisbach with the Altshul-Tsal or Colebrook friction factor, a "
+                "friction chart from FrictionTableFile, or the formula in FrictionExpression",
+            )
+            obj.FrictionModel = ["DarcyAltshulTsal", "DarcyColebrook", "Table", "Expression"]
+            obj.FrictionModel = "DarcyAltshulTsal"
+
+        if "FrictionTableFile" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyFile",
+                "FrictionTableFile",
+                "HVAC Air Properties",
+                "CSV friction chart for FrictionModel Table: a header row with diameter_mm, velocity_ms (or "
+                "flow_lps) and pa_per_m, then one row per chart point",
+            )
+
+        if "FrictionExpression" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyString",
+                "FrictionExpression",
+                "HVAC Air Properties",
+                "Friction rate in Pa/m for FrictionModel Expression, in Q (m3/s), V (m/s), Dh (m), A (m2), "
+                "eps (m), rho (kg/m3), nu (m2/s), Re; + - * / **, sqrt, log, log10, exp, abs, min, max",
+            )
+
+        # -------------------------------------------------
         # Duct sizing (constant velocity / constant friction rate / static regain)
         # -------------------------------------------------
 

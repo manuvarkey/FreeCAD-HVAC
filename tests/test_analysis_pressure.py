@@ -3,6 +3,8 @@ Pure tests for freecad.HVAC.analysis.pressure -- no FreeCAD/conftest
 stubbing needed, since analysis/ has no FreeCAD dependency at all.
 """
 
+import pytest
+
 from analysis_fixtures import AIR_DENSITY, AIR_VISCOSITY, DEFAULT_ROUGHNESS_MM, base_tree, converging_tree
 
 from freecad.HVAC.analysis import flow, physics
@@ -43,9 +45,11 @@ def test_flow_velocity_friction_match_independent_oracle():
     vB, reB, frB = _expected_segment(150.0, 3000.0, 50.0)
     vC, reC, frC = _expected_segment(150.0, 6000.0, 30.0)
 
-    assert segA.velocity_ms == vA and segA.reynolds == reA and segA.friction_loss_pa == frA
-    assert segB.velocity_ms == vB and segB.friction_loss_pa == frB
-    assert segC.velocity_ms == vC and segC.friction_loss_pa == frC
+    # Friction is rate x length now, so it may differ in the last bit from
+    # Darcy-Weisbach evaluated with the length inside.
+    assert segA.velocity_ms == vA and segA.reynolds == reA and segA.friction_loss_pa == pytest.approx(frA, rel=1e-12)
+    assert segB.velocity_ms == vB and segB.friction_loss_pa == pytest.approx(frB, rel=1e-12)
+    assert segC.velocity_ms == vC and segC.friction_loss_pa == pytest.approx(frC, rel=1e-12)
 
     # This particular fixture's tee is diverging (A common inlet, B/C
     # outlets), so its fixed K lands on the two outlet ports only -- a

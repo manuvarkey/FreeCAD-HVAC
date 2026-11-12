@@ -31,6 +31,7 @@ def _function_references(type_def):
         ("generator", type_def.generator_module, type_def.generator_function),
         ("connection_lengths", type_def.lengths_module, type_def.lengths_function),
         ("loss", type_def.loss_module, type_def.loss_function),
+        ("friction", type_def.friction_module, type_def.friction_function),
     ]
     refs.extend(("loss variant", variant.module, variant.function) for variant in type_def.loss_variants)
     return [ref for ref in refs if ref[1] or ref[2]]

@@ -61,6 +61,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Dict, List
 
+from . import friction as friction_models
 from . import physics
 from .model import NetworkModel, SectionModel, SizingSettings
 from .pressure import resolve_loss_evaluation
@@ -183,8 +184,15 @@ def _resize_to(seg, sres: SegmentSizeResult, section: SectionModel, air) -> Segm
         dh = physics.section_hydraulic_diameter_m(section)
         velocity = physics.velocity_from_flow(physics.lps_to_m3s(sres.flow_lps), area)
         reynolds = physics.reynolds_number(velocity, dh, air.kinematic_viscosity_m2_s)
-        factor = physics.friction_factor_altshul_tsal(reynolds, physics.mm_to_m(seg.roughness_mm) / dh)
-        friction = physics.darcy_weisbach_pressure_loss(factor, 1.0, dh, air.density_kg_m3, velocity)
+        friction = friction_models.rate_pa_per_m(
+            seg.friction_model,
+            physics.lps_to_m3s(sres.flow_lps),
+            area,
+            dh,
+            physics.mm_to_m(seg.roughness_mm),
+            air.density_kg_m3,
+            air.kinematic_viscosity_m2_s,
+        )
     old = sres.old_section
     changed = (
         abs(section.diameter_mm - old.diameter_mm) > 1e-6
@@ -334,6 +342,7 @@ def _size_one_segment(
                 air.density_kg_m3,
                 settings.min_velocity_ms,
                 fitting_loss_pa=fitting_loss_pa,
+                friction_model=seg.friction_model,
             )
         else:
             diameter_m = physics.circular_diameter_for_friction_rate(
@@ -342,6 +351,7 @@ def _size_one_segment(
                 roughness_m,
                 air.kinematic_viscosity_m2_s,
                 air.density_kg_m3,
+                friction_model=seg.friction_model,
             )
         new_diameter_mm = _round_up(diameter_m * 1000.0, settings.rounding_mm)
         new_section = SectionModel(profile="Circular", diameter_mm=new_diameter_mm)
@@ -377,6 +387,7 @@ def _size_one_segment(
                 aspect_ratio=aspect_ratio,
                 fixed_dim_m=fixed_dim_m,
                 fitting_loss_pa=fitting_loss_pa,
+                friction_model=seg.friction_model,
             )
         else:
             width_m, height_m = dims_friction(
@@ -388,6 +399,7 @@ def _size_one_segment(
                 mode,
                 aspect_ratio=aspect_ratio,
                 fixed_dim_m=fixed_dim_m,
+                friction_model=seg.friction_model,
             )
 
         # Only the solved (free) dimension is rounded; a fixed dimension is
@@ -411,9 +423,8 @@ def _size_one_segment(
     # applied, so recompute them from the real size.
     velocity_ms = physics.velocity_from_flow(flow_m3s, area_m2)
     reynolds = physics.reynolds_number(velocity_ms, dh_m, air.kinematic_viscosity_m2_s)
-    friction_factor = physics.friction_factor_altshul_tsal(reynolds, roughness_m / dh_m)
-    friction_rate_pa_per_m = physics.darcy_weisbach_pressure_loss(
-        friction_factor, 1.0, dh_m, air.density_kg_m3, velocity_ms
+    friction_rate_pa_per_m = friction_models.rate_pa_per_m(
+        seg.friction_model, flow_m3s, area_m2, dh_m, roughness_m, air.density_kg_m3, air.kinematic_viscosity_m2_s
     )
 
     changed = (

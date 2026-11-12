@@ -172,6 +172,11 @@ class HVACTypeDef:
     lengths_function: str = ""
     loss_module: str = ""
     loss_function: str = ""
+    # Optional straight-duct friction model factory (segment types only):
+    # JSON `"friction": {"module": ..., "function": ...}`, called through
+    # call_friction(). Empty means the network's own friction model.
+    friction_module: str = ""
+    friction_function: str = ""
     # Optional flow-dependent loss variants -- see HVACLossVariantDef. Empty
     # for a type-def using the plain loss_module/loss_function form only
     # (the common case); when non-empty, resolve_loss_variant() picks
@@ -1050,6 +1055,31 @@ class HVACLibraryRegistry:
         context["loss_api_version"] = HVACLossAPI.API_VERSION
         return func(context)
 
+    def call_friction(self, library_id: str, type_def: HVACTypeDef, context: dict):
+        """
+        Call a segment type's friction model factory, or return None when
+        the type declares none. The factory gets `context` (`properties`,
+        `obj`, `roughness_mm`, `base_model` -- the network's own model, which
+        a factory can scale or wrap -- and `friction`, the
+        analysis.friction module) and returns a friction model: anything
+        with `rate_pa_per_m(flow_m3_s, area_m2, dh_m, roughness_m,
+        density_kg_m3, kinematic_viscosity_m2_s)`.
+        """
+        if not type_def.friction_module or not type_def.friction_function:
+            return None
+        module = self.import_generator(library_id, type_def.friction_module)
+        func = getattr(module, type_def.friction_function, None)
+        if func is None:
+            raise ValueError(
+                "Type '{}': friction function '{}' not found in '{}'".format(
+                    type_def.id, type_def.friction_function, type_def.friction_module
+                )
+            )
+        from ..analysis import friction as friction_models
+
+        context["friction"] = friction_models
+        return func(context)
+
     def set_search_paths(self, paths):
         self._search_paths = [p for p in (paths or []) if p]
 
@@ -1232,6 +1262,9 @@ class HVACLibraryRegistry:
         gen = raw.get("generator", {}) or {}
         lengths = raw.get("connection_lengths", {}) or {}
         loss = raw.get("loss", {}) or {}
+        friction = raw.get("friction", {}) or {}
+        if friction and not (friction.get("module") and friction.get("function")):
+            raise ValueError("Type '{}' in '{}' has a friction entry with no module/function".format(raw.get("id", "?"), filepath))
 
         constraints = dict(raw.get("constraints", {}) or {})
         self._check_known_constraint_keys(constraints, raw.get("id", "?"), filepath, "constraints")
@@ -1323,6 +1356,8 @@ class HVACLibraryRegistry:
             loss_module=loss.get("module", ""),
             loss_function=loss.get("function", ""),
             loss_variants=loss_variants,
+            friction_module=friction.get("module", ""),
+            friction_function=friction.get("function", ""),
             selection=selection,
             construction=construction,
             features=features,
