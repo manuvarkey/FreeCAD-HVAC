@@ -327,3 +327,99 @@ def test_shared_damper_loss_reads_the_table_for_a_real_damper_type():
     result = _shared_damper_loss({"DamperType": "Butterfly", "LossCoefficient": 0.35, "BladeAngle": 30.0})
     assert _k(result) == pytest.approx(4.5)
     assert result.paths[0].source == "smacna_damper_butterfly"
+
+
+# ----------------------------------------------------------------------------
+# fan_connection_loss and the AHU loss
+# ----------------------------------------------------------------------------
+
+# A 600 x 400 duct leaving a 400 x 300 fan outlet: A1/A = 0.24 / 0.12 = 2.0,
+# and a coefficient printed at the outlet velocity is (2.0)^2 = 4 times larger at the duct's.
+_AHU_DUCT = dict(profile="Rectangular", Width=600.0, Height=400.0)
+_FAN = {"FanOutletWidth": 400.0, "FanOutletHeight": 300.0}
+
+
+def _supply(properties):
+    context = _terminal(dict(_FAN, **properties), entering=True, **_AHU_DUCT)
+    context["loss_api"] = api
+    context["air_density"] = 1.2
+    return context
+
+
+@pytest.mark.parametrize(
+    "choice, table_c",
+    [
+        ("Transition symmetric", 0.10),
+        ("Transition asymmetric top level", 0.14),
+        ("Transition asymmetric top 10 down", 0.22),
+        ("Transition asymmetric top 10 up", 0.11),
+        ("Transition pyramidal", 0.43),
+    ],
+)
+def test_fan_transition_reads_14_11_f_to_j(choice, table_c):
+    result = api.fan_connection_loss(_supply({"FanConnection": choice, "TransitionAngle": 20.0}))
+    assert result.status == api.EXACT
+    assert _k(result) == pytest.approx(table_c * 4.0)
+
+
+@pytest.mark.parametrize("wheel, table_c", [("Airfoil", 1.0), ("Backward inclined", 1.5), ("Forward curved", 1.8)])
+def test_fan_discharge_into_casing_reads_14_16i(wheel, table_c):
+    result = api.fan_connection_loss(_supply({"FanConnection": "Discharge into casing", "FanWheel": wheel}))
+    assert _k(result) == pytest.approx(table_c * 4.0)
+
+
+def test_fan_connection_none_or_missing_outlet_or_return_duct_is_unsupported():
+    assert api.fan_connection_loss(_supply({"FanConnection": "None"})).status == api.UNSUPPORTED
+    no_outlet = _supply({"FanConnection": "Transition pyramidal", "FanOutletWidth": 0.0})
+    assert api.fan_connection_loss(no_outlet).status == api.UNSUPPORTED
+    ret = _terminal(dict(_FAN, FanConnection="Transition pyramidal"), entering=False, **_AHU_DUCT)
+    assert api.fan_connection_loss(ret).status == api.UNSUPPORTED
+
+
+def test_fan_transition_outside_the_table_is_an_approximation():
+    result = api.fan_connection_loss(_supply({"FanConnection": "Transition symmetric", "TransitionAngle": 60.0}))
+    assert result.status == api.APPROXIMATION
+
+
+def test_ahu_loss_adds_the_unit_and_the_fan_connection():
+    from freecad.HVAC.library.fittings import losses
+
+    # Unit: 60 Pa at 5 m/s with rho 1.2 -> K = 60 / 15 = 4.0. Fan: airfoil wheel, 1.0 x 4.
+    context = _supply(
+        {
+            "FanConnection": "Discharge into casing",
+            "FanWheel": "Airfoil",
+            "LossMode": "Fixed pressure drop",
+            "PressureDrop": 60.0,
+        }
+    )
+    result = losses.loss_ahu(context)
+    assert result.status == api.EXACT
+    assert _k(result) == pytest.approx(4.0 + 1.0 * 4.0)
+
+
+def test_ahu_loss_without_a_fan_connection_is_the_unit_alone():
+    from freecad.HVAC.library.fittings import losses
+
+    context = _supply({"FanConnection": "None", "LossMode": "Fixed pressure drop", "PressureDrop": 60.0})
+    assert _k(losses.loss_ahu(context)) == pytest.approx(4.0)
+
+
+def test_ahu_loss_with_only_a_fan_connection():
+    from freecad.HVAC.library.fittings import losses
+
+    context = _supply({"FanConnection": "Discharge into casing", "FanWheel": "Airfoil", "LossCoefficient": 0.0})
+    assert _k(losses.loss_ahu(context)) == pytest.approx(4.0)
+
+
+def test_sum_losses_takes_the_weaker_status_and_joins_warnings():
+    from freecad.HVAC.analysis.loss import LossEvaluation, LossPath, LossStatus
+
+    a = LossEvaluation([LossPath(None, "D", "D", 1.0, source="a")], LossStatus.EXACT)
+    b = LossEvaluation([LossPath(None, "D", "D", 0.5, source="b")], LossStatus.APPROXIMATION, warning="clamped")
+    total = api.sum_losses(a, b)
+    assert total.paths[0].loss_coefficient == pytest.approx(1.5)
+    assert total.status == LossStatus.APPROXIMATION
+    assert total.warning == "clamped"
+    unsupported = LossEvaluation([], LossStatus.UNSUPPORTED, warning="no")
+    assert api.sum_losses(a, unsupported) is a

@@ -164,6 +164,16 @@ def loss_diffuser_generic(context):
     return context["loss_api"].terminal_component_loss(context)
 
 
+def loss_ahu(context):
+    # The unit itself (its own coefficient or pressure drop, as for any
+    # terminal) plus, where the duct leaves its fan, the fan connection's
+    # system effect (SMACNA 14-11 F to J, 14-16 I).
+    api = context["loss_api"]
+    unit = loss_diffuser_generic(context)
+    fan = api.fan_connection_loss(context)
+    return api.sum_losses(unit, fan)
+
+
 def loss_register_generic(context):
     # A register is a grille with a damper behind it: the two coefficients add up.
     if _fixed_pressure_drop(context):

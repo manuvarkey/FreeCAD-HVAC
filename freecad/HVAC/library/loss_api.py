@@ -1265,6 +1265,100 @@ class HVACLossAPI:
         except Exception as exc:
             return HVACLossAPI._unsupported("unexpected error computing inline device loss: {}".format(exc))
 
+    # FanConnection choice -> which table (see fan_connection_loss).
+    _FAN_TRANSITIONS = {
+        "transition_symmetric": "symmetric_sides_straight",
+        "transition_asymmetric_top_level": "asymmetric_top_level",
+        "transition_asymmetric_top_10_down": "asymmetric_top_10_down",
+        "transition_asymmetric_top_10_up": "asymmetric_top_10_up",
+        "transition_pyramidal": "pyramidal",
+    }
+    _FAN_WHEELS = {"airfoil": "airfoil", "backward_inclined": "backward_inclined", "forward_curved": "forward_curved"}
+
+    @staticmethod
+    def fan_connection_loss(context):
+        """
+        The system-effect loss where a duct leaves a fan (an AHU's supply
+        connection), from properties["FanConnection"]:
+
+        - "Transition symmetric" / "... asymmetric top level" / "... top 10
+          down" / "... top 10 up" / "... pyramidal": a transition from the
+          fan outlet to the duct, SMACNA 14-11 F to J, at TransitionAngle
+          and the area ratio duct / fan outlet.
+        - "Discharge into casing": the fan blows freely into the unit's own
+          casing (a plenum) and the duct leaves that, 14-16 I, by FanWheel.
+
+        The fan outlet is FanOutletWidth x FanOutletHeight. The tables are
+        printed against the fan outlet's velocity; the result is referenced
+        to the duct's, K = C (A_duct / A_outlet)^2. Only for air leaving the
+        unit into the duct. "None" or no FanConnection: UNSUPPORTED (no fan
+        connection to cost), as is a duct that carries air into the unit.
+        """
+        try:
+            properties = context.get("properties") or {}
+            choice = HVACLossAPI._choice(properties.get("FanConnection"), "none")
+            if choice == "none":
+                return HVACLossAPI._unsupported("no fan connection")
+            port, problem = HVACLossAPI._single_port(context, entering=True)
+            if port is None:
+                return HVACLossAPI._unsupported("fan connection: " + problem)
+
+            width = float(properties.get("FanOutletWidth", 0.0) or 0.0)
+            height = float(properties.get("FanOutletHeight", 0.0) or 0.0)
+            a_duct = HVACLibraryAPI.port_area(port)
+            if width <= 0.0 or height <= 0.0 or a_duct <= 0.0:
+                return HVACLossAPI._unsupported("FanOutletWidth / FanOutletHeight not set")
+            a_outlet = width * height / 1.0e6
+            to_duct = (a_duct / a_outlet) ** 2
+
+            if choice in HVACLossAPI._FAN_TRANSITIONS:
+                notes = []
+                area_ratio = a_duct / a_outlet
+                if area_ratio < 1.0:
+                    notes.append("the duct is smaller than the fan outlet; the tables are for an expansion")
+                angle = float(properties.get("TransitionAngle", 0.0) or 0.0)
+                lookup = transition_tables.expansion_at_fan(HVACLossAPI._FAN_TRANSITIONS[choice], angle, area_ratio)
+                lookup = loss_table.Lookup(lookup.value * to_duct, lookup.clamped, lookup.filled)
+                return HVACLossAPI._from_lookup(port, None, lookup, "smacna_fan_" + choice, notes)
+            if choice == "discharge_into_casing":
+                wheel = HVACLossAPI._choice(properties.get("FanWheel"), "backward_inclined")
+                if wheel not in HVACLossAPI._FAN_WHEELS:
+                    return HVACLossAPI._unsupported("unknown FanWheel '{}'".format(wheel))
+                lookup = entry_exit_tables.exit_fan_into_plenum(HVACLossAPI._FAN_WHEELS[wheel])
+                lookup = loss_table.Lookup(lookup.value * to_duct)
+                return HVACLossAPI._from_lookup(port, None, lookup, "smacna_fan_discharge_into_casing")
+            return HVACLossAPI._unsupported("unknown FanConnection '{}'".format(choice))
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing fan connection loss: {}".format(exc))
+
+    @staticmethod
+    def sum_losses(first, second):
+        """
+        Two LossEvaluations of the same one-path fitting added together
+        (e.g. a unit's own coefficient plus its fan connection). An
+        UNSUPPORTED one is left out; the status is the weaker of the two
+        (EXACT only when both are), and warnings are joined.
+        """
+        parts = [e for e in (first, second) if e is not None and e.status != LossStatus.UNSUPPORTED and e.paths]
+        if not parts:
+            return first if first is not None else second
+        if len(parts) == 1:
+            return parts[0]
+        a, b = parts
+        if len(a.paths) != 1 or len(b.paths) != 1 or a.paths[0].reference_edge_key != b.paths[0].reference_edge_key:
+            raise ValueError("sum_losses needs two one-path evaluations on the same leg")
+        path = a.paths[0]
+        total = LossPath(
+            path.from_edge_key,
+            path.to_edge_key,
+            path.reference_edge_key,
+            path.loss_coefficient + b.paths[0].loss_coefficient,
+            source="{}+{}".format(path.source, b.paths[0].source),
+        )
+        warnings = "; ".join(w for w in (a.warning, b.warning) if w) or None
+        status = LossStatus.EXACT if a.status == b.status == LossStatus.EXACT else LossStatus.APPROXIMATION
+        return LossEvaluation(paths=[total], status=status, warning=warnings)
+
     @staticmethod
     def fixed_pressure_drop_loss(context):
         """

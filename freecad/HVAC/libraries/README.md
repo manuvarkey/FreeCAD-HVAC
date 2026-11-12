@@ -582,7 +582,7 @@ and also when this table is out of date (regenerate it with
 | builtin_basic | `cross_marker` | Generic | placeholder | none (marker) |
 | builtin_basic | `cross_plenum_generic` | Circular, Rectangular, Oval | model | `loss_plenum` |
 | builtin_basic | `cross_tee_straight` | Circular, Rectangular, Oval | model | `loss_cross_generic` |
-| builtin_basic | `end_ahu_generic` | Circular, Rectangular, Oval | model | `loss_diffuser_generic` |
+| builtin_basic | `end_ahu_generic` | Circular, Rectangular, Oval | model | `loss_ahu` |
 | builtin_basic | `end_diffuser_generic` | Circular, Rectangular, Oval | model | `loss_diffuser_generic` |
 | builtin_basic | `end_diffuser_round` | Circular, Rectangular, Oval | model | `loss_diffuser_generic` |
 | builtin_basic | `end_diffuser_slot` | Circular, Rectangular, Oval | model | `loss_diffuser_generic` |

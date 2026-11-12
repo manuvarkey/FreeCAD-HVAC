@@ -125,6 +125,69 @@
       "validation": {
         "minimum": 0.0
       }
+    },
+    {
+      "name": "FanConnection",
+      "prop_type": "App::PropertyEnumeration",
+      "group": "Parameters",
+      "description": "How the duct leaves the unit's fan, for its system-effect loss (supply connections only). None adds nothing",
+      "default": "None",
+      "validation": {
+        "enum": [
+          "None",
+          "Transition symmetric",
+          "Transition asymmetric top level",
+          "Transition asymmetric top 10 down",
+          "Transition asymmetric top 10 up",
+          "Transition pyramidal",
+          "Discharge into casing"
+        ]
+      }
+    },
+    {
+      "name": "FanOutletWidth",
+      "prop_type": "App::PropertyLength",
+      "group": "Parameters",
+      "description": "Width of the fan outlet",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "FanOutletHeight",
+      "prop_type": "App::PropertyLength",
+      "group": "Parameters",
+      "description": "Height of the fan outlet",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "TransitionAngle",
+      "prop_type": "App::PropertyAngle",
+      "group": "Parameters",
+      "description": "Included angle of the transition from the fan outlet to the duct",
+      "default": 20.0,
+      "validation": {
+        "minimum": 0.0,
+        "maximum": 180.0
+      }
+    },
+    {
+      "name": "FanWheel",
+      "prop_type": "App::PropertyEnumeration",
+      "group": "Parameters",
+      "description": "Fan wheel, for Discharge into casing",
+      "default": "Backward inclined",
+      "validation": {
+        "enum": [
+          "Airfoil",
+          "Backward inclined",
+          "Forward curved"
+        ]
+      }
     }
   ],
   "generator": {
@@ -137,6 +200,6 @@
   },
   "loss": {
     "module": "shared:losses",
-    "function": "loss_diffuser_generic"
+    "function": "loss_ahu"
   }
 }
