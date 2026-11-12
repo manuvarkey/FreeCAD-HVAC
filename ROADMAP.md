@@ -164,7 +164,7 @@ after that is standard again.
 | Work | Level | Why |
 |---|---|---|
 | Stage 1: split `library_api.py` into mixin modules | Done | |
-| Stage 3 open: per-port table in the Edit Type panel | Standard | UI only; needs a check in the GUI. |
+| Stage 3: per-port table in the Edit Type panel | Done, needs a GUI check | One row per port (labelled by its duct's number), one column per per-port property of the current type; applied on OK, only while the type is unchanged. Logic in `core/_port_properties.py` (`port_table`, `parse_port_value`, `apply_port_table`), tested in `tests/test_port_table.py`. |
 | Stage 4 open: lateral tee and wye items | Standard | Decisions 10 to 13 in section 4 are taken. Build `branch_lateral_tee_radius` / `_mitered` from the double wye's branch bend (`fittings/crosses.py`), with priorities next to `branch_lateral_tee_generic`; add the `common_leg` constraint and the `branch.tee` families to the two wye types at a priority below every tee type. Geometry needs the smoke run at 30, 45 and 60 degrees on every profile. |
 | Stage 5 open: eccentric transition table (14-11 E), radius limit on `through_offset_radiussed` | Standard | |
 | Stage 5 open: fitting-derived read-only values (`IncludedAngle`) | **Design first** | Adds a second vocabulary next to the classifier's; touches type-def schema, object properties and loss calls. |

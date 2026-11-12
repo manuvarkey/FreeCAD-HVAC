@@ -709,10 +709,26 @@ class TaskPanelTypeEditor:
         self.type_combo = QtWidgets.QComboBox()
         layout.addWidget(self.type_combo)
 
+        # Per-port values (Stage 3): one row per port, one column per
+        # per-port property of the current type. Only for a single selected
+        # object whose type has such properties.
+        self.port_group = QtWidgets.QGroupBox(translate("HVAC_EditType", "Per-port values"))
+        port_layout = QtWidgets.QVBoxLayout(self.port_group)
+        self.port_note = QtWidgets.QLabel()
+        self.port_note.setWordWrap(True)
+        port_layout.addWidget(self.port_note)
+        self.port_table = QtWidgets.QTableWidget()
+        port_layout.addWidget(self.port_table)
+        layout.addWidget(self.port_group)
+        self._port_columns = []
+        self._port_rows = []
+
         self._populateLibraries()
         self._loadFromSelection()
+        self._buildPortTable()
 
         self.library_combo.currentIndexChanged.connect(self._refreshTypes)
+        self.type_combo.currentIndexChanged.connect(self._syncPortTableEnabled)
 
     def _populateLibraries(self):
         self.library_combo.clear()
@@ -833,9 +849,121 @@ class TaskPanelTypeEditor:
         for tdef in type_defs:
             self.type_combo.addItem(tdef.label, tdef.id)
 
+    def _portObject(self):
+        return self.objects[0] if len(self.objects) == 1 else None
+
+    def _portLabels(self, obj):
+        """{edge_key: duct number or label} for the object's ports."""
+        net = hvaclib.getOwnerNetwork(obj)
+        if net is None or getattr(net, "Proxy", None) is None:
+            return {}
+        labels = {}
+        for key, seg in net.Proxy.collectSegmentObjects().items():
+            labels[key] = str(getattr(seg, "Number", "") or getattr(seg, "Label", "") or key)
+        return labels
+
+    def _buildPortTable(self):
+        from ..core import _port_properties
+
+        self._port_columns, self._port_rows = [], []
+        obj = self._portObject()
+        type_def = None
+        if obj is not None and getattr(obj, "LibraryId", "") and getattr(obj, "TypeId", ""):
+            reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
+            type_def = reg.resolve_type(obj.LibraryId, obj.TypeId)
+        if type_def is not None:
+            self._port_columns, self._port_rows = _port_properties.port_table(obj, type_def, self._portLabels(obj))
+        if not self._port_columns or not self._port_rows:
+            self.port_group.setVisible(False)
+            return
+        self._port_type_def = type_def
+        table = self.port_table
+        table.clear()
+        table.setColumnCount(len(self._port_columns))
+        table.setRowCount(len(self._port_rows))
+        table.setHorizontalHeaderLabels([c["name"] for c in self._port_columns])
+        table.setVerticalHeaderLabels([r["label"] for r in self._port_rows])
+        for col, column in enumerate(self._port_columns):
+            header = table.horizontalHeaderItem(col)
+            if header is not None:
+                header.setToolTip(column["description"])
+        for row, port_row in enumerate(self._port_rows):
+            for col, column in enumerate(self._port_columns):
+                value = port_row["values"][column["name"]]
+                item = QtWidgets.QTableWidgetItem()
+                if column["prop_type"] == "App::PropertyBool":
+                    item.setFlags(QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsEnabled)
+                    item.setCheckState(QtCore.Qt.Checked if value else QtCore.Qt.Unchecked)
+                else:
+                    item.setText("" if value is None else str(value))
+                table.setItem(row, col, item)
+        table.resizeColumnsToContents()
+        self.port_group.setVisible(True)
+        self._syncPortTableEnabled()
+
+    def _portTableApplies(self):
+        """The table edits the object's current type; it doesn't apply once another type is picked."""
+        obj = self._portObject()
+        return (
+            obj is not None
+            and bool(self._port_columns)
+            and self.library_combo.currentData() == getattr(obj, "LibraryId", "")
+            and self.type_combo.currentData() == getattr(obj, "TypeId", "")
+        )
+
+    def _syncPortTableEnabled(self, *_args):
+        if not self._port_columns:
+            return
+        applies = self._portTableApplies()
+        self.port_table.setEnabled(applies)
+        self.port_note.setText(
+            translate("HVAC_EditType", "One value per connected duct.")
+            if applies
+            else translate("HVAC_EditType", "These values belong to the current type; they are not applied when the type changes.")
+        )
+
+    def _applyPortTable(self):
+        """Write the table back; False (with a message) when a cell does not parse."""
+        from ..core import _port_properties
+
+        edits = {}
+        for row, port_row in enumerate(self._port_rows):
+            for col, column in enumerate(self._port_columns):
+                item = self.port_table.item(row, col)
+                if item is None:
+                    continue
+                if column["prop_type"] == "App::PropertyBool":
+                    raw = item.checkState() == QtCore.Qt.Checked
+                else:
+                    raw = item.text()
+                try:
+                    value = _port_properties.parse_port_value(column["prop_type"], raw)
+                except ValueError as e:
+                    QtWidgets.QMessageBox.warning(
+                        self.form,
+                        translate("HVAC_EditType", "Per-port values"),
+                        "{} / {}: {}".format(port_row["label"], column["name"], e),
+                    )
+                    return False
+                edits.setdefault(port_row["edge_key"], {})[column["name"]] = value
+        obj = self._portObject()
+        doc = obj.Document
+        doc.openTransaction("Edit per-port values")
+        try:
+            changed = _port_properties.apply_port_table(obj, self._port_type_def, edits)
+        finally:
+            doc.commitTransaction()
+        if changed:
+            obj.touch()
+            doc.recompute()
+        return True
+
     def accept(self):
         library_id = self.library_combo.currentData()
         type_id = self.type_combo.currentData()
+
+        if self._portTableApplies() and not self._applyPortTable():
+            return False
 
         if self.apply_callback:
             QtCore.QTimer.singleShot(
