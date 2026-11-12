@@ -94,6 +94,7 @@ def _terminal_layout(context, kind):
     profile, params = _section(api, port)
     layout = {"port": port, "neck": _neck_length(props), "body": 0.0, "lip": 0.0, "face": None, "curved": False}
     layout["cap"] = None
+    layout["wall_flange"] = None
 
     if kind == "generic":
         # A plain length of the duct's own section, BodyLength long (plus the neck).
@@ -102,6 +103,10 @@ def _terminal_layout(context, kind):
     elif kind == "plain":
         # Nothing but a neck, so it must have some length.
         layout["neck"] = _neck_length(props, 0.25 * size)
+        # Optional mounting flange: a ring plate flush with the opening, for a duct ending in a wall.
+        width = _number(props, "WallFlangeWidth")
+        if width > _EPS:
+            layout["wall_flange"] = {"width": width, "thickness": max(_number(props, "WallFlangeThickness"), 0.5)}
 
     elif kind == "bellmouth":
         radius = _number(props, "LipRadius")
@@ -258,6 +263,19 @@ def _build_terminal(context, kind):
     result = _finish(context, envelope, lengths)
 
     # Step 3: a weather hood's plate, standing clear of the opening on the far side of the node.
+    wall_flange = layout["wall_flange"]
+    if wall_flange:
+        # The ring reaches from the outside of the duct wall to WallFlangeWidth beyond it.
+        wall = sum(
+            float(_props(context).get(getattr(ld, "thickness_property", None) or "", 0.0) or 0.0)
+            for ld in context.get("construction_layers") or []
+        )
+        outer = api.extrude(
+            api.profile_from_port(port, wall + wall_flange["width"]), axis * wall_flange["thickness"], solid=True
+        )
+        inner = api.extrude(api.profile_from_port(port, wall), axis * wall_flange["thickness"], solid=True)
+        _fuse_into_structure(context, result, api.refine(outer.cut(inner)))
+
     cap = layout["cap"]
     if cap:
         # A conical (round) or pyramidal (rectangular, oval) roof of sheet

@@ -75,6 +75,26 @@
         "minimum": 0.0,
         "maximum": 1.0
       }
+    },
+    {
+      "name": "WallFlangeWidth",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Width of a mounting flange around the opening, flush with it, beyond the duct wall. 0 means no flange",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "WallFlangeThickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Thickness of the mounting flange",
+      "default": 3.0,
+      "validation": {
+        "minimum": 0.0
+      }
     }
   ],
   "generator": {
