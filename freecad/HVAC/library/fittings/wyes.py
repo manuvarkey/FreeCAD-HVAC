@@ -176,6 +176,13 @@ def _wye_common_index(api, ports):
         raise ValueError("Wye requires exactly three ports")
     directions = [api.unit(api.port_direction(port)) for port in ports]
     pairs = ((0, 1), (0, 2), (1, 2))
+    # A tee-shaped node used as a wye (a bullhead tee: the flow divides into
+    # both run legs) has two legs in a straight line. Those are the two
+    # branches; the leg square to them is the common one.
+    in_line = [pair for pair in pairs if directions[pair[0]].dot(directions[pair[1]]) < -0.99]
+    if len(in_line) == 1:
+        branch_pair = in_line[0]
+        return next(index for index in range(3) if index not in branch_pair)
     branch_pair = max(pairs, key=lambda pair: directions[pair[0]].dot(directions[pair[1]]))
     return next(index for index in range(3) if index not in branch_pair)
 
@@ -441,18 +448,22 @@ def build_wye_radius(context):
                 )
             )
 
-        # OCC booleans are order-sensitive when several swept solids share seams.
-        # Keep the first sequence that produces exactly one valid solid.
-        shape = None
+        # OCC booleans are order-sensitive when several swept solids share
+        # seams. Some orders give one valid solid that has silently dropped a
+        # leg, so every order is tried and the largest valid single solid is
+        # kept (a union can only lose volume by losing material).
+        shape, best_volume = None, -1.0
         for fuse_order in fuse_orders:
             try:
                 candidate = api.fuse(*fuse_order)
             except Exception:
                 continue
             validation = api.validate(candidate, require_solid=True)
-            if validation["valid"] and validation["solid_count"] == 1:
-                shape = candidate
-                break
+            if not (validation["valid"] and validation["solid_count"] == 1):
+                continue
+            volume = float(candidate.Volume)
+            if volume > best_volume:
+                shape, best_volume = candidate, volume
         if shape is None:
             requested_radius = float(_props(context).get("BranchRadius") or 0.0)
             effective_radii = ", ".join("{:.3f}".format(route["radius"]) for _, _, _, route in routes)

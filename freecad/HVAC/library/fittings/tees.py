@@ -604,3 +604,99 @@ def build_lateral_tee(context):
 
     lengths = api.build_trim_rec_from_port_lengths([(run_a, trim_a), (run_b, trim_b), (branch, trim_branch)])
     return _finish(context, envelope, lengths)
+
+
+# ----------------------------------------------------------------------
+# Lateral tees with a bend: the run stays full and straight, and the
+# branch joins it through a smooth-radius or mitered bend -- the same bend
+# a double wye's branches use (crosses._double_wye_bend).
+# ----------------------------------------------------------------------
+
+
+def _lateral_bend_layout(context, mitered):
+    """Ports, branch bend and trims of a lateral tee whose branch joins through a bend."""
+    from .crosses import _double_wye_bend
+
+    api = context["hvac_api"]
+    p = _props(context)
+    run_a, run_b, branch = api.run_branch_ports(context)
+    ports = [run_a, run_b, branch]
+    center = api.center_from_context(context)
+    cuts = max(int(p.get("NumberOfCuts", 2) or 2), 1)
+
+    # The branch turns away from the run leg it makes the wider angle with,
+    # so air coming along the run takes the gentle turn into the branch.
+    branch_dir = api.unit(api.port_direction(branch))
+    from_leg = min((run_a, run_b), key=lambda leg: branch_dir.dot(api.unit(api.port_direction(leg))))
+    size = _size(api, branch)
+    radius = max(_positive(p.get("BranchRadius"), size), 0.5 * size)
+    trunk_axis_port = api.copy_port(
+        branch, position=_port_axis_point(api, branch, center), direction=api.port_direction(from_leg)
+    )
+    bend_shape, branch_trim = _double_wye_bend(api, branch, trunk_axis_port, radius, cuts, mitered)
+
+    # Each port's body has to contain the other sections and the bend itself.
+    minimums = _junction_minimums(api, center, ports)
+    minimums = _junction_shape_minimums(api, center, ports, bend_shape, minimums)
+    minimums[2] = max(minimums[2], branch_trim)
+    trims = _junction_trims(api, p, ports, ("TrimRunA", "TrimRunB", "TrimBranch"), (0.4, 0.4, 0.6), minimums)
+    return {
+        "ports": ports,
+        "center": center,
+        "cuts": cuts,
+        "radius": radius,
+        "trunk_axis_port": trunk_axis_port,
+        "bend_shape": bend_shape,
+        "branch_trim": branch_trim,
+        "trims": trims,
+    }
+
+
+def _measure_lateral_bend(context, mitered):
+    api = context["hvac_api"]
+    layout = _lateral_bend_layout(context, mitered)
+    return api.build_trim_rec_from_port_lengths(list(zip(layout["ports"], layout["trims"])))
+
+
+def _build_lateral_bend(context, mitered):
+    from .crosses import _double_wye_bend
+
+    api = context["hvac_api"]
+    layout = _lateral_bend_layout(context, mitered)
+    run_a, run_b, branch = layout["ports"]
+    center, trims = layout["center"], layout["trims"]
+
+    def envelope(offset):
+        trunk = _loft(api, [_trimmed(api, run_a, trims[0]), _trimmed(api, run_b, trims[1])], offset)
+        # The layout already built the air-space bend to measure it; only a
+        # wall envelope (offset > 0) needs it built again, larger.
+        if offset > 0.0:
+            bend, _trim = _double_wye_bend(
+                api, branch, layout["trunk_axis_port"], layout["radius"], layout["cuts"], mitered, offset
+            )
+        else:
+            bend = layout["bend_shape"]
+        bend = _extend_leg(api, bend, branch, layout["branch_trim"], trims[2], offset)
+        return _clip_junction_to_body(api, api.fuse(trunk, bend), center, layout["ports"], trims)
+
+    lengths = api.build_trim_rec_from_port_lengths(list(zip(layout["ports"], trims)))
+    roles = {run_a.get("edge_key"): "RunA", run_b.get("edge_key"): "RunB", branch.get("edge_key"): "Branch"}
+    return _finish(context, envelope, lengths, roles)
+
+
+def measure_lateral_tee_radius(context):
+    return _measure_lateral_bend(context, mitered=False)
+
+
+def build_lateral_tee_radius(context):
+    """Lateral tee: full straight run, the branch joining it through a smooth-radius bend."""
+    return _build_lateral_bend(context, mitered=False)
+
+
+def measure_lateral_tee_mitered(context):
+    return _measure_lateral_bend(context, mitered=True)
+
+
+def build_lateral_tee_mitered(context):
+    """Lateral tee: full straight run, the branch joining it through a mitered bend."""
+    return _build_lateral_bend(context, mitered=True)

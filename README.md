@@ -72,7 +72,9 @@ sweep or boolean operations. The generator may increase an undersized radius
 or move the main split plane to keep the layout geometrically feasible. When a
 build fails, the generated component retains the previous geometry and reports
 the current failure in its read-only `GeometryError` property and the FreeCAD
-Report view.
+Report view. With a wall thickness (the hollow build) it currently fails on
+round and rectangular ducts, so automatic selection uses `branch_wye_mitered`
+for a wye and the radius wye is a manual choice.
 
 ## For developers
 

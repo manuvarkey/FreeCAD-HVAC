@@ -231,7 +231,12 @@ def _build_terminal(context, kind):
             # The outer lip runs on by the wall offset, so the step down to the duct gets a wall too.
             pieces.append(api.extrude(face_at(0.0, offset), axis * (lip + offset), solid=True))
         if body > _EPS and layout["curved"]:
-            pieces.append(api.loft(bellmouth_sections(offset), solid=True, ruled=False))
+            # A smooth loft through rectangular sections gives curved corner
+            # surfaces that OCC cannot cut one from another reliably (the
+            # wall comes out solid); a ruled loft through the same sections
+            # gives flat facets that it can. Round sections stay smooth.
+            ruled = api.port_profile(port) != "Circular"
+            pieces.append(api.loft(bellmouth_sections(offset), solid=True, ruled=ruled))
         elif body > _EPS:
             pieces.append(api.loft([face_at(lip, offset, True), throat_for_loft(offset)], solid=True, ruled=True))
         if neck > _EPS:

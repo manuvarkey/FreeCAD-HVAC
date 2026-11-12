@@ -965,13 +965,12 @@ def test_bundled_builtin_basic_branch_tee_prefers_specific_tee_model():
 
 
 def test_bundled_builtin_basic_branch_wye_prefers_specific_wye_model():
-    # branch_wye_radius (priority 50) is now a dedicated wye model, so a
-    # genuine wye node no longer needs to fall back to the broad
+    # A genuine wye node gets a dedicated wye model, not the broad
     # branch_generic catch-all (priority 10).
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.wye", "Circular", _ports(3, "Circular"))
     selection = reg.select_type("builtin_basic", request, strict=True)
-    assert selection.type_def.id == "branch_wye_radius"
+    assert selection.type_def.id in ("branch_wye_mitered", "branch_wye_radius")
 
 
 def test_bundled_smacna_branch_tee_prefers_specific_tee_model():
@@ -1477,3 +1476,52 @@ def test_end_types_are_listed_grouped_by_kind():
     runs = [name for index, name in enumerate(groups) if index == 0 or groups[index - 1] != name]
     assert len(runs) == len(set(runs)), groups
     assert runs[0] == "diffuser" and runs[-1] == "duct"
+
+
+# ----------------------------------------------------------------------
+# Lateral tees with a bend, and wyes offered on a bullhead tee
+# (roadmap decisions 10 to 13)
+# ----------------------------------------------------------------------
+
+
+def test_bundled_builtin_basic_lateral_tee_defaults_to_the_radius_one():
+    reg = _load_bundled_registry()
+    request = _junction_request("branch", "branch.lateral_tee", "Circular", _ports(3, "Circular"))
+    selection = reg.select_type("builtin_basic", request, strict=True)
+    assert selection.status == "exact"
+    assert selection.type_def.id == "branch_lateral_tee_radius"
+
+
+def test_bundled_builtin_basic_lateral_tee_list_offers_all_three_kinds_in_order():
+    lib = _load_bundled_registry().get_library("builtin_basic")
+    found = lib.list_types(category="junction", family="branch.lateral_tee", connected_ports=_ports(3, "Circular"))
+    ids = [t.id for t in found]
+    laterals = [i for i in ids if i.startswith("branch_lateral_tee_")]
+    assert laterals == ["branch_lateral_tee_radius", "branch_lateral_tee_mitered", "branch_lateral_tee_generic"]
+
+
+def test_bundled_builtin_basic_wye_types_are_offered_on_a_bullhead_tee_only():
+    bullhead = {"flow_class": "diverging", "qualifiers": {"common_leg": "branch"}}
+    ordinary = {"flow_class": "diverging", "qualifiers": {"common_leg": "run"}}
+    on_bullhead = _listed("branch", "branch.tee", _ports(3, "Circular"), bullhead)
+    on_ordinary = _listed("branch", "branch.tee", _ports(3, "Circular"), ordinary)
+    assert {"branch_wye_radius", "branch_wye_mitered"} <= on_bullhead
+    assert not {"branch_wye_radius", "branch_wye_mitered"} & on_ordinary
+    on_lateral = _listed("branch", "branch.lateral_tee", _ports(3, "Circular"), bullhead)
+    assert not {"branch_wye_radius", "branch_wye_mitered"} & on_lateral
+
+
+def test_bundled_builtin_basic_wye_types_are_never_chosen_automatically_for_a_tee():
+    reg = _load_bundled_registry()
+    request = _junction_request_ctx(
+        "branch", "branch.tee", "Circular", _ports(3, "Circular"), qualifiers={"common_leg": "branch"}
+    )
+    selection = reg.select_type("builtin_basic", request, strict=True)
+    assert not selection.type_def.id.startswith("branch_wye_")
+
+
+def test_bundled_builtin_basic_wye_defaults_to_the_mitered_wye():
+    reg = _load_bundled_registry()
+    request = _junction_request("branch", "branch.wye", "Circular", _ports(3, "Circular"))
+    # The radius wye fails to build hollow on round and rectangular ducts (see README), so it is manual only.
+    assert reg.select_type("builtin_basic", request, strict=True).type_def.id == "branch_wye_mitered"
