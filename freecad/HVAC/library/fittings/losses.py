@@ -118,8 +118,39 @@ def loss_multiport_generic(context):
     return api.uniform_fallback_loss(context, 1.0)
 
 
+def _with_properties(context, **overrides):
+    """A copy of the context with some properties replaced (the original is left alone)."""
+    properties = dict(context.get("properties") or {})
+    properties.update(overrides)
+    return dict(context, properties=properties)
+
+
+def _fixed_pressure_drop(context):
+    """True when the type's LossMode asks for a pressure drop instead of a coefficient."""
+    mode = str((context.get("properties") or {}).get("LossMode", "") or "").strip().lower()
+    return mode.replace("_", " ") == "fixed pressure drop"
+
+
 def loss_diffuser_generic(context):
+    # LossMode "Fixed pressure drop" uses the PressureDrop given; anything
+    # else (or a type with no LossMode) uses K at the neck.
+    if _fixed_pressure_drop(context):
+        return context["loss_api"].fixed_pressure_drop_loss(context)
     return context["loss_api"].terminal_component_loss(context)
+
+
+def loss_register_generic(context):
+    # A register is a grille with a damper behind it: the two coefficients add up.
+    if _fixed_pressure_drop(context):
+        return context["loss_api"].fixed_pressure_drop_loss(context)
+    properties = context.get("properties") or {}
+    grille = float(properties.get("LossCoefficient", 0.0) or 0.0)
+    damper = float(properties.get("DamperLossCoefficient", 0.0) or 0.0)
+    return context["loss_api"].terminal_component_loss(_with_properties(context, LossCoefficient=grille + damper))
+
+
+def loss_plenum(context):
+    return context["loss_api"].plenum_loss(context)
 
 
 def loss_damper_generic(context):
@@ -134,6 +165,8 @@ def loss_damper_generic(context):
 
 
 def loss_vav_generic(context):
+    if _fixed_pressure_drop(context):
+        return context["loss_api"].fixed_pressure_drop_loss(context)
     return context["loss_api"].inline_device_loss(context)
 
 
@@ -162,3 +195,46 @@ def loss_damper(context):
 
 def loss_obstruction(context):
     return context["loss_api"].obstruction_loss(context)
+
+
+# One function per terminal type whose shape is fixed by the type itself, so
+# the type-def need not carry an EntryType/ExitType property of its own.
+
+
+def loss_entry_plain(context):
+    return context["loss_api"].entry_loss(_with_properties(context, EntryType="duct_in_wall"))
+
+
+def loss_entry_bellmouth(context):
+    return context["loss_api"].entry_loss(_with_properties(context, EntryType="bellmouth"))
+
+
+def loss_entry_conical(context):
+    return context["loss_api"].entry_loss(_with_properties(context, EntryType="conical"))
+
+
+def loss_hood_intake(context):
+    return context["loss_api"].entry_loss(_with_properties(context, EntryType="intake_hood"))
+
+
+def loss_hood_tapered(context):
+    return context["loss_api"].entry_loss(_with_properties(context, EntryType="tapered_hood"))
+
+
+def loss_exit_plain(context):
+    return context["loss_api"].exit_loss(_with_properties(context, ExitType="abrupt"))
+
+
+def loss_exit_conical(context):
+    return context["loss_api"].exit_loss(_with_properties(context, ExitType="conical"))
+
+
+def loss_exit_pyramidal(context):
+    # DiffuserType "Plane" widens one pair of sides only; anything else widens all four.
+    kind = str((context.get("properties") or {}).get("DiffuserType", "") or "").strip().lower()
+    exit_type = "plane_diffuser" if kind == "plane" else "pyramidal_diffuser"
+    return context["loss_api"].exit_loss(_with_properties(context, ExitType=exit_type))
+
+
+def loss_hood_exhaust(context):
+    return context["loss_api"].exit_loss(_with_properties(context, ExitType="exhaust_hood"))

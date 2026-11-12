@@ -906,6 +906,88 @@ class HVACLossAPI:
         except Exception as exc:
             return HVACLossAPI._unsupported("unexpected error computing inline device loss: {}".format(exc))
 
+    @staticmethod
+    def fixed_pressure_drop_loss(context):
+        """
+        A device rated by a pressure drop instead of a coefficient (an air
+        terminal or a VAV box from a manufacturer's data sheet):
+        properties["PressureDrop"] in Pa, taken as given at the current flow.
+
+        The solver only works in coefficients, so the drop is turned into
+        the K that gives exactly that many Pa at the device's present
+        velocity: K = PressureDrop / (rho * V^2 / 2). Works for a 1-port
+        terminal and for a 2-port inline device (referenced to its outlet).
+        UNSUPPORTED when PressureDrop is not set.
+        """
+        try:
+            ports = HVACLibraryAPI.connected_ports(context)
+            if len(ports) == 1:
+                port, other_edge_key = ports[0], None
+            elif len(ports) == 2:
+                pair, problem = HVACLossAPI._inline_ports(context)
+                if pair is None:
+                    return HVACLossAPI._unsupported(problem)
+                port, other_edge_key = pair[1], pair[0]["edge_key"]
+            else:
+                return HVACLossAPI._unsupported("expected 1 or 2 connected ports, found {}".format(len(ports)))
+
+            properties = context.get("properties") or {}
+            pressure_drop_pa = float(properties.get("PressureDrop", 0.0) or 0.0)
+            if pressure_drop_pa <= 0.0:
+                return HVACLossAPI._unsupported("PressureDrop not set")
+
+            source = "fixed_pressure_drop"
+            velocity = float(port.get("velocity_ms", 0.0) or 0.0)
+            density = float(context.get("air_density", 0.0) or 0.0)
+            if velocity <= 1e-9:
+                # No flow, no loss: there is no velocity to refer a coefficient to.
+                return HVACLossAPI._exact([HVACLossAPI._leg_path(port, other_edge_key, 0.0, source=source)])
+            if density <= 0.0:
+                return HVACLossAPI._unsupported("air density is not known")
+            k = pressure_drop_pa / airflow.velocity_pressure(density, velocity)
+            return HVACLossAPI._exact([HVACLossAPI._leg_path(port, other_edge_key, k, source=source)])
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing fixed pressure drop: {}".format(exc))
+
+    @staticmethod
+    def plenum_loss(context):
+        """
+        Loss of a plenum box, for any number of inlets and outlets.
+
+        The box is large enough for the air to come to rest in it, so each
+        inlet is an abrupt exit into the box (SMACNA Table 14-16, C = 1 on
+        the inlet velocity) and each outlet is a flush entry from it (Table
+        14-15 A, C = 0.5 on the outlet velocity). One LossPath per
+        inlet/outlet pair, referenced to the outlet:
+
+            K = C_entry + C_exit * (V_inlet / V_outlet)^2
+
+        Always APPROXIMATION: the tables are for an opening in a large
+        space, which a real plenum only approaches.
+        """
+        try:
+            ports = HVACLibraryAPI.connected_ports(context)
+            inlets = [p for p in ports if p.get("flow_into_junction") is True]
+            outlets = [p for p in ports if p.get("flow_into_junction") is False]
+            if not inlets or not outlets:
+                return HVACLossAPI._unsupported("a plenum needs at least one inlet and one outlet with known flow")
+
+            c_exit = entry_exit_tables.EXIT_ABRUPT_C
+            c_entry = entry_exit_tables.entry_duct_in_wall(0.0, 0.0).value
+            paths = []
+            for outlet in outlets:
+                v_out = float(outlet.get("velocity_ms", 0.0) or 0.0)
+                for inlet in inlets:
+                    v_in = float(inlet.get("velocity_ms", 0.0) or 0.0)
+                    k = 0.0 if v_out <= 1e-9 else c_entry + c_exit * (v_in / v_out) ** 2
+                    paths.append(
+                        LossPath(inlet["edge_key"], outlet["edge_key"], outlet["edge_key"], k, source="plenum")
+                    )
+            warning = "plenum: each inlet taken as an abrupt exit, each outlet as a flush entry"
+            return HVACLossAPI._approximation(paths, warning)
+        except Exception as exc:
+            return HVACLossAPI._unsupported("unexpected error computing plenum loss: {}".format(exc))
+
     # ------------------------------------------------------------------
     # Table-driven entries, exits, screens, dampers and obstructions
     # (SMACNA Tables 14-15 to 14-18, see library/loss_tables/).

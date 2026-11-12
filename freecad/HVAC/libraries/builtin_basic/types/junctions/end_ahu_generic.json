@@ -1,0 +1,142 @@
+{
+  "id": "end_ahu_generic",
+  "label": "AHU - Generic",
+  "category": "junction",
+  "topology": "end",
+  "family": [
+    "end.terminal.ahu"
+  ],
+  "profiles": [
+    "Circular",
+    "Rectangular",
+    "Oval"
+  ],
+  "selection": {
+    "kind": "model",
+    "priority": 45
+  },
+  "constraints": {
+    "degree": 1
+  },
+  "properties": [
+    {
+      "name": "Thickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Wall thickness. 0 builds the air space as a solid body instead of a hollow shell",
+      "default": 1.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "TrimNeck",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Length of the straight collar between the fitting and the duct. 0 uses a quarter of the duct size",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "BoxLength",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Casing length. 0 uses three times the largest duct size",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "BoxWidth",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Casing width. 0 uses twice the largest duct size",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "BoxHeight",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Casing height. 0 uses twice the largest duct size",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "ConnectionOffsetY",
+      "prop_type": "App::PropertyDistance",
+      "group": "Dimensions",
+      "description": "Moves the connection sideways from the middle of the casing face",
+      "default": 0.0
+    },
+    {
+      "name": "ConnectionOffsetZ",
+      "prop_type": "App::PropertyDistance",
+      "group": "Dimensions",
+      "description": "Moves the connection up or down from the middle of the casing face",
+      "default": 0.0
+    },
+    {
+      "name": "LossMode",
+      "prop_type": "App::PropertyEnumeration",
+      "group": "Parameters",
+      "description": "How the loss is given: a coefficient K, or a fixed pressure drop from the maker's data",
+      "default": "Coefficient",
+      "validation": {
+        "enum": [
+          "Coefficient",
+          "Fixed pressure drop"
+        ]
+      }
+    },
+    {
+      "name": "LossCoefficient",
+      "prop_type": "App::PropertyFloat",
+      "group": "Parameters",
+      "description": "Pressure-loss coefficient K, referenced to velocity at the neck (0 = no loss at this connection; the fan's duty is read from the critical path)",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "NeckSize",
+      "prop_type": "App::PropertyLength",
+      "group": "Parameters",
+      "description": "Equivalent neck diameter the loss coefficient refers to. Used for the loss only, not for the shape",
+      "default": 200.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "PressureDrop",
+      "prop_type": "App::PropertyFloat",
+      "group": "Parameters",
+      "description": "Pressure drop in Pa at the design flow, used when LossMode is Fixed pressure drop",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    }
+  ],
+  "generator": {
+    "module": "shared:boxes",
+    "function": "build_ahu"
+  },
+  "connection_lengths": {
+    "module": "shared:boxes",
+    "function": "measure_ahu"
+  },
+  "loss": {
+    "module": "shared:losses",
+    "function": "loss_diffuser_generic"
+  }
+}

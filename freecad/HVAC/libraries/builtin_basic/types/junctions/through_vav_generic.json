@@ -70,11 +70,34 @@
       }
     },
     {
+      "name": "LossMode",
+      "prop_type": "App::PropertyEnumeration",
+      "group": "Parameters",
+      "description": "How the loss is given: a coefficient K, or a fixed pressure drop from the maker's data",
+      "default": "Coefficient",
+      "validation": {
+        "enum": [
+          "Coefficient",
+          "Fixed pressure drop"
+        ]
+      }
+    },
+    {
       "name": "LossCoefficient",
       "prop_type": "App::PropertyFloat",
       "group": "Parameters",
       "description": "Pressure-loss coefficient K, referenced to the connecting duct's own velocity (nominal value; box modulation/controls are not modeled)",
       "default": 1.5
+    },
+    {
+      "name": "PressureDrop",
+      "prop_type": "App::PropertyFloat",
+      "group": "Parameters",
+      "description": "Pressure drop in Pa at the design flow, used when LossMode is Fixed pressure drop",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
     }
   ],
   "generator": {

@@ -43,6 +43,14 @@
       "default": 2.0
     },
     {
+      "name": "TrimNeck",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Length of the straight collar between the body and the duct",
+      "default": 0.0,
+      "validation": {"minimum": 0.0}
+    },
+    {
       "name": "BodyLength",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",

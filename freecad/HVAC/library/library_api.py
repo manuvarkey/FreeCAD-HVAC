@@ -683,6 +683,36 @@ class HVACLibraryAPI:
         return Part.Wire([Part.Edge(circle)])
 
     @staticmethod
+    def make_split_circular_wire(center, x_axis, y_axis, diameter, width, height):
+        """
+        A circle drawn as four arcs, split where the lines from its centre to
+        the corners of a width x height rectangle (on the same axes) cross it.
+
+        A plain circle is one edge with its seam wherever OCC puts it, so a
+        loft from it to a rectangle twists. This one has a corner for each
+        corner of the rectangle, in the same order as make_rectangular_wire,
+        so the two loft edge for edge.
+        """
+        c = HVACLibraryAPI.vec(center)
+        x = HVACLibraryAPI.unit(x_axis)
+        y = HVACLibraryAPI.unit(y_axis)
+        r = float(diameter) * 0.5
+        diagonal = math.hypot(float(width), float(height))
+        if r <= 0.0 or diagonal <= 0.0:
+            raise ValueError("Split circle needs a positive diameter and rectangle")
+        ux, uy = float(width) / diagonal, float(height) / diagonal
+
+        def point(a, b):
+            return c + x * (a * r) + y * (b * r)
+
+        corners = [(-ux, -uy), (ux, -uy), (ux, uy), (-ux, uy)]
+        middles = [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)]
+        edges = [
+            Part.Arc(point(*corners[i]), point(*middles[i]), point(*corners[(i + 1) % 4])).toShape() for i in range(4)
+        ]
+        return Part.Wire(edges)
+
+    @staticmethod
     def make_oval_wire(center, x_axis, y_axis, width, height):
         """
         Flat-oval / obround section.
@@ -1993,6 +2023,17 @@ class HVACLibraryAPI:
         "star_multiport": ("stars", "build_manifold", "measure_manifold"),
         "terminal_body": ("terminals", "build_terminal_body_generic", "measure_terminal_body_generic"),
         "duct_closure": ("terminals", "build_duct_closure_generic", "measure_duct_closure_generic"),
+        "terminal_plain": ("terminals", "build_terminal_plain", "measure_terminal_plain"),
+        "terminal_bellmouth": ("terminals", "build_terminal_bellmouth", "measure_terminal_bellmouth"),
+        "terminal_cone": ("terminals", "build_terminal_cone", "measure_terminal_cone"),
+        "terminal_diffusing": ("terminals", "build_terminal_diffusing", "measure_terminal_diffusing"),
+        "terminal_hood": ("terminals", "build_terminal_hood", "measure_terminal_hood"),
+        "terminal_square": ("terminals", "build_terminal_square", "measure_terminal_square"),
+        "terminal_round": ("terminals", "build_terminal_round", "measure_terminal_round"),
+        "terminal_slot": ("terminals", "build_terminal_slot", "measure_terminal_slot"),
+        "terminal_frame": ("terminals", "build_terminal_frame", "measure_terminal_frame"),
+        "plenum": ("boxes", "build_plenum", "measure_plenum"),
+        "ahu": ("boxes", "build_ahu", "measure_ahu"),
         "inline_damper": ("inline", "build_damper_generic", "measure_damper_generic"),
         "inline_vav": ("inline", "build_vav_box", "measure_vav_box"),
         "inline_obstruction": ("inline", "build_obstruction_generic", "measure_obstruction_generic"),
