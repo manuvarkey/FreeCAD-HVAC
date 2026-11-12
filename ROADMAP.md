@@ -1044,8 +1044,107 @@ software is alpha. That settles (b) and (c) and simplifies the design:
   next sync of a document, and old stored per-port lists may be reset.
 - (3) No warning aliases: private methods are renamed outright.
 
-**Still open:**
-- (a) Stable identity: A (persisted ids, recommended) or B (derived keys
-  plus remap)?
-- (d) The "before the freeze" gaps: design terminal function and
-  multi-node equipment first, or freeze without them?
+**(a) checked across save and reload (13 November 2026, FreeCAD 1.1.4).**
+The owner asked to check the current scheme, which exists to keep keys
+stable. Findings:
+- A sketch geometry `Tag` survives in-session edits (deleting a line
+  shifts the others' indices, their tags stay), but every tag is
+  regenerated on reload. That is why the network re-matches segments by
+  their persisted (`SourceObjectName`, `SourceIndex`) on the first sync
+  after a reload and remaps every stored key (`_edge_key_remap`,
+  `_custom_loss.remap_persisted_edge_keys`,
+  `_port_properties.remap_port_property_keys`). It works, but each new
+  stored list needs its own remap call (the custom-fitting
+  `CustomPortEdgeKeys` of 6.3 has none yet).
+- A Draft wire has no per-edge tag: its key is name plus index, stable
+  across reload, shifting only if a point is inserted.
+- **The sketch's own geometry id (`SketchObject.getGeometryId(i)`)
+  persists across save and reload and survives index shifts; new
+  geometry gets a new id.**
+
+**Revised recommendation, option C: stable derived keys.** A sketch edge's
+key becomes `<sketch Name>:g<geometry id>`, any other base edge's
+`<object Name>:e<index>`. Both are the same before and after a reload, so
+the reload re-match and all three remap helpers are deleted, and every
+stored list (per-port values, custom loss K, custom port overrides) is
+simply keyed by edge key. Identity changes only when the geometry is
+really replaced (deleted and redrawn, or a wire point inserted), which is
+the honest answer. Node keys are built from edge keys and become stable
+with them. Cheaper than A (no id store) and sturdier than B.
+
+### 6.5 Terminal function and multi-node equipment (Stage 11, before the freeze)
+
+Written 13 November 2026 at the owner's request ((d) of 6.4: design both
+before the freeze). **For review; nothing implemented.**
+
+**Today.** A network is one tree of ducts. Its terminals each have a
+`FlowBoundary`: one `Auto` terminal balances the rest (in practice the
+fan or AHU connection), the others are `Fixed` (a design flow) or
+`Closed`. Air direction comes from the base geometry's drawing direction.
+Whether a terminal is a supply outlet or a return inlet is only implied
+by that direction (`flow_class` `entry` / `exit` on end nodes). An AHU is
+`end_ahu_generic`: one end node with one collar, so its supply and return
+sides cannot both be modelled.
+
+**Terminal function.**
+1. `DuctNetwork.SystemType`: `Supply`, `Return`, `Exhaust`,
+   `OutdoorAir`. One system per network (a supply tree and its return
+   tree are two networks).
+2. End junctions get `TerminalFunction`: `Auto` (from the system and the
+   node's role), `Supply`, `Return`, `Exhaust`, `OutdoorAir`, `Source`
+   (where the system meets its equipment). `Auto` resolves to `Source`
+   for the balancing (`Auto` flow) terminal and to the system's own
+   function for the others.
+3. The classifier adds a qualifier `terminal_function` on end nodes
+   (added to `KNOWN_QUALIFIER_KEYS`), so type constraints and loss
+   variants can use it: diffusers only on `Supply`, grilles and
+   registers on `Return` / `Exhaust`, intake hoods on `OutdoorAir`,
+   exhaust hoods on `Exhaust`; an entry loss where air comes in, an exit
+   loss where it leaves.
+4. The flow solver checks direction against function: in a supply
+   system air must leave at every `Supply` terminal. A terminal drawn the
+   wrong way becomes a warning that names it ("drawn as an inlet in a
+   supply system"); "Edit Duct Directions" stays the fix.
+5. Results and display: per-system colours for the airflow overlay, and
+   totals per system (supply total, return total) in the results panel.
+
+**Multi-node equipment.**
+1. A new document object, `HVACEquipment` (outside any network), with a
+   list of ports. Each port: a name, a function (`SupplyOutlet`,
+   `ReturnInlet`, `OutdoorAirInlet`, `ExhaustOutlet`), a frame and a
+   section (the same `Part::LocalCoordinateSystem` markers with
+   `PortProfile` / size as custom fittings, 6.3), and the network and
+   terminal node it is connected to (network object plus stable node key,
+   6.4 a).
+2. Geometry: a library type of a new category `equipment` (several
+   ports, built like any shared fitting: casing, collars, flanges as
+   features), or a user model with port markers (6.3). `end_ahu_generic`
+   is retired; its fan-connection loss (14-11 F to J, 14-16 I) moves to
+   the equipment port.
+3. Connecting: "Connect to Equipment" takes a network end node and an
+   equipment port. The node's `TerminalFunction` becomes `Source` (supply
+   outlet, exhaust outlet) or the matching sink (return inlet, outdoor
+   air inlet). Its Primary component becomes an equipment connection: a
+   collar only, the casing belongs to the equipment. The base geometry's
+   end point must sit on the port; the command says by how much it is off
+   rather than moving the user's sketch.
+4. Analysis: each network is still solved on its own (no loops, no
+   coupling of pressures in this stage). The equipment then reports
+   across its networks: airflow per port, outdoor air as supply minus
+   return when it has both, and the external static pressure each fan
+   needs: the worst path of each connected network plus the equipment's
+   own internal pressure drop (a property; coils and filters as a list
+   later).
+5. Data model: `NodeModel.equipment_port` (equipment name, port name);
+   results gain an `EquipmentResult` per equipment.
+
+**Owner input needed:**
+- (e) One system per network (supply and return as separate networks
+  joined by equipment), or one network spanning both through the AHU?
+  Recommended: separate networks. One network through the AHU would
+  carry flow both ways and need the solver to handle loops.
+- (f) Terminal function: keep `Auto` resolving from the system (so most
+  terminals need no setting), or require it on every terminal?
+- (g) Equipment geometry first as library types (an AHU with supply and
+  return collars on chosen faces), or only user models with port
+  markers to start with?
