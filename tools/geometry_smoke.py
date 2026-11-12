@@ -9,9 +9,15 @@ This is not a unit test (shape construction is out of scope for those, see
 AGENTS.md). It is a quick way to see, in a real FreeCAD, whether a change to
 the fitting generators broke any type, profile or node layout:
 
-    freecadcmd tools/geometry_smoke.py                 # list problems + a summary
-    freecadcmd tools/geometry_smoke.py --all           # list every build
-    freecadcmd tools/geometry_smoke.py out.json        # also save the full report as JSON
+    python tools/geometry_smoke.py                 # list problems + a summary
+    python tools/geometry_smoke.py --all           # list every build
+    python tools/geometry_smoke.py out.json        # also save the full report as JSON
+
+`python` here is the Python that ships with FreeCAD (on Windows,
+`bin/python.exe` in the FreeCAD folder). With any other Python of the same
+version, set FREECAD_BIN to FreeCAD's `bin` folder first. The script always
+builds with the code of the checkout it lives in, even when another copy of
+the addon is installed in FreeCAD's Mod folder.
 
 Compare two saved reports (before/after a change) to see what moved. For
 each build the report holds: valid/invalid, total volume, per-layer volume,
@@ -27,6 +33,31 @@ import sys
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
+
+
+def _use_this_checkout():
+    """
+    Make `import FreeCAD` work and make `freecad.HVAC` mean this checkout.
+
+    FreeCAD loads its installed addons when it starts, so a copy of this
+    addon in the Mod folder would otherwise be the one that gets tested.
+    """
+    # Step 1: find FreeCAD itself (next to the running Python, or where FREECAD_BIN says).
+    for folder in (os.environ.get("FREECAD_BIN"), os.path.dirname(sys.executable)):
+        if folder and folder not in sys.path:
+            sys.path.insert(0, folder)
+            sys.path.insert(0, os.path.join(os.path.dirname(folder), "lib"))
+    import FreeCAD  # noqa: F401
+    import freecad
+
+    # Step 2: put this checkout first and forget any copy that was already imported.
+    checkout = os.path.join(REPO_ROOT, "freecad")
+    freecad.__path__ = [checkout] + [path for path in freecad.__path__ if path != checkout]
+    for name in [name for name in sys.modules if name == "freecad.HVAC" or name.startswith("freecad.HVAC.")]:
+        del sys.modules[name]
+
+
+_use_this_checkout()
 
 from freecad.HVAC.library.Library import HVACLibraryRegistry  # noqa: E402
 

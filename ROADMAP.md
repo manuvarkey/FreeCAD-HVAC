@@ -46,11 +46,104 @@ defect); a plenum at its default size rejects the test nodes whose ducts
 leave at 45 or 72 degrees, because they cross a corner of the box (also a
 parameter limit: 20 builds).
 
-Running the checks on a Windows machine (as done for Stages 6 and 7):
+## 0a. Start here (handover)
 
-- Unit tests: `uvx pytest tests -q`. 20 tests fail there before and after this work (`test_component_appearance`, `test_geometry_apply`, `test_materials`, `test_static_shapes` and four single tests elsewhere); they were not investigated. Anything beyond those 20 is a regression.
-- Geometry smoke run: `freecadcmd tools/geometry_smoke.py` did not execute the script with FreeCAD 1.1, and FreeCAD's bundled Python imported the installed copy of the addon (the `Mod` folder) instead of the checkout. It was run through `bin/python.exe` of the FreeCAD install with a small wrapper that puts the checkout's `freecad` folder first in `freecad.__path__`, drops any already imported `freecad.HVAC` modules, and then runs `tools/geometry_smoke.py`. The wrapper is not in the repository; making the smoke script do this itself is a small open task.
-- Last smoke result: 322 valid of 347 builds; the 25 others are the known cases listed above.
+**Next task:** Stage 7, step (a) in the progress table above: unit tests for
+the new `elbow_loss` branches. Then (b) to (g) in that order, or Stage 8,
+which does not depend on Stage 7.
+
+**Branch:** all roadmap work is on `roadmap-stage-0`. Work done in a
+worktree is committed there and `roadmap-stage-0` is then fast-forwarded to
+it. Nothing has been pushed since Stage 5.
+
+**Running the checks**
+
+- Unit tests: `uvx pytest tests -q`. On the Windows machine used so far, 20
+  tests fail before and after Stages 6 and 7 (`test_component_appearance`,
+  `test_geometry_apply`, `test_materials`, `test_static_shapes` and four
+  single tests in `test_network_component_sync`, `test_reset_to_defaults`,
+  `test_segment_reactive_properties`). They were not investigated. Anything
+  beyond those 20 is a regression.
+- Formatting: `sh tools/ruff.sh <files>`, on the files changed only.
+  `core/NetworkParser.py`, `ui/TaskPanel.py`, `library/library_api.py`
+  (imports) and `tests/test_network_parser_flow_classification.py` were
+  never formatted: do not run the formatter over them, keep additions tidy
+  by hand.
+- Geometry smoke run: `"<FreeCAD>/bin/python.exe" tools/geometry_smoke.py`
+  (add `--all` to list every build, a `.json` path to save the report).
+  `freecadcmd tools/geometry_smoke.py` does not execute the script with
+  FreeCAD 1.1. Last result: 322 valid of 347 builds; the 25 others are the
+  known cases listed above. A shape that builds valid is not necessarily
+  right: new geometry also needs a look in the FreeCAD GUI, which no stage
+  so far has had.
+
+**Rules that are easy to trip over** (beyond `AGENTS.md`)
+
+- *One priority per bucket.* Two types that list the same family and share
+  a profile must not have the same `selection.priority`
+  (`test_bundled_libraries_have_no_unresolved_priority_ties`). Priorities
+  also order the Change Type list, so give similar types neighbouring
+  numbers (see the end types: diffusers 90 to 87, entries 80 to 78, ...).
+- *Manual-only types.* Automatic selection needs the exact family key the
+  classifier produces. A type that must only ever be picked by hand lists a
+  family one level deeper, which the classifier never produces but which
+  still counts as related: `end.terminal.entry`, `branch.tee.plenum`. Such
+  a type needs one entry per classifier family it should be offered for,
+  the `.3d` forms included.
+- *`"unknown"` is a value.* The classifier reports `flow_class` and
+  `alignment` as the string `"unknown"` when it cannot tell. A constraint
+  enum that leaves `"unknown"` out removes the type whenever the flow
+  direction is not known; list it unless that is what is wanted.
+- *Classifier vocabulary.* `flow_class` is `expansion` / `contraction` /
+  `constant` (through), `diverging` / `converging` (branch, cross,
+  multiport), `entry` / `exit` (end), else `unknown`. New qualifier or
+  derived-value keys must be added to `validation.KNOWN_QUALIFIER_KEYS` /
+  `KNOWN_DERIVED_VALUE_KEYS`, or type-defs using them fail to load.
+- *Unknown JSON keys are load errors*, in a property def and in
+  `validation`. Negative values need `App::PropertyDistance`;
+  `App::PropertyLength` cannot hold them.
+- *PartScript types.* A property added to a type whose geometry is a
+  PartScript must also be added to the list in
+  `tests/test_library_discovery.py`.
+- *Measure equals build.* A fitting's `measure_*` and `build_*` must come
+  from one layout function; the smoke run reports a mismatch.
+- *Envelope builders.* `envelope(offset)` returns the air space grown by
+  `offset` as one solid. Where a part steps outward (a frame, a box end),
+  the outer envelope must also grow along the axis by `offset`, or the wall
+  has no thickness at the step.
+- *Round to rectangular lofts* twist unless the round end is made with
+  `api.make_split_circular_wire`.
+- *Library code talks to the API only.* A fitting module that needs a new
+  primitive gets it as a method on `HVACLibraryAPI`, it does not import
+  `Part`.
+- *JSON type-defs* are written with two-space indent and LF line endings.
+
+## 0b. Who should take what
+
+"Standard" is work a capable coding agent can do from this document and
+the code, with the checks above. "Design first" needs a design pass by a
+senior engineer or the strongest available model, and usually an answer
+from the project owner, before any code is written; the implementation
+after that is standard again.
+
+| Work | Level | Why |
+|---|---|---|
+| Stage 1 open: split `library_api.py` into mixin modules | Standard | Mechanical; the class stays the single public surface. |
+| Stage 3 open: per-port table in the Edit Type panel | Standard | UI only; needs a check in the GUI. |
+| Stage 4 open: lateral tee and wye items | **Design first** | Waiting for decisions 10 to 12 in section 4. Standard once answered. |
+| Stage 5 open: eccentric transition table (14-11 E), radius limit on `through_offset_radiussed` | Standard | |
+| Stage 5 open: fitting-derived read-only values (`IncludedAngle`) | **Design first** | Adds a second vocabulary next to the classifier's; touches type-def schema, object properties and loss calls. |
+| Stage 6 open: hood plate angle, wall flange, oval loft seam | Standard | Geometry only. |
+| Stage 6 open: AHU fan-connection tables | Standard | Needs a `FanConnection` choice and a loss method over 14-11 F to J, 14-16 G to I. |
+| Stage 7 (a) elbow tests, (b) the other three loss methods, (e) remove the shim, (f) coverage matrix and test | Standard | (b) follows the elbow change as its example. Rectangular branch tables are keyed to discrete area ratios: follow Stage 2 item 4 for when to report `EXACT`. |
+| Stage 7 (c) SMACNA-only branch types, (d) Stage 4 to 6 types in `smacna` | Standard, with review | Ids, priorities and which properties `smacna` gets are choices; have them reviewed against the naming rule before merging. |
+| Stage 7 (g) flanges as construction features | **Design first** | Changes how every shared fitting hands back its shape; decide the feature contract first. |
+| Stage 8 item 2: friction models | Standard | Pure analysis code, fully unit-tested. The expression parser must be a whitelist, never `eval`. |
+| Stage 8 item 1: sizing sections | Standard, with one design point | Constant velocity and friction rate are direct. **Design first** for static regain at section boundaries and for what the "extra reducer" advice reports. |
+| Stage 9 item 2: layer visibility | Standard | Decision 7 (transparent first) is taken. |
+| Stage 9 item 1: result tooltips | Standard | Coin event handling; cannot be verified without the GUI. |
+| Stage 10: custom geometry per fitting | **Design first** | Port definition on a user's object, port mapping, trims and layers are all open; builds on Stage 3. |
+| Stage 11: gap analysis and API freeze | **Design first** | Schema versioning, stable edge identity and the public API surface are irreversible once frozen. Also where multi-node equipment is decided. |
 
 ## 1. Where things stand
 
@@ -559,6 +652,15 @@ Answers received (12 November 2026):
   only a file); ports are defined by the user on that object (position,
   direction, profile and size per port), not inferred; and the port count
   is arbitrary, so it builds on Stage 3's per-port mechanism.
+
+Open decisions (Stage 4, lateral tee and wye):
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| 10 | What should a lateral tee built "on the wye generator" look like? The wye generators split the main duct's section into two halves, one per leg, so a lateral built literally that way narrows the run to half its section and widens it again. | (A) Full straight run; the branch joins it through a radius or mitered bend, reusing the double wye's branch bend. (B) The literal wye layout, run necked to half. (C) Leave the lateral as it is: full run, plain straight stub. | A, as new types beside the existing one. |
+| 11 | If A: ids, and what happens to the existing type. | `branch_lateral_tee_radius` and `branch_lateral_tee_mitered`; keep `branch_lateral_tee_generic` as the plain-stub fallback, or retire it and its `_lateral_tee_layout`. | The two ids as given; keep the generic one. Default: radius. |
+| 12 | Should `branch_wye_mitered` / `branch_wye_radius` be offered on tee-shaped nodes? Their split layout is right where the flow really divides two ways, that is a bullhead tee (the common leg is the branch), and wrong where one leg runs straight through. | (A) Offer on `branch.tee` only when `common_leg` is `branch`, as a manual choice. (B) Offer on every tee and lateral. (C) Never. | A. It needs `common_leg` in the type's constraints, which the Change Type list now honours. |
+| 13 | Which loss the new lateral types read. | The lateral rows of the tee tables through `branch_loss` (as the plain lateral does now), or the wye tables through `wye_loss`. | `branch_loss`: the run is straight, so the fitting is a tee to the tables. |
 
 ## 5. Suggested order of work
 
