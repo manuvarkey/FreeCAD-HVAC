@@ -73,6 +73,14 @@ still flips. Flipping exposed a mitered-shoe bug: `_mitered_bend` built
 inside-out gores when the profile wound against the extrusion; gores are
 now turned outward (`_common._outward`).
 
+**Hood geometry finding (13 November 2026, not implemented):** SMACNA
+14-15 F / 14-16 A show the hood angle as the included flare of the duct end
+(over a length D, from D to Ds), not a plate slope, and the cap as a
+conical roof 2D across with a 0.3D rise, L (HoodHeight) above the opening.
+`end_hood_intake` / `end_hood_exhaust` should flare the neck by HoodAngle
+and draw a conical (pyramidal for rectangular) roof; fix the HoodAngle
+description to match.
+
 **Next task:** a GUI check of Stage 9 (tooltips, layer visibility) and
 of design 6.3 (custom fittings). Then the standard open items: Stage 1
 (split `library_api.py`), Stage 3 (per-port table in the Edit Type
