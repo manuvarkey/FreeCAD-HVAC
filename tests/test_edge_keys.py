@@ -2,9 +2,9 @@
 
 from types import SimpleNamespace
 
-import conftest  # noqa: F401 -- installs FreeCAD stubs
-
 import FreeCAD
+
+import conftest  # noqa: F401 -- installs FreeCAD stubs
 from freecad.HVAC.utils import hvaclib
 
 

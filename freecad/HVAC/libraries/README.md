@@ -609,7 +609,6 @@ and also when this table is out of date (regenerate it with
 | builtin_basic | `cross_marker` | Generic | placeholder | none (marker) |
 | builtin_basic | `cross_plenum_generic` | Circular, Rectangular, Oval | model | `loss_plenum` |
 | builtin_basic | `cross_tee_straight` | Circular, Rectangular, Oval | model | `loss_cross_generic` |
-| builtin_basic | `end_ahu_generic` | Circular, Rectangular, Oval | model | `loss_ahu` |
 | builtin_basic | `end_diffuser_generic` | Circular, Rectangular, Oval | model | `loss_diffuser_generic` |
 | builtin_basic | `end_diffuser_round` | Circular, Rectangular, Oval | model | `loss_diffuser_generic` |
 | builtin_basic | `end_diffuser_slot` | Circular, Rectangular, Oval | model | `loss_diffuser_generic` |
@@ -618,6 +617,7 @@ and also when this table is out of date (regenerate it with
 | builtin_basic | `end_entry_bellmouth` | Circular, Rectangular, Oval | model | `loss_entry_bellmouth` |
 | builtin_basic | `end_entry_conical` | Circular, Rectangular, Oval | model | `loss_entry_conical` |
 | builtin_basic | `end_entry_plain` | Circular, Rectangular, Oval | model | `loss_entry_plain` |
+| builtin_basic | `end_equipment_connection` | Circular, Rectangular, Oval | model | `loss_equipment_connection` |
 | builtin_basic | `end_exit_conical` | Circular | model | `loss_exit_conical` |
 | builtin_basic | `end_exit_plain` | Circular, Rectangular, Oval | model | `loss_exit_plain` |
 | builtin_basic | `end_exit_pyramidal` | Rectangular | model | `loss_exit_pyramidal` |
@@ -647,18 +647,54 @@ and also when this table is out of date (regenerate it with
 | builtin_basic | `through_transition_eccentric` | Circular, Rectangular, Oval | model | `loss_transition_generic`; expansion: `loss_transition_expansion`; contraction: `loss_transition_contraction` |
 | builtin_basic | `through_transition_offset` | Circular, Rectangular, Oval | model | `loss_transition_generic`; expansion: `loss_transition_expansion`; contraction: `loss_transition_contraction` |
 | builtin_basic | `through_vav_generic` | Circular, Rectangular, Oval | inline | `loss_vav_generic` |
+| smacna | `branch_lateral_tee_generic` | Circular, Rectangular, Oval | model | `loss_tee_generic`; diverging, common_leg run: `loss_branch_diverging_run`; converging, common_leg run: `loss_branch_converging_run`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
+| smacna | `branch_lateral_tee_mitered` | Circular, Rectangular, Oval | model | `loss_tee_generic`; diverging, common_leg run: `loss_branch_diverging_run`; converging, common_leg run: `loss_branch_converging_run`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
+| smacna | `branch_lateral_tee_radius` | Circular, Rectangular, Oval | model | `loss_tee_generic`; diverging, common_leg run: `loss_branch_diverging_run`; converging, common_leg run: `loss_branch_converging_run`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
 | smacna | `branch_marker` | Generic | placeholder | none (marker) |
+| smacna | `branch_plenum_generic` | Circular, Rectangular, Oval | model | `loss_plenum` |
+| smacna | `branch_tap_extractor` | Rectangular | model | `loss_tee_extractor`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
+| smacna | `branch_tap_mitered_shoe` | Circular, Rectangular, Oval | model | `loss_tee_generic`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
+| smacna | `branch_tap_saddle` | Circular, Rectangular, Oval | model | `loss_tee_conical`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
+| smacna | `branch_tap_shoe` | Circular, Rectangular, Oval | model | `loss_tee_45_entry`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
+| smacna | `branch_tap_shoe_damper` | Rectangular | model | `loss_tee_45_entry_damper`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
+| smacna | `branch_tap_straight` | Circular, Rectangular, Oval | model | `loss_tee_generic`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
+| smacna | `branch_tap_straight_damper` | Rectangular | model | `loss_tee_damper`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
 | smacna | `branch_tee_generic` | Circular, Rectangular, Oval | model | `loss_tee_generic`; diverging, common_leg run: `loss_branch_diverging_run`; converging, common_leg run: `loss_branch_converging_run`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
+| smacna | `branch_tee_radius_center` | Circular, Rectangular, Oval | model | `loss_tee_generic`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
+| smacna | `branch_tee_radius_edge` | Rectangular | model | `loss_tee_generic`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
+| smacna | `branch_tee_straight` | Circular, Rectangular, Oval | model | `loss_tee_generic`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
 | smacna | `branch_wye_generic` | Circular, Rectangular, Oval, Generic | model | `loss_wye_generic`; diverging, common_leg run: `loss_branch_diverging_run`; converging, common_leg run: `loss_branch_converging_run`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
+| smacna | `branch_wye_mitered` | Circular, Rectangular, Oval | model | `loss_wye_generic` |
+| smacna | `branch_wye_radius` | Circular, Rectangular, Oval | model | `loss_wye_generic` |
+| smacna | `cross_double_wye_mitered` | Circular, Rectangular, Oval | model | `loss_cross_generic` |
+| smacna | `cross_double_wye_radius` | Circular, Rectangular, Oval | model | `loss_cross_generic` |
 | smacna | `cross_generic` | Circular, Rectangular, Oval, Generic | model | `loss_cross_generic` |
 | smacna | `cross_marker` | Generic | placeholder | none (marker) |
+| smacna | `cross_plenum_generic` | Circular, Rectangular, Oval | model | `loss_plenum` |
+| smacna | `cross_tee_straight` | Circular, Rectangular, Oval | model | `loss_cross_generic` |
 | smacna | `end_diffuser_generic` | Circular, Rectangular, Oval | model | `loss_diffuser_generic` |
+| smacna | `end_diffuser_round` | Circular, Rectangular, Oval | model | `loss_diffuser_generic` |
+| smacna | `end_diffuser_slot` | Circular, Rectangular, Oval | model | `loss_diffuser_generic` |
+| smacna | `end_diffuser_square` | Circular, Rectangular, Oval | model | `loss_diffuser_generic` |
 | smacna | `end_duct_closure_generic` | Circular, Rectangular, Oval | model | none (no flow: always closed) |
+| smacna | `end_entry_bellmouth` | Circular, Rectangular, Oval | model | `loss_entry_bellmouth` |
+| smacna | `end_entry_conical` | Circular, Rectangular, Oval | model | `loss_entry_conical` |
+| smacna | `end_entry_plain` | Circular, Rectangular, Oval | model | `loss_entry_plain` |
+| smacna | `end_equipment_connection` | Circular, Rectangular, Oval | model | `loss_equipment_connection` |
+| smacna | `end_exit_conical` | Circular | model | `loss_exit_conical` |
+| smacna | `end_exit_plain` | Circular, Rectangular, Oval | model | `loss_exit_plain` |
+| smacna | `end_exit_pyramidal` | Rectangular | model | `loss_exit_pyramidal` |
 | smacna | `end_fan_source_generic` | Circular, Rectangular, Oval | model | `loss_diffuser_generic` |
+| smacna | `end_grille_generic` | Circular, Rectangular, Oval | model | `loss_diffuser_generic` |
+| smacna | `end_hood_exhaust` | Circular, Rectangular, Oval | model | `loss_hood_exhaust` |
+| smacna | `end_hood_intake` | Circular, Rectangular, Oval | model | `loss_hood_intake` |
+| smacna | `end_hood_tapered` | Circular, Rectangular, Oval | model | `loss_hood_tapered` |
 | smacna | `end_intake_exhaust_generic` | Circular, Rectangular, Oval | model | `loss_diffuser_generic` |
+| smacna | `end_register_generic` | Circular, Rectangular, Oval | model | `loss_register_generic` |
 | smacna | `end_terminal_marker` | Generic | placeholder | none (marker) |
 | smacna | `multiport_generic` | Circular, Rectangular, Oval, Generic | model | `loss_multiport_generic` |
 | smacna | `multiport_marker` | Generic | placeholder | none (marker) |
+| smacna | `multiport_plenum_generic` | Circular, Rectangular, Oval | model | `loss_plenum` |
 | smacna | `through_damper_generic` | Circular, Rectangular, Oval | inline | `loss_damper_generic` |
 | smacna | `through_elbow_generic` | Circular, Rectangular, Oval | model | `loss_elbow_generic` |
 | smacna | `through_elbow_mitered` | Circular, Rectangular, Oval | model | `loss_elbow_mitered` |
@@ -666,7 +702,14 @@ and also when this table is out of date (regenerate it with
 | smacna | `through_elbow_vaned` | Rectangular | model | `loss_elbow_vaned` |
 | smacna | `through_generic` | Generic | model | `loss_through_generic` |
 | smacna | `through_marker` | Generic | placeholder | none (marker) |
-| smacna | `through_transition_generic` | Circular, Rectangular, Oval | model | `loss_transition_generic`; expansion: `loss_transition_expansion`; contraction: `loss_transition_contraction` |
+| smacna | `through_obstruction_generic` | Circular, Rectangular, Oval | inline | `loss_obstruction` |
+| smacna | `through_offset_angled` | Circular, Rectangular, Oval | model | `loss_offset_generic` |
+| smacna | `through_offset_mitered` | Circular, Rectangular, Oval | model | `loss_offset_generic` |
+| smacna | `through_offset_radiussed` | Circular, Rectangular, Oval | model | `loss_offset_generic` |
+| smacna | `through_plenum_generic` | Circular, Rectangular, Oval | model | `loss_plenum` |
+| smacna | `through_transition_concentric` | Circular, Rectangular, Oval | model | `loss_transition_generic`; expansion: `loss_transition_expansion`; contraction: `loss_transition_contraction` |
+| smacna | `through_transition_eccentric` | Circular, Rectangular, Oval | model | `loss_transition_generic`; expansion: `loss_transition_expansion`; contraction: `loss_transition_contraction` |
+| smacna | `through_transition_offset` | Circular, Rectangular, Oval | model | `loss_transition_generic`; expansion: `loss_transition_expansion`; contraction: `loss_transition_contraction` |
 | smacna | `through_vav_generic` | Circular, Rectangular, Oval | inline | `loss_vav_generic` |
 
 <!-- LOSS-COVERAGE:END -->
@@ -921,7 +964,8 @@ Worked examples (from `smacna/types/junctions/`):
 | `branch_wye_generic` | branch | wye | generic |
 | `branch_generic` / `branch_marker` | branch | *(all)* | generic / marker |
 | `through_elbow_generic` | through | elbow | generic |
-| `through_transition_generic` | through | transition | generic |
+| `through_transition_concentric` | through | transition | concentric (its alignment; `eccentric`, `offset` alike) |
+| `branch_tap_straight_damper` | branch | tap | straight_damper (a SMACNA-only variant, manual choice) |
 | `through_damper_generic` | through | damper | generic |
 | `through_vav_generic` | through | vav | generic |
 | `through_generic` / `through_marker` | through | *(all)* | generic / marker |

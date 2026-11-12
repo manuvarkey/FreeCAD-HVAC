@@ -28,7 +28,6 @@ import math
 import FreeCAD
 import Part
 
-
 # Bound to the real class by library_api.py once HVACLibraryAPI exists; the
 # methods below call each other through it, as they always have.
 HVACLibraryAPI = None
@@ -172,7 +171,8 @@ class _ProfilesMixin:
         # code below can always build with the major axis along x. Negating
         # the new y keeps the same normal (x cross y), so the wire's winding
         # direction doesn't change.
-        if width < height:
+        tall = width < height
+        if tall:
             x, y = y, x * -1.0
             width, height = height, width
 
@@ -193,22 +193,25 @@ class _ProfilesMixin:
         p_rt = right_center + y * r
         p_rb = right_center - y * r
 
-        # top and bottom straight edges
-        e_top = Part.makeLine(p_lt, p_rt)
-        e_bottom = Part.makeLine(p_rb, p_lb)
-
         normal = x.cross(y)
         if normal.Length <= HVACLibraryAPI.EPS:
             raise ValueError("Invalid oval frame")
-        normal.normalize()
 
-        # Left semicircle: top -> bottom
-        left_arc = Part.Arc(p_lt, left_center - x * r, p_lb).toShape()
-
-        # Right semicircle: bottom -> top
-        right_arc = Part.Arc(p_rb, right_center + x * r, p_rt).toShape()
-
-        return Part.Wire([e_top, right_arc, e_bottom, left_arc])
+        # Counter-clockwise about x cross y, like make_rectangular_wire, and
+        # starting at the vertex in the same corner as the rectangle's first
+        # one (-width/2, -height/2 on the caller's axes), so a ruled loft from
+        # an oval to a rectangle (or a split circle) pairs corner with corner
+        # instead of twisting. Cycle: bottom line, right cap, top line, left cap.
+        edges = [
+            Part.makeLine(p_lb, p_rb),
+            Part.Arc(p_rb, right_center + x * r, p_rt).toShape(),
+            Part.makeLine(p_rt, p_lt),
+            Part.Arc(p_lt, left_center - x * r, p_lb).toShape(),
+        ]
+        # A tall oval was built in the swapped frame, where the caller's
+        # (-, -) corner is the top-left one.
+        start = 3 if tall else 0
+        return Part.Wire(edges[start:] + edges[:start])
 
     @staticmethod
     def make_section_wire(profile, section_params, center, direction, profile_x_axis=None):

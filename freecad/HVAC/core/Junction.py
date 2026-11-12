@@ -828,7 +828,9 @@ class DuctJunctionVirtual:
         if not getattr(obj, "MemberPoints", []):
             obj.MemberPoints = []
 
-    def updateMetadata(self, owner=None, member_node_keys=[], member_points=[]):
+    def updateMetadata(self, owner=None, member_node_keys=None, member_points=None):
+        member_node_keys = list(member_node_keys or [])
+        member_points = list(member_points or [])
         obj = self.Object
         changed = False
 

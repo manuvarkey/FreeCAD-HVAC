@@ -21,10 +21,30 @@
   },
   "properties": [
     {
-      "name": "NeckSize",
+      "name": "Thickness",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "AHU/fan discharge or return connection diameter",
+      "description": "Sheet metal thickness. 0 builds the air space as a solid body instead of a hollow shell",
+      "default": 0.8,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "InsulationThickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Insulation thickness wrapped around the outside of the fitting; 0 disables insulation",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "NeckSize",
+      "prop_type": "App::PropertyLength",
+      "group": "Parameters",
+      "description": "Equivalent AHU/fan discharge or return connection diameter used only for the pressure-loss calculation, referenced to velocity at this neck -- not a separate geometric profile; the generated body's own interface is always the connected duct port's real profile",
       "default": 200.0
     },
     {
@@ -33,8 +53,87 @@
       "group": "Parameters",
       "description": "Pressure-loss coefficient K, referenced to velocity at the neck (0 = no loss modeled at this connection; the fan's own required static pressure is read from the critical-path result instead)",
       "default": 0.0
+    },
+    {
+      "name": "TrimNeck",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Length of the straight collar between the body and the duct",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "BodyLength",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Axial length of the generic terminal body",
+      "default": 150.0
+    },
+    {
+      "name": "FlangeHeight",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Height of the transverse flange at each duct connection",
+      "default": 25.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "FlangeThickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Thickness of the transverse flange; 0 draws no flanges",
+      "default": 1.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "ShowFlange1",
+      "prop_type": "App::PropertyBool",
+      "group": "Options",
+      "description": "Include the flange at the duct connection",
+      "default": true
     }
   ],
+  "construction": {
+    "layers": [
+      {
+        "id": "casing",
+        "roles": [
+          "flow_surface",
+          "structural_shell"
+        ],
+        "default_material_role": "structural_shell",
+        "thickness_property": "Thickness"
+      },
+      {
+        "id": "insulation",
+        "roles": [
+          "thermal_insulation"
+        ],
+        "default_material_role": "thermal_insulation",
+        "thickness_property": "InsulationThickness"
+      }
+    ],
+    "features": [
+      {
+        "id": "transverse_flange",
+        "role": "transverse_joint",
+        "host_layer": "casing",
+        "module": "shared:features",
+        "generator": "transverse_flange",
+        "parameters": [
+          "FlangeHeight",
+          "FlangeThickness",
+          "ShowFlange1"
+        ]
+      }
+    ]
+  },
   "generator": {
     "module": "shared:terminals",
     "function": "build_terminal_body_generic"

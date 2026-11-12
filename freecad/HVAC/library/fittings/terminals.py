@@ -210,23 +210,31 @@ def _build_terminal(context, kind):
     duct_profile, duct_params = _section(api, port)
     _placement, x_axis, y_axis, _z_axis = api.make_profile_frame(axis, api.port_profile_x_axis(port))
 
-    def round_to_match(centre, diameter, rectangle):
-        # A round section about to be lofted to a rectangular one: drawn with a corner for each corner of the rectangle.
-        return api.make_split_circular_wire(centre, x_axis, y_axis, diameter, rectangle["Width"], rectangle["Height"])
+    def round_to_match(centre, diameter, other_profile, other):
+        # A round section about to be lofted to a rectangular or oval one:
+        # drawn with a corner where each corner of the other section points,
+        # in the same order, so the loft pairs them instead of twisting.
+        width, height = float(other["Width"]), float(other["Height"])
+        if other_profile == "Oval":
+            # An oval's corners are where its straight sides end.
+            width, height = (width - height, height) if width >= height else (width, height - width)
+            if min(width, height) <= 1e-9:
+                return api.make_circular_wire(centre, axis, diameter)
+        return api.make_split_circular_wire(centre, x_axis, y_axis, diameter, width, height)
 
     def face_at(distance, offset, for_loft=False):
         # The face section, `distance` from the node, grown by the wall offset.
         _profile, grown = _grown_section(face_profile, face_params, offset)
         centre = api.port_position(port) + axis * distance
-        if for_loft and face_profile == "Circular" and duct_profile == "Rectangular":
-            return round_to_match(centre, grown["Diameter"], duct_params)
+        if for_loft and face_profile == "Circular" and duct_profile in ("Rectangular", "Oval"):
+            return round_to_match(centre, grown["Diameter"], duct_profile, duct_params)
         return api.make_profile(face_profile, grown, center=centre, direction=axis, profile_x_axis=x_axis)
 
     def throat_for_loft(offset):
         # The duct section at the throat, as the other end of the loft from the face.
-        if duct_profile == "Circular" and face_profile == "Rectangular":
+        if duct_profile == "Circular" and face_profile in ("Rectangular", "Oval"):
             diameter = float(duct_params["Diameter"]) + 2.0 * offset
-            return round_to_match(api.port_position(throat), diameter, face_params)
+            return round_to_match(api.port_position(throat), diameter, face_profile, face_params)
         return api.profile_from_port(throat, offset)
 
     def bellmouth_sections(offset):
@@ -286,11 +294,7 @@ def _build_terminal(context, kind):
         apex_profile, apex_params = _scaled_section(base_profile, base_params, 0.02, 0.02)
         base = api.make_profile(base_profile, base_params, center=base_centre, direction=axis, profile_x_axis=x_axis)
         apex = api.make_profile(
-            apex_profile,
-            apex_params,
-            center=base_centre + outside * cap["rise"],
-            direction=axis,
-            profile_x_axis=x_axis,
+            apex_profile, apex_params, center=base_centre + outside * cap["rise"], direction=axis, profile_x_axis=x_axis
         )
         roof = api.loft([base, apex], solid=True, ruled=True)
         under = roof.copy()

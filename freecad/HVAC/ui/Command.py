@@ -26,6 +26,7 @@
 import traceback
 
 import FreeCAD
+import Part
 import FreeCADGui as Gui
 from PySide import QtWidgets, QtCore
 from PySide.QtCore import QT_TRANSLATE_NOOP

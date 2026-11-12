@@ -408,7 +408,7 @@ def test_compose_chain_on_single_edge_of_through_node(monkeypatch):
     junction = FakeJunctionObj(connected_edge_keys=["A", "B"])
     junction.AnalysisJson = json.dumps({"connected_ports": [port_a, port_b]})
 
-    reducer = FakeComponentObj("C0", "Junc0", "Primary", library_id="smacna", type_id="through_transition_generic")
+    reducer = FakeComponentObj("C0", "Junc0", "Primary", library_id="smacna", type_id="through_transition_concentric")
     damper = FakeComponentObj(
         "C1", "Junc0", "Inline", attached_edge_key="B", port_sequence=10,
         library_id="smacna", type_id="through_damper_generic",

@@ -369,3 +369,27 @@ def test_converging_branch_wye_vs_tee_differ():
     wye_branch, _ = api._round_branch_zetas(False, angle_deg=45.0, ab_on_ac=0.4, vb_on_vc=0.7, vs_on_vc=0.6)
     tee_branch, _ = api._round_branch_zetas(False, angle_deg=90.0, ab_on_ac=0.4, vb_on_vc=0.7, vs_on_vc=0.6)
     assert wye_branch != tee_branch
+
+
+@pytest.mark.parametrize(
+    "function, style",
+    [
+        ("loss_tee_damper", "damper"),
+        ("loss_tee_45_entry_damper", "45_entry_damper"),
+        ("loss_tee_extractor", "extractor"),
+    ],
+)
+def test_smacna_branch_style_wrappers_pass_their_style(function, style):
+    # The SMACNA-only branch types (Stage 7 c) read their table through branch_loss with a fixed BranchStyle.
+    from freecad.HVAC.library.fittings import losses
+
+    seen = {}
+
+    class LossApi:
+        @staticmethod
+        def branch_loss(context):
+            seen["style"] = context["properties"]["BranchStyle"]
+            return "result"
+
+    assert getattr(losses, function)({"loss_api": LossApi, "properties": {"Other": 1}}) == "result"
+    assert seen["style"] == style

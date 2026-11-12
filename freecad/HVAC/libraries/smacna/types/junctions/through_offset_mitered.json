@@ -1,10 +1,10 @@
 {
-  "id": "through_transition_generic",
-  "label": "Transition - Generic",
+  "id": "through_offset_mitered",
+  "label": "Offset - Mitered",
   "category": "junction",
   "topology": "through",
   "family": [
-    "through.transition"
+    "through.offset"
   ],
   "profiles": [
     "Circular",
@@ -13,39 +13,77 @@
   ],
   "selection": {
     "kind": "model",
-    "priority": 50
+    "priority": 45
   },
   "constraints": {
     "degree": 2
   },
   "properties": [
     {
-      "name": "TransitionLength",
-      "prop_type": "App::PropertyLength",
-      "group": "Dimensions",
-      "description": "Transition body length",
-      "default": 300.0
-    },
-    {
       "name": "Thickness",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Sheet metal thickness",
-      "default": 0.8
+      "description": "Sheet metal thickness. 0 builds the air space as a solid body instead of a hollow shell",
+      "default": 0.8,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "InsulationThickness",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Insulation thickness wrapped around the outside of the fitting; 0 disables insulation",
+      "default": 0.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "OffsetLength",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Length of the offset along the duct axis. 0 uses the duct size",
+      "default": 300.0,
+      "validation": {
+        "minimum": 0.0
+      }
+    },
+    {
+      "name": "OffsetAngle",
+      "prop_type": "App::PropertyAngle",
+      "group": "Derived",
+      "description": "Deflection of each corner from the duct axis (read-only, set on recompute)",
+      "default": 0.0,
+      "editor_mode": 1
+    },
+    {
+      "name": "BodyLength",
+      "prop_type": "App::PropertyLength",
+      "group": "Derived",
+      "description": "Axial length the fitting was built with (read-only, set on recompute)",
+      "default": 0.0,
+      "editor_mode": 1
     },
     {
       "name": "FlangeHeight",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Flange height",
-      "default": 25.0
+      "description": "Height of the transverse flange at each duct connection",
+      "default": 25.0,
+      "validation": {
+        "minimum": 0.0
+      }
     },
     {
       "name": "FlangeThickness",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Flange thickness",
-      "default": 1.0
+      "description": "Thickness of the transverse flange; 0 draws no flanges",
+      "default": 1.0,
+      "validation": {
+        "minimum": 0.0
+      }
     },
     {
       "name": "ShowFlange1",
@@ -60,29 +98,6 @@
       "group": "Options",
       "description": "Include the flange at port 2",
       "default": true
-    },
-    {
-      "name": "InsulationThickness",
-      "prop_type": "App::PropertyLength",
-      "group": "Dimensions",
-      "description": "Insulation thickness wrapped around the outside of the transition; 0 disables insulation",
-      "default": 0.0
-    },
-    {
-      "name": "IncludedAngle",
-      "prop_type": "App::PropertyAngle",
-      "group": "Derived",
-      "description": "Included angle the SMACNA transition tables are read at (read-only, set on recompute)",
-      "default": 0.0,
-      "editor_mode": 1
-    },
-    {
-      "name": "BodyLength",
-      "prop_type": "App::PropertyLength",
-      "group": "Derived",
-      "description": "Axial length the fitting was built with (read-only, set on recompute)",
-      "default": 0.0,
-      "editor_mode": 1
     }
   ],
   "construction": {
@@ -98,7 +113,9 @@
       },
       {
         "id": "insulation",
-        "roles": ["thermal_insulation"],
+        "roles": [
+          "thermal_insulation"
+        ],
         "default_material_role": "thermal_insulation",
         "thickness_property": "InsulationThickness"
       }
@@ -120,31 +137,15 @@
     ]
   },
   "generator": {
-    "module": "shared:transitions",
-    "function": "build_transition"
+    "module": "shared:offsets",
+    "function": "build_offset_mitered"
   },
   "connection_lengths": {
-    "module": "shared:transitions",
-    "function": "measure_transition"
+    "module": "shared:offsets",
+    "function": "measure_offset_mitered"
   },
   "loss": {
     "module": "shared:losses",
-    "function": "loss_transition_generic",
-    "variants": [
-      {
-        "constraints": {
-          "flow_class": {"enum": ["expansion"]}
-        },
-        "module": "shared:losses",
-        "function": "loss_transition_expansion"
-      },
-      {
-        "constraints": {
-          "flow_class": {"enum": ["contraction"]}
-        },
-        "module": "shared:losses",
-        "function": "loss_transition_contraction"
-      }
-    ]
+    "function": "loss_offset_generic"
   }
 }

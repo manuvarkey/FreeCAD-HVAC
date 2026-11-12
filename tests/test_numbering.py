@@ -169,12 +169,12 @@ def test_labels_use_resolved_library_type_when_available():
     net, segment_map, junction_map = _straight_run_net()
     junction_map["N2"].LibraryId = None  # junctions never carry a type of their own
     segment_map["A"].LibraryId = "smacna"
-    segment_map["A"].TypeId = "through_transition_generic"
+    segment_map["A"].TypeId = "through_transition_concentric"
 
     renumber_network(net)
 
     reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
-    type_def = reg.resolve_type("smacna", "through_transition_generic")
+    type_def = reg.resolve_type("smacna", "through_transition_concentric")
     assert segment_map["A"].Label == "D001 — {}".format(type_def.label)
 
 
@@ -281,7 +281,7 @@ def test_component_numbering_primary_then_inline_sequence():
     net, segment_map, junction_map = _straight_run_net()
     junction_map["N2"].Family = "straight"
 
-    primary = make_component("N2_Comp0", "J_N2", "Primary", library_id="smacna", type_id="through_transition_generic")
+    primary = make_component("N2_Comp0", "J_N2", "Primary", library_id="smacna", type_id="through_transition_concentric")
     inline1 = make_component("N2_Comp1", "J_N2", "Inline")
     inline2 = make_component("N2_Comp2", "J_N2", "Inline")
     net.Proxy._component_map = {"J_N2": [primary, inline1, inline2]}
