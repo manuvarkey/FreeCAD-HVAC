@@ -1462,3 +1462,18 @@ def test_list_types_honours_a_diverging_or_converging_constraint():
     assert listed("converging") == {"converging_only"}
     # A flow class the classifier reports as "unknown" is a real value, so neither type claims it.
     assert listed("unknown") == set()
+
+
+def test_end_types_are_listed_grouped_by_kind():
+    # Priorities of end fittings are banded (diffusers, grilles, entries,
+    # hoods, exits, equipment, end cap) so alternatives sit next to each
+    # other in the Change Type list instead of being interleaved.
+    lib = _load_bundled_registry().get_library("builtin_basic")
+    listed = lib.list_types(
+        category="junction", family="end.terminal", connected_ports=_ports(1), include_placeholders=False
+    )
+    groups = [t.id.split("_")[1] for t in listed]
+    # Each group name appears as one unbroken run.
+    runs = [name for index, name in enumerate(groups) if index == 0 or groups[index - 1] != name]
+    assert len(runs) == len(set(runs)), groups
+    assert runs[0] == "diffuser" and runs[-1] == "duct"
