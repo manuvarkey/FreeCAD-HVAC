@@ -181,8 +181,15 @@ solver.
   fitting's own* properties instead -- e.g. a transition angle computed
   from a chosen `TransitionLength` -- is a fitting/type-derived value,
   not a parser-derived one, and isn't exposed through `derived_values`
-  here; that's a separate vocabulary for the library layer to expose
-  later if needed.
+  here. Those are *fitting-derived values*: a pure helper per fitting
+  kind computes them from the ports and the resolved properties (e.g.
+  `library/fittings/transitions.py`'s `transition_dimensions` and
+  `offset_dimensions`), the generator reports them as read-only computed
+  properties (`IncludedAngle`, `BodyLength`, `OffsetAngle`,
+  `ActualRadius`, group `Derived`), and the loss function calls the same
+  helper. They exist only after a build, so they never take part in type
+  matching, and the loss never reads the stored properties back (they go
+  stale until the next recompute).
 
 A type-def's JSON `constraints` can filter on any of these -- see
 `freecad/HVAC/library/validation.py`'s `context_violations()` and

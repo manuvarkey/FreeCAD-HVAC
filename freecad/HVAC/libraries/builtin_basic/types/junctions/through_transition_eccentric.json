@@ -43,6 +43,22 @@
       "group": "Dimensions",
       "description": "Transition body length",
       "default": 300.0
+    },
+    {
+      "name": "IncludedAngle",
+      "prop_type": "App::PropertyAngle",
+      "group": "Derived",
+      "description": "Included angle the SMACNA transition tables are read at (read-only, set on recompute)",
+      "default": 0.0,
+      "editor_mode": 1
+    },
+    {
+      "name": "BodyLength",
+      "prop_type": "App::PropertyLength",
+      "group": "Derived",
+      "description": "Axial length the fitting was built with (read-only, set on recompute)",
+      "default": 0.0,
+      "editor_mode": 1
     }
   ],
   "generator": {

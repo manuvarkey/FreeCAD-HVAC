@@ -37,6 +37,7 @@ import math
 from ..analysis import physics as airflow
 from ..analysis.loss import LossEvaluation, LossPath, LossStatus
 from .fittings import taps as tap_fittings
+from .fittings import transitions as transition_fittings
 from .library_api import HVACLibraryAPI
 from .loss_tables import elbows as elbow_tables
 from .loss_tables import entries_exits as entry_exit_tables
@@ -294,42 +295,16 @@ class HVACLossAPI:
             if "Oval" in (profile_in, profile_out):
                 notes.append("oval duct read as the rectangle of the same width and height")
 
-            # Step 1: the body length, defaulting the way the geometry does.
-            def size(port):
-                if HVACLibraryAPI.port_profile(port) == "Circular":
-                    return float(HVACLibraryAPI.port_diameter(port))
-                return max(float(HVACLibraryAPI.port_width(port)), float(HVACLibraryAPI.port_height(port)))
-
-            length = float((context.get("properties") or {}).get("TransitionLength", 0.0) or 0.0)
-            if length <= 0.0:
-                length = max(size(inlet), size(outlet), 100.0)
-
-            def included_angle(change):
-                return math.degrees(2.0 * math.atan(abs(change) / (2.0 * length)))
-
+            # Steps 1 and 2: body length and table angle, from the same helper
+            # the geometry reports them with (fittings/transitions.py).
+            dims = transition_fittings.transition_dimensions(
+                HVACLibraryAPI, [inlet, outlet], context.get("properties") or {}
+            )
+            theta, single_plane = dims["included_angle"], dims["single_plane"]
             expanding = area_out > area_in
             small, large = (inlet, outlet) if expanding else (outlet, inlet)
             round_small = HVACLibraryAPI.port_profile(small) == "Circular"
             round_large = HVACLibraryAPI.port_profile(large) == "Circular"
-
-            # Step 2: the angle, and for an expansion which table.
-            single_plane = False
-            if round_small and round_large:
-                theta = included_angle(size(large) - size(small))
-            elif not round_small and not round_large:
-                d_w = float(HVACLibraryAPI.port_width(large)) - float(HVACLibraryAPI.port_width(small))
-                d_h = float(HVACLibraryAPI.port_height(large)) - float(HVACLibraryAPI.port_height(small))
-                theta = max(included_angle(d_w), included_angle(d_h))
-                tolerance = 0.01 * size(large)
-                single_plane = (abs(d_w) <= tolerance) != (abs(d_h) <= tolerance)
-            else:
-                round_port, rect_port = (small, large) if round_small else (large, small)
-                theta = transition_tables.round_rect_equivalent_angle(
-                    float(HVACLibraryAPI.port_diameter(round_port)),
-                    float(HVACLibraryAPI.port_width(rect_port)),
-                    float(HVACLibraryAPI.port_height(rect_port)),
-                    length,
-                )
 
             # Step 3: the table. Expansion tables are printed against the
             # smaller (upstream) duct's velocity; the loss is referenced to
@@ -389,22 +364,12 @@ class HVACLossAPI:
             properties = context.get("properties") or {}
             # An offset type names its length OffsetLength; a transition-style
             # type used for an offset (the generic through fitting) names it
-            # TransitionLength.
-            length_mm = float(properties.get("OffsetLength", properties.get("TransitionLength", 0.0)) or 0.0)
-            if length_mm <= 0.0:
-                # Not set: the geometry then uses the duct size (at least 100 mm), so the loss does too.
-                sizes = []
-                for port in ports:
-                    if HVACLibraryAPI.port_profile(port) == "Circular":
-                        sizes.append(float(HVACLibraryAPI.port_diameter(port)))
-                    else:
-                        sizes.append(
-                            max(float(HVACLibraryAPI.port_width(port)), float(HVACLibraryAPI.port_height(port)))
-                        )
-                length_mm = max(max(sizes), 100.0)
-
-            axis = HVACLibraryAPI.offset_transition_axis(ports[0], ports[1], length_mm)
-            theta_deg = math.degrees(axis["turn_angle"])
+            # TransitionLength. Same helper as the geometry's derived values.
+            length_value = properties.get("OffsetLength", properties.get("TransitionLength", 0.0))
+            dims = transition_fittings.offset_dimensions(
+                HVACLibraryAPI, list(ports), {"TransitionLength": length_value}
+            )
+            theta_deg = dims["offset_angle"]
             if theta_deg <= 1e-6:
                 return HVACLossAPI._exact(
                     [HVACLossAPI._leg_path(outlet, inlet["edge_key"], 0.0, source="smacna_offset")]

@@ -48,6 +48,7 @@ def _use_this_checkout():
             sys.path.insert(0, folder)
             sys.path.insert(0, os.path.join(os.path.dirname(folder), "lib"))
     import FreeCAD  # noqa: F401
+
     import freecad
 
     # Step 2: put this checkout first and forget any copy that was already imported.
@@ -194,6 +195,11 @@ def _build_one(reg, library_id, type_def, family, profile, section):
         total += volume or 0.0
     trims = {rec["edge_key"]: round(float(rec["length"]), 2) for rec in (result.connection_lengths or [])}
     entry = {"status": "ok" if valid else "invalid", "volume": round(total, 1), "layers": layers, "trims": trims}
+    if result.computed_properties:
+        entry["computed"] = {
+            name: round(float(value), 2) if isinstance(value, (int, float)) else value
+            for name, value in result.computed_properties.items()
+        }
 
     # A type with its own trim-measurement function must report exactly the
     # trims its build reports -- they are meant to share one calculation.

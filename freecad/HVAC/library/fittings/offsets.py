@@ -34,13 +34,25 @@ def _as_transition_context(context):
     return mapped
 
 
+def _with_derived(context, result, radiussed=False):
+    """Replace the transition's computed properties with the offset's own (ROADMAP 6.1)."""
+    mapped = _as_transition_context(context)
+    api = mapped["hvac_api"]
+    dims = transitions.offset_dimensions(api, list(api.connected_ports(mapped)), _props(mapped), radiussed)
+    computed = {"BodyLength": dims["body_length"], "OffsetAngle": dims["offset_angle"]}
+    if radiussed:
+        computed["ActualRadius"] = dims["actual_radius"]
+    result["computed_properties"] = computed
+    return result
+
+
 def measure_offset_angled(context):
     return transitions.measure_transition(_as_transition_context(context))
 
 
 def build_offset_angled(context):
     """Offset type 1: one straight inclined piece between the two displaced ports."""
-    return transitions.build_transition(_as_transition_context(context))
+    return _with_derived(context, transitions.build_transition(_as_transition_context(context)))
 
 
 def measure_offset_mitered(context):
@@ -49,7 +61,7 @@ def measure_offset_mitered(context):
 
 def build_offset_mitered(context):
     """Offset type 2: straight end pieces joined by a mitred inclined piece."""
-    return transitions.build_transition_mitered(_as_transition_context(context))
+    return _with_derived(context, transitions.build_transition_mitered(_as_transition_context(context)))
 
 
 def measure_offset_radiussed(context):
@@ -57,5 +69,7 @@ def measure_offset_radiussed(context):
 
 
 def build_offset_radiussed(context):
-    """Offset type 3: an S-curve of two arcs of radius OffsetRadius."""
-    return transitions.build_transition_radiussed(_as_transition_context(context))
+    """Offset type 3: an S-curve of two arcs of radius OffsetRadius (reduced to what fits)."""
+    return _with_derived(
+        context, transitions.build_transition_radiussed(_as_transition_context(context)), radiussed=True
+    )
