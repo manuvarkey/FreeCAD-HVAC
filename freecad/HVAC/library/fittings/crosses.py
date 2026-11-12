@@ -7,6 +7,8 @@ each side (four ports). The straight cross joins square branches with plain
 stubs; the double wye joins inclined branches through a bend each.
 """
 
+import math
+
 from ._common import (
     _clip_junction_to_body,
     _extend_leg,
@@ -17,7 +19,6 @@ from ._common import (
     _loft,
     _mitered_bend,
     _port_axis_point,
-    _positive,
     _props,
     _size,
     _trimmed,
@@ -106,6 +107,40 @@ def build_cross_tee_straight(context):
 # ----------------------------------------------------------------------
 
 
+# The default branch bend reaches this far beyond the run's surface, as a
+# fraction of the distance from the run axis to that surface along the branch.
+_BEND_CLEARANCE = 1.25
+
+
+def _branch_bend_radius(api, requested, branch, from_leg, center):
+    """
+    The radius of a branch bend (double wye, lateral tee): `requested`
+    (BranchRadius) when set, else the radius whose branch-side end lies
+    _BEND_CLEARANCE times the run surface's distance out along the branch,
+    so the bend really emerges from the run instead of sitting inside it
+    (a deep rectangular run swallowed a one-size bend completely). Never
+    less than the branch size, nor than half of it when requested.
+    """
+    size = _size(api, branch)
+    if requested is not None and float(requested or 0.0) > 0.0:
+        return max(float(requested), 0.5 * size)
+    branch_dir = api.unit(api.port_direction(branch))
+    run_dir = api.unit(api.port_direction(from_leg))
+    across = branch_dir - run_dir * branch_dir.dot(run_dir)
+    sin_angle = across.Length
+    # Deflection of the bend: from heading out along from_leg to heading out along the branch.
+    cos_between = max(-1.0, min(1.0, branch_dir.dot(run_dir)))
+    deflection = math.pi - math.acos(cos_between)
+    if sin_angle <= 1.0e-6 or deflection <= 1.0e-6:
+        return size
+    across = api.unit(across)
+    run_profile = api.profile_from_port(api.copy_port(from_leg, position=center))
+    _low, high = api.profile_projection_bounds(run_profile, across)
+    half_depth = max(high - api.vec(center).dot(across), 0.0)
+    reach = _BEND_CLEARANCE * half_depth / sin_angle
+    return max(size, reach / math.tan(deflection / 2.0))
+
+
 def _double_wye_bend(api, branch, trunk_axis_port, radius, cuts, mitered, offset=0.0):
     """
     One branch bend, from the trunk axis out to the branch. Returns
@@ -139,8 +174,7 @@ def _double_wye_layout(context, mitered):
         # The branch turns away from the run leg it makes the wider angle
         # with (air coming from that leg takes the gentle turn into it).
         from_leg = min((run_a, run_b), key=lambda leg: branch_dir.dot(api.unit(api.port_direction(leg))))
-        size = _size(api, branch)
-        radius = max(_positive(p.get("BranchRadius"), size), 0.5 * size)
+        radius = _branch_bend_radius(api, p.get("BranchRadius"), branch, from_leg, center)
         # A port on the trunk axis, where the branch axis meets it, heading out along that run leg.
         trunk_axis_port = api.copy_port(
             branch, position=_port_axis_point(api, branch, center), direction=api.port_direction(from_leg)

@@ -615,7 +615,7 @@ def build_lateral_tee(context):
 
 def _lateral_bend_layout(context, mitered):
     """Ports, branch bend and trims of a lateral tee whose branch joins through a bend."""
-    from .crosses import _double_wye_bend
+    from .crosses import _branch_bend_radius, _double_wye_bend
 
     api = context["hvac_api"]
     p = _props(context)
@@ -628,8 +628,7 @@ def _lateral_bend_layout(context, mitered):
     # so air coming along the run takes the gentle turn into the branch.
     branch_dir = api.unit(api.port_direction(branch))
     from_leg = min((run_a, run_b), key=lambda leg: branch_dir.dot(api.unit(api.port_direction(leg))))
-    size = _size(api, branch)
-    radius = max(_positive(p.get("BranchRadius"), size), 0.5 * size)
+    radius = _branch_bend_radius(api, p.get("BranchRadius"), branch, from_leg, center)
     trunk_axis_port = api.copy_port(
         branch, position=_port_axis_point(api, branch, center), direction=api.port_direction(from_leg)
     )
