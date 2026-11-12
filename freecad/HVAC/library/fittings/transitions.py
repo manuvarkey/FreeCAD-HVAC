@@ -6,6 +6,8 @@ Transitions and offsets between two collinear ports: angled (straight loft),
 radiussed (S-curve) and mitered.
 """
 
+import math
+
 from ._common import _finish, _loft, _positive, _props, _size, _trimmed
 
 
@@ -52,6 +54,25 @@ def _transition_radiussed_route(context):
     # surface back on itself on the inside of the bend (same minimum
     # build_elbow enforces on CenterlineRadius).
     radius = max(radius, 0.5 * size)
+
+    # The two arcs have to fit between the ends and the diagonal: each arc
+    # takes R tan(turn / 2) on either side of its corner. A radius larger
+    # than that is reduced to the largest that fits (a little short of it,
+    # so the straight pieces don't shrink to nothing).
+    axis = api.offset_transition_axis(ports[0], ports[1], total)
+    turn = axis["turn_angle"]
+    if turn > 1.0e-6:
+        room = min(total / 4.0, (axis["corner1"] - axis["corner0"]).Length / 2.0)
+        largest = 0.98 * room / math.tan(turn / 2.0)
+        if largest < 0.5 * size:
+            raise ValueError(
+                "The offset is too steep for a radiussed fitting of this size: make OffsetLength / "
+                "TransitionLength longer (the arcs need a radius of at least {:.0f} mm, only {:.0f} mm fits)".format(
+                    0.5 * size, largest
+                )
+            )
+        radius = min(radius, largest)
+
     route = api.make_radiussed_path(ports[0], ports[1], total, radius)
     return ports, route
 

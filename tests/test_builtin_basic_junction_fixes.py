@@ -89,30 +89,46 @@ def _offset_transition_ports():
     ]
 
 
+class _RadiusRecordingAPI:
+    """The real API, recording the radius make_radiussed_path is called with."""
+
+    def __init__(self):
+        self.radii = []
+
+    def __getattr__(self, name):
+        return getattr(HVACLibraryAPI, name)
+
+    def make_radiussed_path(self, port0, port1, length, radius):
+        self.radii.append(radius)
+        return {"path": None, "ports": [port0, port1], "trim_lengths": [0.0, 0.0]}
+
+
+def _radiussed_radius(params):
+    api = _RadiusRecordingAPI()
+    transitions._transition_radiussed_route(
+        {"hvac_api": api, "params": params, "connected_ports": _offset_transition_ports()}
+    )
+    return api.radii[-1]
+
+
 def test_transition_radiussed_radius_actually_used_not_a_dead_parameter():
-    # TransitionLength=400 fixed; a moderate TransitionRadius (150) fits
-    # the available end-straight length, a large one (200) doesn't --
-    # make_radiussed_path's own feasibility check raises. Seeing the
-    # ValueError only appear once TransitionRadius crosses that boundary
-    # proves the property is genuinely read and passed through (not
-    # aliased away to an unrelated/bogus "Length" value, which would make
-    # this outcome depend on something else entirely).
-    ports = _offset_transition_ports()
-    small_radius_ctx = {
-        "hvac_api": HVACLibraryAPI,
-        "params": {"TransitionLength": 400.0, "TransitionRadius": 150.0},
-        "connected_ports": ports,
-    }
-    large_radius_ctx = {
-        "hvac_api": HVACLibraryAPI,
-        "params": {"TransitionLength": 400.0, "TransitionRadius": 200.0, "Length": 5.0},
-        "connected_ports": ports,
-    }
+    # TransitionRadius is read and passed through when it fits ...
+    assert _radiussed_radius({"TransitionLength": 400.0, "TransitionRadius": 150.0}) == pytest.approx(150.0)
+    assert _radiussed_radius({"TransitionLength": 400.0, "TransitionRadius": 130.0}) == pytest.approx(130.0)
 
-    transitions._transition_radiussed_route(small_radius_ctx)  # must not raise
 
-    with pytest.raises(ValueError):
-        transitions._transition_radiussed_route(large_radius_ctx)
+def test_transition_radiussed_radius_too_large_is_reduced_to_what_fits():
+    # ... and reduced to the largest radius that fits when it does not
+    # (it used to raise "Radius is too large ..."), never using "Length".
+    capped = _radiussed_radius({"TransitionLength": 400.0, "TransitionRadius": 2000.0, "Length": 5.0})
+    assert 100.0 <= capped < 2000.0
+    assert capped == pytest.approx(_radiussed_radius({"TransitionLength": 400.0, "TransitionRadius": 5000.0}))
+
+
+def test_transition_radiussed_too_steep_for_the_duct_size_says_so():
+    with pytest.raises(ValueError) as excinfo:
+        _radiussed_radius({"TransitionLength": 20.0, "TransitionRadius": 0.0})
+    assert "too steep" in str(excinfo.value)
 
 
 def test_transition_length_not_read_from_legacy_length_key():
