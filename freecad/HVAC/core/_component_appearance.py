@@ -73,6 +73,29 @@ def _resolve_type_def(obj):
     return reg.resolve_type(library_id, type_id)
 
 
+def network_display_flags(net):
+    """
+    (shown roles, show features) from a network's ShowLayer_<Role> and
+    ShowFeatures properties; everything shown when net is None or a
+    property is missing.
+    """
+    from ..library.construction import ALL_LAYER_ROLES, role_property_suffix
+
+    shown = {role for role in ALL_LAYER_ROLES if bool(getattr(net, "ShowLayer_" + role_property_suffix(role), True))}
+    return shown, bool(getattr(net, "ShowFeatures", True))
+
+
+def layer_shown(roles, shown_roles):
+    """A layer is drawn when any of its roles is shown; a layer with no role is always drawn."""
+    roles = list(roles or [])
+    return not roles or any(role in shown_roles for role in roles)
+
+
+def _layer_roles_by_id(obj):
+    type_def = _resolve_type_def(obj)
+    return {ldef.id: list(ldef.roles) for ldef in getattr(type_def, "construction", None) or []}
+
+
 def _feature_defs_by_id(obj):
     type_def = _resolve_type_def(obj)
     return {fdef.id: fdef for fdef in getattr(type_def, "features", None) or []}
@@ -161,14 +184,19 @@ def apply_component_appearance(vobj):
         return
     _rendering.add(key)
     try:
+        shown_roles, show_features = network_display_flags(hvaclib.getOwnerNetwork(obj))
+        roles_by_id = _layer_roles_by_id(obj)
         layer_ids = list(getattr(obj, "ConstructionLayerIds", []) or [])
         layer_faces = []
         layer_appearances_by_id = {}
+        hidden_layers = set()
         for layer_id in layer_ids:
             face_count = _face_count(getattr(obj, _construction_schema.shape_property_name(layer_id), None))
             appearance = hvac_materials.get_view_appearance(getattr(obj, _construction_schema.material_property_name(layer_id), None))
             layer_faces.append(face_count)
             layer_appearances_by_id[layer_id] = appearance
+            if not layer_shown(roles_by_id.get(layer_id), shown_roles):
+                hidden_layers.add(layer_id)
 
         feature_defs_by_id = _feature_defs_by_id(obj)
         feature_ids = list(getattr(obj, "ConstructionFeatureIds", []) or [])
@@ -179,9 +207,9 @@ def apply_component_appearance(vobj):
             feature_faces.append(face_count)
 
             feature_def = feature_defs_by_id.get(feature_id)
-            visible = True
+            visible = show_features
             if feature_def is not None and feature_def.visible_parameter:
-                visible = bool(getattr(obj, feature_def.visible_parameter, True))
+                visible = visible and bool(getattr(obj, feature_def.visible_parameter, True))
 
             if visible:
                 appearance = layer_appearances_by_id.get(feature_def.host_layer) if feature_def is not None else None
@@ -191,7 +219,11 @@ def apply_component_appearance(vobj):
 
         if sum(layer_faces) + sum(feature_faces) == 0:
             return
-        if all(a is None for a in layer_appearances_by_id.values()) and all(a is None for a in feature_appearances):
+        if (
+            not hidden_layers
+            and all(a is None for a in layer_appearances_by_id.values())
+            and all(a is None for a in feature_appearances)
+        ):
             return
 
         # A layer/feature with no usable appearance still needs an entry
@@ -201,7 +233,10 @@ def apply_component_appearance(vobj):
         default_appearance = FreeCAD.Material()
         entries = []
         for layer_id, face_count in zip(layer_ids, layer_faces):
-            entries.extend([layer_appearances_by_id[layer_id] or default_appearance] * face_count)
+            if layer_id in hidden_layers:
+                entries.extend([_fully_transparent_appearance()] * face_count)
+            else:
+                entries.extend([layer_appearances_by_id[layer_id] or default_appearance] * face_count)
         for face_count, appearance in zip(feature_faces, feature_appearances):
             entries.extend([appearance or default_appearance] * face_count)
 

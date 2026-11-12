@@ -136,6 +136,25 @@ class DuctNetwork:
             return
         self.requestSync()
 
+    def onChanged(self, obj, prop):
+        # Layer / feature visibility is display only: re-render, never rebuild.
+        if prop == "ShowFeatures" or prop.startswith("ShowLayer_"):
+            self.refreshAppearance()
+
+    def refreshAppearance(self):
+        """Re-apply the per-layer / per-feature appearance of every segment and component of this network."""
+        if not FreeCAD.GuiUp or getattr(self, "Object", None) is None:
+            return
+        from . import _component_appearance
+
+        geometry = getattr(self.Object, "Geometry", None)
+        for child in list(getattr(geometry, "OutList", []) or []):
+            if not (hvaclib.isDuctSegment(child) or hvaclib.isDuctComponent(child)):
+                continue
+            vobj = getattr(child, "ViewObject", None)
+            if vobj is not None:
+                _component_appearance.apply_component_appearance(vobj)
+
     def setProperties(self, obj):
         """Gives the object properties to HVAC ducts."""
         doc = obj.Document
@@ -255,6 +274,32 @@ class DuctNetwork:
                     16,  # Prop_NoRecompute
                 )
             hvac_materials.ensure_persistable_material(obj, prop_name)
+
+        # Display only (Stage 9 item 2): which construction layers and
+        # features are drawn for every segment and component of this
+        # network. A layer is drawn when any of its roles is shown; a hidden
+        # one is made fully transparent (it stays pickable). Prop_NoRecompute:
+        # toggling never rebuilds geometry.
+        for role in ALL_LAYER_ROLES:
+            prop_name = "ShowLayer_" + role_property_suffix(role)
+            if prop_name not in obj.PropertiesList:
+                obj.addProperty(
+                    "App::PropertyBool",
+                    prop_name,
+                    "HVAC Display",
+                    "Draw construction layers playing the '{}' role".format(role),
+                    16,  # Prop_NoRecompute
+                )
+                setattr(obj, prop_name, True)
+        if "ShowFeatures" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyBool",
+                "ShowFeatures",
+                "HVAC Display",
+                "Draw construction features (flanges, stiffeners, ...)",
+                16,  # Prop_NoRecompute
+            )
+            obj.ShowFeatures = True
 
         if not getattr(obj, "DefaultLibraryId", ""):
             lib = hvaclib.HVACLibraryService.get_active_hvac_library()

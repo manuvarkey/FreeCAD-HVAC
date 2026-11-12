@@ -464,10 +464,39 @@ class TaskPanelNetworkTypeDefaults:
             layout.addWidget(row)
             self.role_material_rows[role] = row
 
+        # Display only, applied at once (no recompute): which construction
+        # layers (by role) and features this network draws.
+        layout.addWidget(self._makeSeparator())
+        layout.addWidget(QtWidgets.QLabel(
+            translate("HVAC_NetworkTypeDefaults", "Show layers (display only, applied at once):")
+        ))
+        self.visibility_checks = {}
+        for role in ALL_LAYER_ROLES:
+            prop_name = "ShowLayer_" + role_property_suffix(role)
+            self._addVisibilityCheck(layout, prop_name, _layer_label(role))
+        self._addVisibilityCheck(
+            layout, "ShowFeatures", translate("HVAC_NetworkTypeDefaults", "Construction features (flanges, ...)")
+        )
+
         self._populateLibraries()
         self._loadFromNetwork()
 
         self.library_combo.currentIndexChanged.connect(self._refreshProfiles)
+
+    def _addVisibilityCheck(self, layout, prop_name, label):
+        if prop_name not in self.network_obj.PropertiesList:
+            return
+        check = QtWidgets.QCheckBox(label)
+        check.setChecked(bool(getattr(self.network_obj, prop_name, True)))
+
+        def toggled(_state, prop_name=prop_name, check=check):
+            value = check.isChecked()
+            if bool(getattr(self.network_obj, prop_name, True)) != value:
+                setattr(self.network_obj, prop_name, value)
+
+        check.stateChanged.connect(toggled)
+        layout.addWidget(check)
+        self.visibility_checks[prop_name] = check
 
     def _makeSeparator(self):
         line = QtWidgets.QFrame()
