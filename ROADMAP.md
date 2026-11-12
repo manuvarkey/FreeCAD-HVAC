@@ -782,54 +782,80 @@ feature as a separate shape (`Feature_<id>_Shape`).
 **Problem.** Decision 4: the user selects a FreeCAD object and defines
 ports on it to describe a fitting, with any number of ports.
 
+**Owner answers (12 November 2026):**
+- (a) A link to the custom shape is placed at the node; the ducts clip on
+  to the defined port attachment points.
+- (b) The custom object is the full modelled fitting, walls and thickness
+  included. Ports are marked by a datum object (explore which).
+- (c) Junctions only.
+
+**Port marker: explored in FreeCAD 1.1.4.**
+
+| Object | Attached to a duct end face | Verdict |
+|---|---|---|
+| `Part::LocalCoordinateSystem` (LCS) | `FlatFace`: origin at the face, Z along the outward normal; follows the face when the model changes | **Use.** Full frame: Z gives the port direction, X the width axis of a rectangular or oval port. Takes dynamic properties. |
+| `Part::DatumPlane` | Same placement as the LCS | Works, but shows no X axis, which a rectangular port needs. |
+| `Part::DatumPoint` | Position only, no direction | Not enough. |
+| LCS on a circular edge, `Concentric` | Origin at the circle centre, Z along its axis, sign not guaranteed outward | Fallback for round ports; sign checked against the body. |
+
+An `App::Link` to an `App::Part` that holds the body and the LCSs works:
+the port's global placement is link x part x LCS, and `Part.getShape(link)`
+returns the placed shape.
+
 **Design.**
 
-1. **Where it lives.** `GeometrySource` (`Library`, `Custom`) on
-   `DuctComponent`, like `LossCoefficientSource`. `Custom` adds
-   `CustomShapeSource` (`App::PropertyLink` to any object with a
-   `Shape`), and per-port lists: `CustomPortPosition`,
-   `CustomPortDirection` (outward), `CustomPortProfile`,
-   `CustomPortSize` (diameter, or width and height), all in the source
-   object's local coordinates.
-2. **Defining ports.** A task panel: pick a planar face of the source and
-   it fills one port (centre of the face, its outward normal, and a
-   profile and size read from the face's outer wire: a circle gives a
-   diameter; a rectangle width and height; anything else falls back to
-   the area-equivalent circle, with a warning). Ports can be added,
-   edited and removed by hand too.
-3. **Placement.** The network decides where a node is, so the custom
-   shape is moved onto the node: the rigid transform that best maps the
-   custom ports onto the node's connected ports. Mapping is by direction
-   (each custom port to the connected port whose outward direction is
-   closest), with a manual override list `CustomPortEdgeKeys`. The
-   transform: Kabsch fit of port positions and directions, as
-   `static_shapes._build_transform` does for two ports, generalised to n.
-   A port more than a tolerance away from its duct after the fit is an
-   error on the component that says which port and by how much.
-4. **Trims.** Each duct is trimmed to its custom port's face: the trim is
-   the distance along the duct axis from the node to the placed port
-   plane. These become the result's `connection_lengths`, so segments
-   trim exactly as they do for library fittings.
-5. **Walls and layers.** The source is taken as the outside of the
-   fitting and goes into the structural layer as it is. Option
-   `CustomShapeIsAirSpace`: the source is the air space, and the
-   finisher's `envelope(offset)` is
-   `source.makeOffsetShape(offset)`, so the type's construction layers are
-   built around it like any shared fitting (this can fail for awkward
-   shapes; the error says so).
-6. **Loss.** The node's library type still provides the loss (its
-   topology and family do not change). A custom fitting that matches no
-   table uses `LossCoefficientSource = Custom` (per-port K, exists).
-7. **Port count.** Any number of ports, through the Stage 3 per-port
-   mechanism; the node's degree must equal the custom port count.
-8. **Save as library type** (later): write the placed shape as BREP plus a
-   static descriptor into a user library, ports from the definition.
+1. **The custom fitting** is an `App::Part` (a container) holding the
+   user's modelled fitting (any objects with a `Shape`, walls included)
+   and one LCS per port. Each port LCS carries dynamic properties in a
+   group `HVAC Port`: `PortProfile` (`Circular`, `Rectangular`, `Oval`),
+   `PortDiameter` or `PortWidth` / `PortHeight` (clear-air size of the
+   opening), and an optional `PortName`. Z of the LCS points out of the
+   fitting, X along the width of a rectangular or oval port. The same
+   container can be used at many nodes.
+2. **Defining ports.** Command "Add HVAC Port": select a planar end face
+   of the fitting. It creates an LCS attached to that face (`FlatFace`,
+   with an `AttachmentOffset` that moves the origin to the centre of the
+   opening, because `FlatFace` puts it at the face's own surface origin,
+   which is only the centre for symmetric faces), flips Z outward if
+   needed, and fills profile and size from the face's inner wire (the
+   air opening): a circle gives a diameter; a rectangle width and height
+   and the X direction; a slot an oval; anything else an error asking for
+   the size by hand. The user can edit every value afterwards.
+3. **Using it.** `DuctComponent` (Primary only) gets `GeometrySource`
+   (`Library`, `Custom`) and `CustomFitting` (`App::PropertyLink` to the
+   container). With `Custom`, the component creates and owns an
+   `App::Link` to the container, inside the junction's group, and keeps its
+   `LinkPlacement` up to date. The component's own shape is empty; the
+   link is what is seen, selected and exported. No construction layers
+   are built: the walls are whatever the user modelled, with the user's
+   own materials.
+4. **Placement at the node.** The link is rigid, so the ducts must arrive
+   the way the ports point. On each recompute:
+   - Match ports to connected ducts: the node's port count must equal the
+     custom port count. Each port is matched to the duct whose outward
+     direction is closest (one-to-one, best total angle). A per-port
+     override list `CustomPortEdgeKeys` (Stage 3 mechanism) fixes it by
+     hand.
+   - Rotation: the best fit of the port Z axes onto the duct directions
+     (Kabsch). When all ports are parallel (a straight-through fitting)
+     the roll about that axis is free: the port X axes are fitted to the
+     ducts' profile X axes; for round ducts the roll stays 0.
+   - Translation: least squares, so every port origin lies on its duct's
+     centre line; any direction left free (ports all parallel) is fixed
+     by putting the ports' centroid at the node.
+   - A port more than 1 degree or 1 mm off its duct after the fit is a
+     `GeometryError` on the component naming the port and the error.
+5. **Ducts clip to the ports.** Each duct's trim is the distance along
+   its axis from the node to its placed port origin, reported as
+   `connection_lengths` exactly like a library fitting, so segments end at
+   the port faces. A duct whose section differs from its port's size gets
+   a warning (it needs a reducer), not an error.
+6. **Loss.** The node keeps its library type for the loss (its topology
+   and family do not change), or the user sets
+   `LossCoefficientSource = Custom` (per-port K, exists). The port sizes
+   from the LCSs are what the loss sees.
+7. **Not included:** custom segments (answer c); building layers around a
+   custom shape; saving a custom fitting as a library type (can follow,
+   as a static descriptor generated from the container).
 
-**Owner input needed:**
-- (a) Is moving the custom shape onto the node (3) right, or should the
-  shape stay where the user drew it and the ducts follow it?
-- (b) Is the source the outside of the fitting by default, with
-  "air space" as the option (5), or the other way round?
-- (c) Junctions only, or segments too (a custom straight piece)?
-
-Until answered, Stage 10 is not started.
+**Owner input:** review of this revised design.
