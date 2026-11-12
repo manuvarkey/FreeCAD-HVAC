@@ -1261,7 +1261,7 @@ class AirflowResultObserver:
     reads is mouse movement, for the hover tooltip: once the mouse rests
     (HOVER_DELAY_MS) it ray-picks its own planes and boxes, else asks the
     view for the duct or fitting under the cursor, and shows that result as
-    a QToolTip (text from core/_component_results.py). Like that overlay, this
+    a tooltip-style popup of its own (text from core/_component_results.py). Like that overlay, this
     never touches the document/undo stack, with one deliberate exception:
     while either visualization is enabled, every segment/component's own
     ShapeAppearance in the network is temporarily overridden to a neutral
@@ -1292,9 +1292,9 @@ class AirflowResultObserver:
     HOVER_DELAY_MS = 350
     HOVER_PICK_RADIUS = 4
     # The tooltip stays while the cursor is within this many pixels of where
-    # it opened (and at most HOVER_SHOW_MS); moving further re-picks.
+    # it opened; moving further closes it and re-picks.
     HOVER_HOLD_PX = 10
-    HOVER_SHOW_MS = 60000
+    HOVER_WATCH_MS = 200
 
     JUNCTION_COLOR_FIELDS = ("flow_rate", "static_pressure")
     JUNCTION_COLOR_LABELS = {
@@ -1330,7 +1330,9 @@ class AirflowResultObserver:
         self._hover_targets = []  # [(SoNode, callable returning the tooltip text), ...]
         self._hover_pos = None
         self._hover_timer = None
-        self._hover_shown_at = None  # (x, y) viewport position the current tooltip opened at
+        self._hover_shown_at = None  # (x, y) global cursor position the current tip opened at
+        self._hover_watch = None
+        self._tip = None
 
     def start(self):
         vobj = getattr(self.network_obj, "ViewObject", None)
@@ -1779,11 +1781,18 @@ class AirflowResultObserver:
         self._hover_timer = QtCore.QTimer()
         self._hover_timer.setSingleShot(True)
         self._hover_timer.timeout.connect(self._onHoverIdle)
+        # Closes the tip once the cursor has moved away from it, also when it
+        # leaves the 3D view (which then sends no more mouse events here).
+        self._hover_watch = QtCore.QTimer()
+        self._hover_watch.setInterval(self.HOVER_WATCH_MS)
+        self._hover_watch.timeout.connect(self._watchTip)
 
     def _detachHover(self):
-        if self._hover_timer is not None:
-            self._hover_timer.stop()
-            self._hover_timer = None
+        for timer in (self._hover_timer, getattr(self, "_hover_watch", None)):
+            if timer is not None:
+                timer.stop()
+        self._hover_timer = None
+        self._hover_watch = None
         if self._hover_root is not None:
             try:
                 vobj = getattr(self.network_obj, "ViewObject", None)
@@ -1793,20 +1802,66 @@ class AirflowResultObserver:
                 pass
         self._hover_root = None
         self._hover_targets = []
+        self._hideTip()
+        if getattr(self, "_tip", None) is not None:
+            self._tip.deleteLater()
+            self._tip = None
+
+    def _tipLabel(self):
+        """
+        Our own tooltip-looking popup. QToolTip is not used: the 3D view's
+        event handling closes it within about a second whatever its
+        timeout, so this one is shown and hidden only by this observer.
+        """
+        if getattr(self, "_tip", None) is None:
+            tip = QtWidgets.QLabel(Gui.getMainWindow(), QtCore.Qt.ToolTip | QtCore.Qt.FramelessWindowHint)
+            tip.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
+            tip.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+            tip.setPalette(QtWidgets.QToolTip.palette())
+            tip.setFont(QtWidgets.QToolTip.font())
+            tip.setAutoFillBackground(True)
+            tip.setFrameShape(QtWidgets.QFrame.Box)
+            tip.setMargin(4)
+            tip.setTextFormat(QtCore.Qt.PlainText)
+            self._tip = tip
+        return self._tip
+
+    def _showTip(self, text, global_pos):
+        tip = self._tipLabel()
+        tip.setText(text)
+        tip.adjustSize()
+        tip.move(global_pos + QtCore.QPoint(16, 20))
+        tip.show()
+        tip.raise_()
+        self._hover_shown_at = (global_pos.x(), global_pos.y())
+        if self._hover_watch is not None:
+            self._hover_watch.start()
+
+    def _hideTip(self):
         self._hover_shown_at = None
-        QtWidgets.QToolTip.hideText()
+        if getattr(self, "_hover_watch", None) is not None:
+            self._hover_watch.stop()
+        if getattr(self, "_tip", None) is not None:
+            self._tip.hide()
+
+    def _cursorNearTip(self):
+        if self._hover_shown_at is None:
+            return False
+        cursor = QtGui.QCursor.pos()
+        sx, sy = self._hover_shown_at
+        return abs(cursor.x() - sx) <= self.HOVER_HOLD_PX and abs(cursor.y() - sy) <= self.HOVER_HOLD_PX
+
+    def _watchTip(self):
+        if not self._cursorNearTip():
+            self._hideTip()
 
     def _onMouseMove(self, user_data, event_callback):
         # Never handled here: the move still reaches FreeCAD (preselection, navigation).
-        event = event_callback.getEvent()
-        pos = event.getPosition()
-        self._hover_pos = pos
-        x, y = pos.getValue()
+        self._hover_pos = event_callback.getEvent().getPosition()
         if self._hover_shown_at is not None:
-            sx, sy = self._hover_shown_at
-            if abs(x - sx) <= self.HOVER_HOLD_PX and abs(y - sy) <= self.HOVER_HOLD_PX:
-                return  # still on what the open tooltip describes: leave it alone
-            self._hover_shown_at = None
+            if self._cursorNearTip():
+                return  # still on what the open tip describes: leave it alone
+            self._hideTip()
         if self._hover_timer is not None:
             self._hover_timer.start(self.HOVER_DELAY_MS)
 
@@ -1816,28 +1871,10 @@ class AirflowResultObserver:
         except Exception as e:
             FreeCAD.Console.PrintLog("HVAC - result tooltip: {}\n".format(e))
             text = ""
-        if not text:
-            QtWidgets.QToolTip.hideText()
-            return
-        cursor = QtGui.QCursor.pos()
-        widget = QtWidgets.QApplication.widgetAt(cursor)
-        try:
-            if widget is not None:
-                # Held open while the cursor stays inside this small area of the view widget.
-                local = widget.mapFromGlobal(cursor)
-                hold = QtCore.QRect(
-                    local.x() - self.HOVER_HOLD_PX,
-                    local.y() - self.HOVER_HOLD_PX,
-                    2 * self.HOVER_HOLD_PX + 1,
-                    2 * self.HOVER_HOLD_PX + 1,
-                )
-                QtWidgets.QToolTip.showText(cursor, text, widget, hold, self.HOVER_SHOW_MS)
-            else:
-                QtWidgets.QToolTip.showText(cursor, text)
-        except TypeError:
-            QtWidgets.QToolTip.showText(cursor, text, widget)
-        if self._hover_pos is not None:
-            self._hover_shown_at = tuple(self._hover_pos.getValue())
+        if text:
+            self._showTip(text, QtGui.QCursor.pos())
+        else:
+            self._hideTip()
 
     def _hoverText(self):
         """Tooltip for what is under the cursor: an overlay plane or box first, else a duct or fitting of this network."""
