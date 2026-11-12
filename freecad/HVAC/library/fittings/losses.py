@@ -48,6 +48,17 @@ def loss_elbow_generic(context):
     return context["loss_api"].elbow_loss(context)
 
 
+def loss_elbow_mitered(context):
+    # An elbow made of straight pieces (NumberOfCuts + 1 of them): the gored
+    # elbow table, or the plain mitered one when there is a single joint.
+    return context["loss_api"].elbow_loss(_with_properties(context, ElbowConstruction="gored"))
+
+
+def loss_elbow_vaned(context):
+    # A mitered rectangular elbow with turning vanes of the VaneDesign given.
+    return context["loss_api"].elbow_loss(_with_properties(context, ElbowConstruction="turning_vanes"))
+
+
 def loss_transition_generic(context):
     return context["loss_api"].transition_loss(context)
 

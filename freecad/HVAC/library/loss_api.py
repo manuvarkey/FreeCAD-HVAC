@@ -39,6 +39,7 @@ from ..analysis.loss import LossEvaluation, LossPath, LossStatus
 from . import smacna_loss
 from .fittings import taps as tap_fittings
 from .library_api import HVACLibraryAPI
+from .loss_tables import elbows as elbow_tables
 from .loss_tables import entries_exits as entry_exit_tables
 from .loss_tables import junctions_diverging as diverging_tables
 from .loss_tables import obstructions as obstruction_tables
@@ -92,15 +93,46 @@ class HVACLossAPI:
         return LossEvaluation(paths=[], status=LossStatus.UNSUPPORTED, warning=warning)
 
     @staticmethod
+    def _bend_dims_mm(port, bend_normal):
+        """
+        (W, H) of a rectangular or oval section the way the elbow tables
+        mean them: W lies in the plane of the bend, H is square to it. Which
+        of the duct's own Width/Height that is depends on how the section
+        is turned relative to the bend.
+        """
+        width = float(HVACLibraryAPI.port_width(port))
+        height = float(HVACLibraryAPI.port_height(port))
+        if bend_normal is None:
+            return width, height
+        _placement, x_axis, _y_axis, _z_axis = HVACLibraryAPI.make_profile_frame(
+            HVACLibraryAPI.port_direction(port), HVACLibraryAPI.port_profile_x_axis(port)
+        )
+        # The duct's Width runs along x_axis: if that points out of the bend plane, Width is the tables' H.
+        if abs(x_axis.dot(bend_normal)) > 0.7071:
+            return height, width
+        return width, height
+
+    @staticmethod
     def elbow_loss(context):
         """
-        Smooth-radius elbow fitting loss, for any turn angle: the 90 deg
-        table value times the turn-angle factor (SMACNA Table 14-10 Note 1).
-        Expects exactly 2 connected_ports (one inlet, one outlet) and a
-        "CenterlineRadius" entry in properties.
-        Returns one EXACT LossPath referenced to the outlet's own
-        velocity, or UNSUPPORTED if the topology/geometry doesn't support
-        the calculation.
+        Loss of an elbow (SMACNA Table 14-10), for any turn angle.
+        properties["ElbowConstruction"] picks how the elbow is made:
+
+        - "smooth" (default): smooth radius. Round: 14-10 A. Rectangular:
+          14-10 F, or 14-10 G when SplitterVanes is 1 to 3. Needs
+          CenterlineRadius.
+        - "gored": made of straight pieces, NumberOfCuts + 1 of them. Round
+          with 3 to 5 pieces: 14-10 B (needs CenterlineRadius). Two pieces
+          is a plain mitered elbow (below). A gored rectangular elbow has
+          no table; the smooth one is used and flagged.
+        - "mitered": one mitre joint. Round: 14-10 C. Rectangular: 14-10 D.
+        - "turning_vanes": rectangular, mitered, with turning vanes: 14-10 H
+          for the VaneDesign given (see loss_tables.elbows.TURNING_VANES).
+
+        Expects exactly 2 connected ports (one inlet, one outlet). Returns
+        one LossPath referenced to the outlet's velocity: EXACT when the
+        point was inside the printed table, APPROXIMATION (with the reason)
+        when it was not, UNSUPPORTED when the fitting cannot be worked out.
         """
         try:
             ports = HVACLibraryAPI.connected_ports(context)
@@ -111,37 +143,96 @@ class HVACLossAPI:
                 return HVACLossAPI._unsupported("could not resolve outlet direction")
             inlet = next((p for p in ports if p is not outlet), None)
 
-            radius = float((context.get("properties") or {}).get("CenterlineRadius", 0.0) or 0.0)
+            properties = context.get("properties") or {}
+            construction = HVACLossAPI._choice(properties.get("ElbowConstruction"), "smooth")
+            radius = float(properties.get("CenterlineRadius", 0.0) or 0.0)
             profile = HVACLibraryAPI.port_profile(outlet)
-
-            if profile == "Circular":
-                diameter = HVACLibraryAPI.port_diameter(outlet)
-                if diameter <= 0.0 or radius <= 0.0:
-                    return HVACLossAPI._unsupported("invalid diameter/CenterlineRadius")
-                zeta = smacna_loss.elbow_zeta_round(radius / diameter)
-            elif profile in ("Rectangular", "Oval"):
-                width = HVACLibraryAPI.port_width(outlet)
-                height = HVACLibraryAPI.port_height(outlet)
-                if width <= 0.0 or height <= 0.0 or radius <= 0.0:
-                    return HVACLossAPI._unsupported("invalid width/height/CenterlineRadius")
-                reynolds = float(outlet.get("reynolds", 0.0) or 0.0)
-                if reynolds <= 0.0:
-                    return HVACLossAPI._unsupported("no Reynolds number available (zero flow?)")
-                zeta = smacna_loss.elbow_zeta_rect(height / width, radius / width, reynolds)
-            else:
+            if profile not in ("Circular", "Rectangular", "Oval"):
                 return HVACLossAPI._unsupported("unsupported profile '{}'".format(profile))
+            is_round = profile == "Circular"
+            reynolds = float(outlet.get("reynolds", 0.0) or 0.0)
+            notes = []
 
-            # Port directions point outward, so two ports of a straight
-            # run are 180 deg apart: the turn is whatever is missing from that.
-            between = math.degrees(
-                HVACLibraryAPI.angle_between(
-                    HVACLibraryAPI.unit(HVACLibraryAPI.port_direction(inlet)),
-                    HVACLibraryAPI.unit(HVACLibraryAPI.port_direction(outlet)),
-                )
-            )
-            zeta *= smacna_loss.elbow_angle_factor(max(0.0, 180.0 - between))
+            # Step 1: the turn. Port directions point outward, so the two
+            # ports of a straight run are 180 deg apart: the turn is
+            # whatever is missing from that.
+            d_in = HVACLibraryAPI.unit(HVACLibraryAPI.port_direction(inlet))
+            d_out = HVACLibraryAPI.unit(HVACLibraryAPI.port_direction(outlet))
+            theta = max(0.0, 180.0 - math.degrees(HVACLibraryAPI.angle_between(d_in, d_out)))
+            normal = d_in.cross(d_out)
+            normal = HVACLibraryAPI.unit(normal) if normal.Length > 1.0e-9 else None
 
-            return HVACLossAPI._exact([HVACLossAPI._leg_path(outlet, inlet["edge_key"], zeta, source="smacna_elbow")])
+            # Step 2: the section, as the tables measure it.
+            if is_round:
+                diameter = float(HVACLibraryAPI.port_diameter(outlet))
+                if diameter <= 0.0:
+                    return HVACLossAPI._unsupported("invalid diameter")
+            else:
+                width, height = HVACLossAPI._bend_dims_mm(outlet, normal)
+                if width <= 0.0 or height <= 0.0:
+                    return HVACLossAPI._unsupported("invalid width/height")
+
+            def smooth_rectangular():
+                if reynolds <= 0.0:
+                    return None
+                return elbow_tables.smooth_rect(height / width, radius / width, reynolds, theta)
+
+            # Step 3: a gored elbow of two pieces is a plain mitered one.
+            pieces = int(properties.get("NumberOfCuts", 1) or 1) + 1
+            if construction == "gored" and pieces <= 2:
+                construction = "mitered"
+
+            # Step 4: read the table for this construction.
+            if construction in ("smooth", "gored") and radius <= 0.0:
+                return HVACLossAPI._unsupported("invalid diameter/CenterlineRadius")
+
+            if construction == "smooth":
+                vanes = int(properties.get("SplitterVanes", 0) or 0)
+                if is_round:
+                    lookup = elbow_tables.smooth_round(radius / diameter, theta)
+                elif vanes > 0:
+                    throat = radius - width / 2.0
+                    if throat <= 0.0:
+                        return HVACLossAPI._unsupported("CenterlineRadius leaves no throat radius for splitter vanes")
+                    if vanes > 3:
+                        notes.append("table stops at 3 splitter vanes")
+                    lookup = elbow_tables.smooth_rect_splitter_vanes(
+                        min(vanes, 3), throat / width, height / width, theta
+                    )
+                else:
+                    lookup = smooth_rectangular()
+                    if lookup is None:
+                        return HVACLossAPI._unsupported("no Reynolds number available (zero flow?)")
+            elif construction == "gored":
+                if is_round:
+                    if pieces > 5:
+                        notes.append("table stops at 5 pieces")
+                    lookup = elbow_tables.gored_round(min(pieces, 5), radius / diameter, theta)
+                else:
+                    lookup = smooth_rectangular()
+                    if lookup is None:
+                        return HVACLossAPI._unsupported("no Reynolds number available (zero flow?)")
+                    notes.append("no table for a gored rectangular elbow, smooth radius elbow used")
+            elif construction == "mitered":
+                re = reynolds if reynolds > 0.0 else None
+                if is_round:
+                    lookup = elbow_tables.mitered_round(theta, re)
+                else:
+                    lookup = elbow_tables.mitered_rect(height / width, theta, re)
+            elif construction == "turning_vanes":
+                if is_round:
+                    return HVACLossAPI._unsupported("turning vanes are tabulated for rectangular elbows only")
+                design = HVACLossAPI._choice(properties.get("VaneDesign"), "single_r50_s38")
+                lookup = elbow_tables.mitered_rect_turning_vanes(design, float(outlet.get("velocity_ms", 0.0) or 0.0))
+                if abs(theta - 90.0) > 1.0:
+                    notes.append("table is for a 90 degree elbow")
+            else:
+                return HVACLossAPI._unsupported("unknown ElbowConstruction '{}'".format(construction))
+
+            if profile == "Oval":
+                notes.append("table is not printed for an Oval duct")
+            source = "smacna_elbow" if construction == "smooth" else "smacna_elbow_" + construction
+            return HVACLossAPI._from_lookup(outlet, inlet["edge_key"], lookup, source, notes)
         except Exception as exc:
             return HVACLossAPI._unsupported("unexpected error computing elbow loss: {}".format(exc))
 

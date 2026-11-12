@@ -81,7 +81,7 @@ def test_through_elbow_rectangular_uses_partscript_backend():
     by_name = {p.name: p for p in type_def.properties}
     input_names = {
         "CenterlineRadius", "Thickness", "FlangeHeight", "FlangeThickness",
-        "ShowFlange1", "ShowFlange2", "InsulationThickness",
+        "ShowFlange1", "ShowFlange2", "InsulationThickness", "SplitterVanes",
     }
     assert input_names == set(by_name.keys())
 
