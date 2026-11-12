@@ -331,6 +331,12 @@ def connect(equipment, port_marker, junction):
     primary = junction.Proxy.getPrimaryComponent()
     library_id = getattr(primary, "LibraryId", "") if primary is not None else ""
     library_id = library_id or getattr(net, "DefaultLibraryId", "")
+    reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
+    if reg.resolve_type(library_id, CONNECTION_TYPE_ID) is None:
+        warnings.append(
+            "Library '{}' has no {} type; the builtin_basic one is used".format(library_id, CONNECTION_TYPE_ID)
+        )
+        library_id = "builtin_basic"
     DuctNetwork.applyTypeSelection([junction], library_id=library_id, type_id=CONNECTION_TYPE_ID)
     return warnings
 

@@ -111,11 +111,15 @@ class DuctJunction:
         if doc is None or getattr(doc, "Restoring", False) or getattr(obj, "Topology", "") != "end":
             return
         owner = hvaclib.getOwnerNetwork(obj)
-        if owner is not None and getattr(owner, "Proxy", None) is not None:
-            try:
-                owner.Proxy.requestSync()
-            except Exception:
-                pass
+        proxy = getattr(owner, "Proxy", None) if owner is not None else None
+        # A sync already running (it is creating or updating this junction)
+        # re-classifies it anyway.
+        if proxy is None or getattr(proxy, "_sync_in_progress", False):
+            return
+        try:
+            proxy.requestSync()
+        except Exception:
+            pass
 
     def onChanged(self, obj, prop):
         if prop == "TerminalFunction" or (

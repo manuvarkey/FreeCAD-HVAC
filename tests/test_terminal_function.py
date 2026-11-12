@@ -12,6 +12,29 @@ from freecad.HVAC.core.FlowNetwork import terminal_direction_warnings
 
 
 @pytest.mark.parametrize(
+    "system, flow_class, expected",
+    [
+        ("Supply", "exit", "Supply"),
+        ("Supply", "entry", "Source"),  # air comes in from the equipment
+        ("Return", "entry", "Return"),
+        ("Return", "exit", "Source"),  # air goes to the equipment
+        ("Exhaust", "exit", "Source"),
+        ("OutdoorAir", "entry", "OutdoorAir"),
+    ],
+)
+def test_auto_follows_the_drawn_direction(system, flow_class, expected):
+    # Whatever the boundary says: a fresh network leaves every terminal at FlowBoundary Auto.
+    assert tf.resolve(system, "Auto", "Auto", flow_class) == expected
+    assert tf.resolve(system, "Auto", "Fixed", flow_class) == expected
+
+
+def test_balancing_warning():
+    assert tf.balancing_warning("AHU", "Source", "Supply", "Auto") == ""
+    assert tf.balancing_warning("D7", "Supply", "Supply", "Fixed") == ""
+    assert "D7" in tf.balancing_warning("D7", "Supply", "Supply", "Auto")
+
+
+@pytest.mark.parametrize(
     "system, setting, boundary, expected",
     [
         ("Supply", "Auto", "Fixed", "Supply"),
@@ -50,12 +73,13 @@ def test_direction_warning_only_when_drawn_the_wrong_way():
     assert "T1" in message and "inlet" in message and "outlet" in message
 
 
-def _junction(label, flow_class, function, topology="end"):
+def _junction(label, flow_class, function, topology="end", boundary="Fixed"):
     return SimpleNamespace(
         Number="",
         Label=label,
         Name=label,
         Topology=topology,
+        FlowBoundary=boundary,
         AnalysisJson=json.dumps({"flow_class": flow_class, "qualifiers": {"terminal_function": function}}),
     )
 
@@ -91,3 +115,12 @@ def test_type_list_follows_the_terminal_function():
     assert "end_diffuser_round" in supply and "end_diffuser_round" not in outdoor
     assert "end_hood_intake" in outdoor and "end_hood_intake" not in supply
     assert "end_entry_plain" in supply and "end_entry_plain" in outdoor  # unconstrained
+
+
+def test_balancing_terminal_drawn_the_wrong_way_is_named_once_it_is_the_only_one():
+    net = SimpleNamespace(SystemType="Supply")
+    wrong = {"a": _junction("AHU", "exit", "Supply", boundary="Auto"), "b": _junction("D1", "exit", "Supply")}
+    warnings = terminal_direction_warnings(net, wrong)
+    assert len(warnings) == 1 and "AHU" in warnings[0] and "balances" in warnings[0]
+    unconfigured = {k: _junction(k, "exit", "Supply", boundary="Auto") for k in ("D1", "D2", "D3")}
+    assert terminal_direction_warnings(net, unconfigured) == []

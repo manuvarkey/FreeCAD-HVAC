@@ -1412,6 +1412,7 @@ class DuctNetwork:
                     getattr(net, "SystemType", "Supply"),
                     getattr(known, "TerminalFunction", "Auto") if known is not None else "Auto",
                     getattr(known, "FlowBoundary", "Auto") if known is not None else "Auto",
+                    junction_analysis.flow_class,
                 )
             analysis_dict = asdict(junction_analysis)
             analysis_json = json.dumps(analysis_dict)

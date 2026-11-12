@@ -153,7 +153,6 @@ class TaskPanelEditDuctNetwork:
         for item in selected_items:
             self.list_view.takeItem(self.list_view.row(item))
         # Remove based on selection in 3D view
-        doc = self.hvac_network.Document
         selected_objects = self.get_valid_selection(include_derived=True)
         for obj in selected_objects:
             if obj in self.hvac_network.Base.OutList:

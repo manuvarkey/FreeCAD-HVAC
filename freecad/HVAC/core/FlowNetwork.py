@@ -73,18 +73,24 @@ def terminal_direction_warnings(net_obj, junction_map):
     off each end junction's own classification (AnalysisJson).
     """
     system = str(getattr(net_obj, "SystemType", "Supply") or "Supply")
+    terminals = [j for j in junction_map.values() if getattr(j, "Topology", "") == "end"]
+    # Only judge the balancing terminal once there is exactly one; several
+    # Auto terminals are already a flow-solver error of their own.
+    single_balancing = sum(1 for j in terminals if str(getattr(j, "FlowBoundary", "")) == "Auto") == 1
     out = []
-    for junction in junction_map.values():
-        if getattr(junction, "Topology", "") != "end":
-            continue
+    for junction in terminals:
         try:
             analysis = json.loads(getattr(junction, "AnalysisJson", "") or "{}")
         except ValueError:
             continue
         function = (analysis.get("qualifiers") or {}).get("terminal_function", "")
-        message = _terminal_function.direction_warning(
-            _analysis_adapter.element_identifier(junction), function, system, analysis.get("flow_class", "")
-        )
-        if message:
-            out.append(message)
+        label = _analysis_adapter.element_identifier(junction)
+        for message in (
+            _terminal_function.direction_warning(label, function, system, analysis.get("flow_class", "")),
+            _terminal_function.balancing_warning(label, function, system, getattr(junction, "FlowBoundary", ""))
+            if single_balancing
+            else "",
+        ):
+            if message:
+                out.append(message)
     return out

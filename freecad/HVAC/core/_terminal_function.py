@@ -33,14 +33,38 @@ _FLOW_CLASS = {
 }
 
 
-def resolve(system_type, setting, flow_boundary):
-    """The terminal function of an end node: its own setting, or (Auto) the one its system and boundary imply."""
+def resolve(system_type, setting, flow_boundary, flow_class=""):
+    """
+    The terminal function of an end node: its own setting, or (Auto) what
+    its system and drawn direction imply. In a supply system the terminal
+    where air comes into the ducts is the Source (the equipment feeds it)
+    and every other terminal a supply outlet; in the other systems the
+    terminal where air leaves the ducts is the Source (it goes to the fan)
+    and the others are the system's inlets. With no known direction, a
+    FlowBoundary Auto terminal (the balancing one) is the Source.
+    """
     setting = str(setting or "Auto")
     if setting != "Auto":
         return setting
-    if str(flow_boundary or "Auto") == "Auto":
-        return "Source"
-    return _SYSTEM_TERMINAL.get(str(system_type or "Supply"), "Supply")
+    system_type = str(system_type or "Supply")
+    terminal = _SYSTEM_TERMINAL.get(system_type, "Supply")
+    if flow_class in ("entry", "exit"):
+        return "Source" if flow_class == expected_flow_class("Source", system_type) else terminal
+    return "Source" if str(flow_boundary or "Auto") == "Auto" else terminal
+
+
+def balancing_warning(label, function, system_type, flow_boundary):
+    """
+    A warning when the balancing terminal (FlowBoundary Auto, where the
+    fan or equipment is) is not the system's Source, e.g. a supply
+    network's equipment end drawn as an outlet; else "".
+    """
+    if str(flow_boundary or "") != "Auto" or function in ("", "Source"):
+        return ""
+    return (
+        "Terminal '{}' balances the {} system (FlowBoundary Auto) but is drawn as a {} terminal; "
+        "the equipment end should be drawn the other way (Edit Duct Directions)".format(label, system_type, function)
+    )
 
 
 def expected_flow_class(function, system_type):

@@ -204,7 +204,6 @@ class PressureBalanceCoordinator:
         dh_m = physics.section_hydraulic_diameter_m(section)
         if area_m2 <= 0.0 or dh_m <= 0.0:
             return 0.0
-        velocity_ms = physics.velocity_from_flow(physics.lps_to_m3s(flow_lps), area_m2)
         return friction_models.rate_pa_per_m(
             seg.friction_model,
             physics.lps_to_m3s(flow_lps),

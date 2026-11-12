@@ -2481,8 +2481,6 @@ def iter_line_segments_from_shape(obj, tol=1e-9):
         if (v1.sub(v2)).Length <= tol:
             continue
 
-        tag = hvaclib.makeLineKey(obj.Name, slno)
-
         yield (
             hvaclib.vec_to_xyz(v1),
             hvaclib.vec_to_xyz(v2)

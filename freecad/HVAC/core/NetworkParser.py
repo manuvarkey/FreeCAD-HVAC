@@ -341,7 +341,8 @@ class DuctNetworkParser:
             if kind == "Unknown":
                 continue
 
-            edge = Part.Edge(geo)
+            # Raises for geometry Part cannot turn into an edge, before it is used.
+            Part.Edge(geo)
     
             yield (
                 vec_to_xyz(sp),
@@ -1334,13 +1335,10 @@ class DuctNetworkParser:
         """
         degree = node_analysis.degree
         
-        port_origins = node_analysis.port_origins
-        edge_vectors = node_analysis.edge_vectors
         edge_angles = node_analysis.edge_angles
         edge_eccentricities= node_analysis.edge_eccentricities
         
         collinear_pairs = node_analysis.collinear_pairs
-        orthogonal_pairs = node_analysis.orthogonal_pairs
         is_coplanar = node_analysis.is_coplanar
         
         def _disjoint_pair_set(pairs):

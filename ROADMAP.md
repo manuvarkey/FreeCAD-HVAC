@@ -1182,6 +1182,15 @@ joined by equipment; (f) terminal function defaults from the system
 with port markers (the custom-model route exists for corner cases the
 library cannot model; no equipment library types).
 
+**Review fix (13 November 2026):** `Auto` first resolved from
+`FlowBoundary` alone, and every new terminal starts at `FlowBoundary Auto`,
+so a fresh network made every terminal its Source and offered no diffusers
+until each boundary was set. `Auto` now follows the drawn direction (supply:
+the terminal where air comes in is the Source, the rest are outlets; other
+systems: the one where air leaves), falling back to the boundary only when
+the direction is unknown. A balancing terminal that resolves to anything
+but Source is warned about, once the network has exactly one.
+
 **Status, terminal function: done, not tried in the GUI.**
 `DuctNetwork.SystemType`; end junctions' `TerminalFunction` (`Auto`,
 `Supply`, `Return`, `Exhaust`, `OutdoorAir`, `Discharge` -- added for an
