@@ -1034,11 +1034,18 @@ Everything else stays free to change.
    (2) and (3), write `CHANGELOG.md` with the compatibility policy, tag
    the commit.
 
-**Owner input needed:**
-- (a) Stable identity: A (persisted ids) or B (derived keys plus remap)?
-- (b) Schema version 1 libraries after the freeze: load with a warning
-  (recommended) or refuse?
-- (c) Are there libraries outside this repository that must keep working
-  unchanged?
-- (d) The "before the freeze" gaps: agree that terminal function and
-  multi-node equipment are designed first, or freeze without them?
+**Owner answer (13 November 2026):** no backward compatibility: the
+software is alpha. That settles (b) and (c) and simplifies the design:
+- (1) There is one schema version, the new single-form one. The loader
+  refuses anything else with a clear message; no version 1 reading, no
+  load warnings. The shipped libraries are converted once (the migration
+  script is a one-off, not kept).
+- (2) If A: no migration of existing documents; ids are assigned on the
+  next sync of a document, and old stored per-port lists may be reset.
+- (3) No warning aliases: private methods are renamed outright.
+
+**Still open:**
+- (a) Stable identity: A (persisted ids, recommended) or B (derived keys
+  plus remap)?
+- (d) The "before the freeze" gaps: design terminal function and
+  multi-node equipment first, or freeze without them?
