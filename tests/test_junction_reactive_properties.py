@@ -388,7 +388,7 @@ class _ChainFakeRegistry:
     def build_geometry(self, lib_id, type_def, context):
         ports = context["connected_ports"]
         return geometry_result_mod.normalize({
-            "shape": None,
+            "layers": {"shape": {"shape": None}},
             "connection_lengths": [
                 {"edge_key": ports[0]["edge_key"], "segment_end": ports[0]["segment_end"], "length": self._trim_left},
                 {"edge_key": ports[1]["edge_key"], "segment_end": ports[1]["segment_end"], "length": self._trim_right},
@@ -533,7 +533,7 @@ class _UniformFakeRegistry:
     def build_geometry(self, lib_id, type_def, context):
         ports = context["connected_ports"]
         return geometry_result_mod.normalize({
-            "shape": None,
+            "layers": {"shape": {"shape": None}},
             "connection_lengths": [
                 {"edge_key": p["edge_key"], "segment_end": p["segment_end"], "length": self._trim}
                 for p in ports
@@ -821,7 +821,7 @@ class _UnmigratedFallbackRegistry:
 
     def build_geometry(self, lib_id, type_def, context):
         self.build_geometry_called = True
-        return geometry_result_mod.normalize({"shape": None, "connection_lengths": list(self._records)})
+        return geometry_result_mod.normalize({"layers": {"shape": {"shape": None}}, "connection_lengths": list(self._records)})
 
 
 def test_peek_connection_lengths_falls_back_to_geometry_build_for_an_unmigrated_type(monkeypatch):

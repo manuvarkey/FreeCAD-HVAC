@@ -89,6 +89,7 @@ def _write_type(tmp_path, prop):
         "id": "multiport_generic",
         "label": "x",
         "category": "junction",
+        "geometry": {"backend": "generator", "module": "m", "function": "f"},
         "topology": "multiport",
         "family": ["multiport.multiport"],
         "profiles": ["Circular"],
@@ -235,7 +236,7 @@ def test_schema_removes_both_lists_when_the_type_no_longer_declares_them(monkeyp
 
 def test_port_param_reads_per_port_and_plain_properties_alike():
     port_a, port_b = {"edge_key": "A"}, {"edge_key": "B"}
-    context = {"params": {"TrimLength": PortValues({"A": 80.0}, default=100.0), "Thickness": 1.2}}
+    context = {"properties": {"TrimLength": PortValues({"A": 80.0}, default=100.0), "Thickness": 1.2}}
     assert HVACLibraryAPI.port_param(context, "TrimLength", port_a) == 80.0
     assert HVACLibraryAPI.port_param(context, "TrimLength", port_b) == 100.0
     assert HVACLibraryAPI.port_param(context, "Thickness", port_b) == 1.2

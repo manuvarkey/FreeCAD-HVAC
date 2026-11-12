@@ -91,7 +91,8 @@
       }
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:crosses",
     "function": "build_double_wye_mitered"
   },

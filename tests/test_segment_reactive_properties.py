@@ -203,7 +203,7 @@ def test_execute_applies_computed_properties_to_matching_object_property(monkeyp
     _give_single_implicit_layer(obj)
 
     geometry_result = {
-        "shape": object(),
+        "layers": {"shape": {"shape": object()}},
         "connection_lengths": [],
         "computed_properties": {"angle": 42.0, "not_a_real_property": 99.0},
     }
@@ -214,7 +214,7 @@ def test_execute_applies_computed_properties_to_matching_object_property(monkeyp
 
     assert obj.angle == 42.0
     assert not hasattr(obj, "not_a_real_property")
-    assert obj.Layer_shape_Shape is geometry_result["shape"]
+    assert obj.Layer_shape_Shape is geometry_result["layers"]["shape"]["shape"]
 
 
 def test_execute_folds_attachment_offset_into_effective_points_without_a_source_edge(monkeypatch):
@@ -257,7 +257,7 @@ def test_execute_folds_attachment_offset_into_effective_points_without_a_source_
     obj.Label = "Segment"
     _give_single_implicit_layer(obj)
 
-    geometry_result = {"shape": object(), "connection_lengths": [], "computed_properties": {}}
+    geometry_result = {"layers": {"shape": {"shape": object()}}, "connection_lengths": [], "computed_properties": {}}
     captured = {}
 
     class _CapturingRegistry(_FakeExecuteRegistry):

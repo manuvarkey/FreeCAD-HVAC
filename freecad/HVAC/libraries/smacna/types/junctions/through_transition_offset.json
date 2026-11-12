@@ -140,7 +140,8 @@
       }
     ]
   },
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:transitions",
     "function": "build_transition"
   },

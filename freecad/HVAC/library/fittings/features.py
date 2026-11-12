@@ -19,7 +19,7 @@ _EPS = 1.0e-7
 
 
 def _params(ctx):
-    full = dict(ctx.context.get("params") or ctx.context.get("properties") or {})
+    full = dict(ctx.context.get("properties") or {})
     full.update(dict(ctx.parameters or {}))
     return full
 

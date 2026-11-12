@@ -185,7 +185,8 @@
       }
     ]
   },
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:tees",
     "function": "build_tee_mitered_shoe"
   },

@@ -29,7 +29,7 @@ def _port(edge_key, direction, diameter=200.0, position=(0.0, 0.0, 0.0)):
 def _ctx(ports, params=None):
     return {
         "hvac_api": HVACLibraryAPI,
-        "params": dict(params or {}),
+        "properties": dict(params or {}),
         "connected_ports": list(ports),
         "center_point": (0.0, 0.0, 0.0),
     }

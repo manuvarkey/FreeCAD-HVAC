@@ -32,7 +32,7 @@ def _tee_context(params):
     ports = [_port("C", (0.0, 1.0, 0.0)), _port("A", (-1.0, 0.0, 0.0)), _port("B", (1.0, 0.0, 0.0))]
     return {
         "hvac_api": HVACLibraryAPI,
-        "params": params,
+        "properties": params,
         "connected_ports": ports,
         "center_point": (0.0, 0.0, 0.0),
         "analysis": {"collinear_pairs": [{"a": 1, "b": 2}]},
@@ -99,7 +99,7 @@ def test_offset_length_sets_the_trims_not_transition_length():
 
     context = {
         "hvac_api": HVACLibraryAPI,
-        "params": {"OffsetLength": 400.0, "TransitionLength": 999.0},
+        "properties": {"OffsetLength": 400.0, "TransitionLength": 999.0},
         "connected_ports": _offset_ports(),
     }
     records = offsets.measure_offset_angled(context)
@@ -110,7 +110,7 @@ def test_offset_does_not_change_the_callers_params():
     from freecad.HVAC.library.fittings import offsets
 
     params = {"OffsetLength": 400.0}
-    offsets.measure_offset_angled({"hvac_api": HVACLibraryAPI, "params": params, "connected_ports": _offset_ports()})
+    offsets.measure_offset_angled({"hvac_api": HVACLibraryAPI, "properties": params, "connected_ports": _offset_ports()})
     assert params == {"OffsetLength": 400.0}
 
 
@@ -121,7 +121,7 @@ def test_offset_does_not_change_the_callers_params():
 
 def _vav_context(params):
     ports = [_port("A", (-1.0, 0.0, 0.0)), _port("B", (1.0, 0.0, 0.0))]
-    return {"hvac_api": HVACLibraryAPI, "params": params, "connected_ports": ports}
+    return {"hvac_api": HVACLibraryAPI, "properties": params, "connected_ports": ports}
 
 
 def test_vav_box_sizes_default_from_the_duct_size():

@@ -29,7 +29,6 @@ def _as_transition_context(context):
         if offset_name in params:
             params[transition_name] = params[offset_name]
     mapped = dict(context)
-    mapped["params"] = params
     mapped["properties"] = params
     return mapped
 

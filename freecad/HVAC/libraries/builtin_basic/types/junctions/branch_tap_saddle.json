@@ -93,7 +93,8 @@
       }
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:taps",
     "function": "build_tap_saddle"
   },

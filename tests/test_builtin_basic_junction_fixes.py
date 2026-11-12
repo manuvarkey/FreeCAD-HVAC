@@ -66,7 +66,7 @@ def test_transition_radiussed_uses_transition_radius_not_length():
     # actually-declared TransitionLength/TransitionRadius apply.
     ctx = {
         "hvac_api": HVACLibraryAPI,
-        "params": {"TransitionLength": 300.0, "TransitionRadius": 500.0, "Length": 999999.0},
+        "properties": {"TransitionLength": 300.0, "TransitionRadius": 500.0, "Length": 999999.0},
         "connected_ports": _transition_ports(),
     }
     ports, route = transitions._transition_radiussed_route(ctx)
@@ -106,7 +106,7 @@ class _RadiusRecordingAPI:
 def _radiussed_radius(params):
     api = _RadiusRecordingAPI()
     transitions._transition_radiussed_route(
-        {"hvac_api": api, "params": params, "connected_ports": _offset_transition_ports()}
+        {"hvac_api": api, "properties": params, "connected_ports": _offset_transition_ports()}
     )
     return api.radii[-1]
 
@@ -138,8 +138,8 @@ def test_transition_length_not_read_from_legacy_length_key():
     # instead of picking up the bogus "Length" value.
     ports = _transition_ports()
     size = max(_common._size(HVACLibraryAPI, ports[0]), _common._size(HVACLibraryAPI, ports[1]))
-    ctx_with_bogus_length = {"hvac_api": HVACLibraryAPI, "params": {"Length": 999999.0}, "connected_ports": ports}
-    ctx_without_any = {"hvac_api": HVACLibraryAPI, "params": {}, "connected_ports": ports}
+    ctx_with_bogus_length = {"hvac_api": HVACLibraryAPI, "properties": {"Length": 999999.0}, "connected_ports": ports}
+    ctx_without_any = {"hvac_api": HVACLibraryAPI, "properties": {}, "connected_ports": ports}
 
     _, trim_with_bogus = transitions._transition_layout(ctx_with_bogus_length)
     _, trim_without_any = transitions._transition_layout(ctx_without_any)
@@ -149,8 +149,8 @@ def test_transition_length_not_read_from_legacy_length_key():
 
 def test_transition_mitered_uses_transition_length_not_legacy_length_key():
     ports = _transition_ports()
-    ctx_with_bogus_length = {"hvac_api": HVACLibraryAPI, "params": {"Length": 999999.0}, "connected_ports": ports}
-    ctx_without_any = {"hvac_api": HVACLibraryAPI, "params": {}, "connected_ports": ports}
+    ctx_with_bogus_length = {"hvac_api": HVACLibraryAPI, "properties": {"Length": 999999.0}, "connected_ports": ports}
+    ctx_without_any = {"hvac_api": HVACLibraryAPI, "properties": {}, "connected_ports": ports}
 
     _, _, total_with_bogus, _, _, _ = transitions._transition_mitered_layout(ctx_with_bogus_length)
     _, _, total_without_any, _, _, _ = transitions._transition_mitered_layout(ctx_without_any)
@@ -202,7 +202,7 @@ def _lateral_tee_context(trim_branch=None):
     params = {} if trim_branch is None else {"TrimBranch": trim_branch}
     context = {
         "hvac_api": api,
-        "params": params,
+        "properties": params,
         "connected_ports": [run_a, run_b, branch],
         "center_point": (0.0, 0.0, 0.0),
         "analysis": {"collinear_pairs": [{"a": 0, "b": 1}]},
@@ -284,7 +284,7 @@ def test_wye_common_index_follows_port_order_not_a_fixed_slot():
 def test_measure_terminal_body_generic_equals_body_length():
     ctx = {
         "hvac_api": HVACLibraryAPI,
-        "params": {"BodyLength": 175.0},
+        "properties": {"BodyLength": 175.0},
         "connected_ports": [_port("A", (1.0, 0.0, 0.0), 250.0)],
     }
     records = terminals.measure_terminal_body_generic(ctx)
@@ -294,7 +294,7 @@ def test_measure_terminal_body_generic_equals_body_length():
 def test_build_terminal_body_generic_reports_matching_connection_length():
     ctx = {
         "hvac_api": HVACLibraryAPI,
-        "params": {"BodyLength": 175.0},
+        "properties": {"BodyLength": 175.0},
         "connected_ports": [_port("A", (1.0, 0.0, 0.0), 250.0)],
     }
     measured = terminals.measure_terminal_body_generic(ctx)
@@ -304,7 +304,7 @@ def test_build_terminal_body_generic_reports_matching_connection_length():
 
 def test_terminal_body_generic_falls_back_to_size_based_default_without_body_length():
     port = _port("A", (1.0, 0.0, 0.0), 300.0)
-    ctx = {"hvac_api": HVACLibraryAPI, "params": {}, "connected_ports": [port]}
+    ctx = {"hvac_api": HVACLibraryAPI, "properties": {}, "connected_ports": [port]}
     records = terminals.measure_terminal_body_generic(ctx)
     expected = 0.35 * _common._size(HVACLibraryAPI, port)
     assert records == [{"edge_key": "A", "segment_end": "start", "length": expected}]
@@ -336,7 +336,7 @@ def _cross_context(params):
         _port("C", (0.0, 1.0, 0.0), 200.0, segment_end="end", flow_into_junction=False),
         _port("D", (0.0, -1.0, 0.0), 200.0, segment_end="end", flow_into_junction=False),
     ]
-    return {"hvac_api": HVACLibraryAPI, "params": params, "connected_ports": ports, "center_point": (0.0, 0.0, 0.0)}
+    return {"hvac_api": HVACLibraryAPI, "properties": params, "connected_ports": ports, "center_point": (0.0, 0.0, 0.0)}
 
 
 def _lengths_by_edge(records):

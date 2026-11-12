@@ -154,7 +154,8 @@
       }
     ]
   },
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:offsets",
     "function": "build_offset_radiussed"
   },

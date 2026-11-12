@@ -120,7 +120,8 @@
       }
     ]
   },
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:elbows",
     "function": "build_elbow_mitered"
   },

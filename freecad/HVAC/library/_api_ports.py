@@ -419,7 +419,7 @@ class _PortsMixin:
         generator need not know which of the two a type declares. `default`
         is returned when the property is missing or not set for that port.
         """
-        params = context.get("params") or context.get("properties") or {}
+        params = context.get("properties") or {}
         value = params.get(name)
         if hasattr(value, "for_port"):
             value = value.for_port(port)

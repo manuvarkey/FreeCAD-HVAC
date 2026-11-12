@@ -25,7 +25,7 @@ _EPS = 1.0e-7
 
 
 def _props(context):
-    return dict(context.get("params") or context.get("properties") or {})
+    return dict(context.get("properties") or {})
 
 
 def _size(api, port):
@@ -83,7 +83,8 @@ def _finish(context, envelope, connection_lengths, port_suffixes=None):
       Flanges are not part of it: they are a construction feature of their
       own (fittings/features.py, transverse_flange).
     - No layer has a thickness: there is no wall to build, so the plain
-      air-space solid is returned as the single legacy "shape".
+      air-space solid is returned on the type's first layer
+      (HVACLibraryAPI.single_layer).
 
     `port_suffixes` is accepted for older callers and no longer used: the
     flange feature reads port roles itself.
@@ -95,7 +96,7 @@ def _finish(context, envelope, connection_lengths, port_suffixes=None):
     if any(_layer_thickness(layer_def, params) > _EPS for layer_def in layer_defs):
         result = api.build_layered_geometry(envelope, layer_defs, params)
     else:
-        result = {"shape": api.refine(envelope(0.0))}
+        result = api.single_layer(context, api.refine(envelope(0.0)))
     result["connection_lengths"] = connection_lengths
     return result
 
@@ -118,14 +119,18 @@ def _structural_layer_def(context, result):
 
 
 def _fuse_into_structure(context, result, shape):
-    """Fuse an extra solid onto the fitting: its structural layer, or its single shape when it has no layers."""
+    """Fuse an extra solid onto the fitting: its structural layer, or its only layer when no layer has a wall."""
     api = context["hvac_api"]
+    layers = result.get("layers") or {}
     host = _structural_layer_def(context, result)
     if host is not None:
-        layers = result["layers"]
-        layers[host.id] = {"shape": api.refine(api.fuse(layers[host.id]["shape"], shape))}
-    elif result.get("shape") is not None:
-        result["shape"] = api.refine(api.fuse(result["shape"], shape))
+        layer_id = host.id
+    elif layers:
+        layer_id = next(iter(layers))
+    else:
+        return
+    layers[layer_id] = {"shape": api.refine(api.fuse(layers[layer_id]["shape"], shape))}
+
 
 
 def _flange_enabled(params, index, suffix, port=None):

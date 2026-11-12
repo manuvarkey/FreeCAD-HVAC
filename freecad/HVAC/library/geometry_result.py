@@ -9,8 +9,9 @@ report.
 
 Generator/PartScript/static-descriptor authors never construct these
 dataclasses themselves -- per CLAUDE.md's "external code uses only
-HVACLibraryAPI" rule, they keep returning plain dicts (either the legacy
-`{"shape": ...}` form, or the `{"layers": {id: {"shape": ...}}}` form).
+HVACLibraryAPI" rule, they return plain dicts of the form
+`{"layers": {id: {"shape": ...}}, ...}` (see HVACLibraryAPI.single_layer for
+a one-solid fitting).
 normalize() is the one place a raw backend return value is turned into a
 real GeometryResult -- called once, from HVACLibraryRegistry.build_geometry()
 (which also stamps each layer's `roles` from the type-def's own declared
@@ -26,7 +27,6 @@ from .construction import FeatureGeometry, LayerGeometry  # noqa: F401 -- re-exp
 # Top-level raw-dict keys normalize() understands by name; anything else is
 # preserved verbatim on GeometryResult.extra rather than silently dropped.
 _KNOWN_RAW_KEYS = {
-    "shape",
     "layers",
     "connection_lengths",
     "computed_properties",
@@ -38,6 +38,8 @@ _KNOWN_RAW_KEYS = {
 # return one shape via {"shape": ...} -- normalize() wraps that as a single
 # layer under this id. No roles are implied; the type-def's own
 # "construction" block is what stamps roles on afterwards, if declared.
+# The layer id a one-solid result uses when its type declares no
+# construction layers (HVACLibraryAPI.single_layer).
 LEGACY_SHAPE_LAYER_ID = "shape"
 
 
@@ -58,6 +60,7 @@ class GeometryResult:
     feature (its own enabled_parameter resolves False) has no entry here at
     all, not an entry with a null shape.
     """
+
     layers: dict = field(default_factory=dict)
     features: dict = field(default_factory=dict)
     connection_lengths: list = field(default_factory=list)
@@ -90,21 +93,18 @@ def normalize(raw) -> GeometryResult:
 
     Accepts:
       - a GeometryResult already (returned as-is);
-      - a dict with a "layers" key (new-style contract);
-      - a legacy dict with a "shape" key (wrapped as a single layer,
-        id "shape").
+      - a dict with a "layers" key (the only dict form).
     """
     if isinstance(raw, GeometryResult):
         return raw
 
     if isinstance(raw, dict):
-        if "layers" in raw:
-            layers = {
-                str(layer_id): _coerce_layer(value)
-                for layer_id, value in dict(raw.get("layers") or {}).items()
-            }
-        else:
-            layers = {LEGACY_SHAPE_LAYER_ID: LayerGeometry(shape=raw.get("shape"))}
+        if "layers" not in raw:
+            raise TypeError(
+                'A geometry backend must return {"layers": {layer_id: {"shape": ...}}}; the '
+                '{"shape": ...} form was removed (HVACLibraryAPI.single_layer builds a one-layer result)'
+            )
+        layers = {str(layer_id): _coerce_layer(value) for layer_id, value in dict(raw.get("layers") or {}).items()}
 
         return GeometryResult(
             layers=layers,
@@ -115,6 +115,4 @@ def normalize(raw) -> GeometryResult:
             extra={k: v for k, v in raw.items() if k not in _KNOWN_RAW_KEYS},
         )
 
-    raise TypeError(
-        "Geometry backend must return a GeometryResult or dict, got {!r}".format(type(raw))
-    )
+    raise TypeError("Geometry backend must return a GeometryResult or dict, got {!r}".format(type(raw)))

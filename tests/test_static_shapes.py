@@ -156,6 +156,10 @@ def test_build_static_geometry_rejects_connection_lengths_for_segment_context(tm
 
     class _FakeApi:
         @staticmethod
+        def single_layer(context, shape, **extra):
+            return dict({"layers": {"shape": {"shape": shape}}}, **extra)
+
+        @staticmethod
         def vec(v):
             return FakeVector(v)
 

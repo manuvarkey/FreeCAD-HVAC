@@ -54,14 +54,14 @@ def test_resolve_params_rejects_invalid_value():
 def test_partscript_optional_validate_and_generate(tmp_path):
     script = tmp_path / "model.py"
     script.write_text(
-        "HVAC_PARTSCRIPT_API = 2\n"
+        "HVAC_PARTSCRIPT_API = 3\n"
         "def validate(context):\n"
-        "    if context['params']['D'] <= 0: raise ValueError('D')\n"
+        "    if context['properties']['D'] <= 0: raise ValueError('D')\n"
         "def generate(context):\n"
-        "    return {'shape': context['test_shape'], 'tag': 'ok'}\n"
+        "    return {'layers': {'shape': {'shape': context['test_shape']}}, 'tag': 'ok'}\n"
     )
     result = partscript_shapes.execute_partscript(
-        str(script), {"params": {"D": 1.0}, "test_shape": _Shape()}
+        str(script), {"properties": {"D": 1.0}, "test_shape": _Shape()}
     )
     assert result["tag"] == "ok"
 
@@ -69,26 +69,26 @@ def test_partscript_optional_validate_and_generate(tmp_path):
 def test_partscript_accepts_layers_contract_with_one_real_shape_among_several(tmp_path):
     script = tmp_path / "model.py"
     script.write_text(
-        "HVAC_PARTSCRIPT_API = 2\n"
+        "HVAC_PARTSCRIPT_API = 3\n"
         "def generate(context):\n"
         "    return {'layers': {\n"
         "        'casing': {'shape': context['test_shape']},\n"
         "        'insulation': {'shape': None},\n"
         "    }}\n"
     )
-    result = partscript_shapes.execute_partscript(str(script), {"params": {}, "test_shape": _Shape()})
+    result = partscript_shapes.execute_partscript(str(script), {"properties": {}, "test_shape": _Shape()})
     assert result["layers"]["casing"]["shape"] is not None
 
 
 def test_partscript_rejects_layers_contract_with_no_real_shape_anywhere(tmp_path):
     script = tmp_path / "model.py"
     script.write_text(
-        "HVAC_PARTSCRIPT_API = 2\n"
+        "HVAC_PARTSCRIPT_API = 3\n"
         "def generate(context):\n"
         "    return {'layers': {'casing': {'shape': None}}}\n"
     )
     try:
-        partscript_shapes.execute_partscript(str(script), {"params": {}})
+        partscript_shapes.execute_partscript(str(script), {"properties": {}})
     except partscript_shapes.PartScriptSchemaError as exc:
         assert "layers" in str(exc)
     else:

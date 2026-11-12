@@ -355,7 +355,6 @@ def build_duct_closure_generic(context):
     p = ports[0]
     thickness = _duct_closure_thickness(context)
     shape = api.extrude(api.profile_from_port(p), api.port_direction(p) * thickness, solid=True)
-    return {
-        "shape": api.refine(shape),
-        "connection_lengths": api.build_trim_rec_from_context_uniform(context, thickness),
-    }
+    return api.single_layer(
+        context, api.refine(shape), connection_lengths=api.build_trim_rec_from_context_uniform(context, thickness)
+    )

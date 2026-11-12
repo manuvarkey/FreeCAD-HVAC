@@ -1,9 +1,9 @@
-HVAC_PARTSCRIPT_API = 2
+HVAC_PARTSCRIPT_API = 3
 
 
 def generate(context):
     api = context["hvac_api"]
-    p = dict(context.get("params") or context.get("properties") or {})
+    p = dict(context.get("properties") or {})
     start = api.vec(context["start_point"])
     end = api.vec(context["end_point"])
     axis = end - start

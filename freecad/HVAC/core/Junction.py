@@ -634,7 +634,7 @@ class DuctJunction:
             context = {
                 "obj": comp_obj,
                 "center_point": HVACLibraryAPI.average_point([p["position"] for p in local_ports]),
-                "params": params,
+                "properties": params,
                 "connected_ports": local_ports,
                 # Real topology analysis of this junction (unaffected by
                 # chain composition) -- harmless/correct to pass through

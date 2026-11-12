@@ -94,7 +94,7 @@ def _runtime_ports(context, api):
     axis = api.unit(ep - sp)
     x_axis = context.get("profile_x_axis")
     profile = context.get("profile", "")
-    params = dict(context.get("params", {}) or {})
+    params = dict(context.get("properties", {}) or {})
     return [
         {
             "position": sp,
@@ -312,7 +312,7 @@ def build_static_geometry(descriptor_path, context):
     # Any extra outputs (connection lengths, trim planes, ...) the
     # descriptor declares get carried through in the same real-world frame.
     outputs = dict(desc.get("outputs", {}) or {})
-    result = {"shape": shape}
+    result = api.single_layer(context, shape)
 
     if "connection_lengths" in outputs:
         if "connected_ports" not in context:

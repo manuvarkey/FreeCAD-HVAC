@@ -396,6 +396,22 @@ class _RecipesMixin:
             )
         return best
 
+    @staticmethod
+    def single_layer(context, shape, **extra):
+        """
+        The `{"layers": ...}` result for a fitting built as one solid (a
+        marker, a cap, a fitting with no wall): the shape goes on the type's
+        first declared construction layer, or on a layer named "shape" when
+        it declares none. Any `extra` keys (connection_lengths, ...) are
+        added to the result. The `{"shape": ...}` result form was removed:
+        every backend returns layers.
+        """
+        layers = list(context.get("construction_layers") or [])
+        layer_id = layers[0].id if layers else "shape"
+        result = {"layers": {layer_id: {"shape": shape}}}
+        result.update(extra)
+        return result
+
     @classmethod
     def build_layered_geometry(cls, envelope_builder, construction_layers, params):
         """

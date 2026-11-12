@@ -158,7 +158,7 @@ def test_execute_applies_computed_properties_to_matching_object_property(monkeyp
     _give_single_implicit_layer(obj)
 
     geometry_result = {
-        "shape": object(),
+        "layers": {"shape": {"shape": object()}},
         "connection_lengths": [],
         # "not_a_real_property" mirrors a computed value the object doesn't
         # (yet) declare a property for -- execute() must silently skip it
@@ -172,7 +172,7 @@ def test_execute_applies_computed_properties_to_matching_object_property(monkeyp
 
     assert obj.angle == 42.0
     assert not hasattr(obj, "not_a_real_property")
-    assert obj.Layer_shape_Shape is geometry_result["shape"]
+    assert obj.Layer_shape_Shape is geometry_result["layers"]["shape"]["shape"]
 
 
 def test_execute_writes_connection_lengths(monkeypatch):
@@ -188,7 +188,7 @@ def test_execute_writes_connection_lengths(monkeypatch):
     obj.Label = "Damper"
 
     lengths = [{"edge_key": "A", "segment_end": "end", "length": 50.0}]
-    geometry_result = {"shape": object(), "connection_lengths": lengths, "computed_properties": {}}
+    geometry_result = {"layers": {"shape": {"shape": object()}}, "connection_lengths": lengths, "computed_properties": {}}
     _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([]), geometry_result))
 
     dc = _bare_component(obj)
@@ -247,7 +247,7 @@ def test_execute_bails_when_local_ports_json_is_empty(monkeypatch):
     obj.TypeId = "through_damper_generic"
     obj.LocalPortsJson = "[]"
 
-    registry = _FakeRegistry(_FakeTypeDef([]), {"shape": object(), "connection_lengths": []})
+    registry = _FakeRegistry(_FakeTypeDef([]), {"layers": {"shape": {"shape": object()}}, "connection_lengths": []})
     _patch_registry(monkeypatch, registry)
 
     dc = _bare_component(obj)
@@ -275,13 +275,13 @@ def test_execute_builds_shape_for_a_non_two_port_primary(monkeypatch):
         obj.LocalPortsJson = json.dumps(ports)
         _give_single_implicit_layer(obj)
 
-        geometry_result = {"shape": object(), "connection_lengths": [], "computed_properties": {}}
+        geometry_result = {"layers": {"shape": {"shape": object()}}, "connection_lengths": [], "computed_properties": {}}
         _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([]), geometry_result))
 
         dc = _bare_component(obj)
         dc.execute(obj)
 
-        assert obj.Layer_shape_Shape is geometry_result["shape"]
+        assert obj.Layer_shape_Shape is geometry_result["layers"]["shape"]["shape"]
 
 
 def test_execute_hides_scalar_calc_properties_for_multiport_primary(monkeypatch):
@@ -303,7 +303,7 @@ def test_execute_hides_scalar_calc_properties_for_multiport_primary(monkeypatch)
         obj.addProperty("App::PropertyFloat", prop, "Airflow", "")
     _give_single_implicit_layer(obj)
 
-    geometry_result = {"shape": object(), "connection_lengths": [], "computed_properties": {}}
+    geometry_result = {"layers": {"shape": {"shape": object()}}, "connection_lengths": [], "computed_properties": {}}
     _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([]), geometry_result))
 
     dc = _bare_component(obj)
@@ -325,7 +325,7 @@ def test_execute_keeps_scalar_calc_properties_visible_for_two_port_primary(monke
         obj.addProperty("App::PropertyFloat", prop, "Airflow", "")
     _give_single_implicit_layer(obj)
 
-    geometry_result = {"shape": object(), "connection_lengths": [], "computed_properties": {}}
+    geometry_result = {"layers": {"shape": {"shape": object()}}, "connection_lengths": [], "computed_properties": {}}
     _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([]), geometry_result))
 
     dc = _bare_component(obj)
@@ -356,7 +356,7 @@ def test_execute_context_family_resolved_from_parent_for_primary_only(monkeypatc
     obj.ParentJunctionName = "Junc0"
     obj.LocalPortsJson = json.dumps([_port("A", "end", True), _port("B", "start", False)])
 
-    registry = _FakeRegistry(_FakeTypeDef([]), {"shape": object(), "connection_lengths": []})
+    registry = _FakeRegistry(_FakeTypeDef([]), {"layers": {"shape": {"shape": object()}}, "connection_lengths": []})
     _patch_registry(monkeypatch, registry)
 
     dc = _bare_component(obj)
@@ -402,7 +402,7 @@ def test_execute_context_topology_resolved_from_parent_not_hardcoded(monkeypatch
         _port("A", "end", True), _port("B", "start", False), _port("C", "start", False),
     ])
 
-    registry = _FakeRegistry(_FakeTypeDef([]), {"shape": object(), "connection_lengths": []})
+    registry = _FakeRegistry(_FakeTypeDef([]), {"layers": {"shape": {"shape": object()}}, "connection_lengths": []})
     _patch_registry(monkeypatch, registry)
 
     dc = _bare_component(obj)
@@ -435,7 +435,7 @@ def test_execute_inline_always_synthesizes_topology_through(monkeypatch):
     obj.ParentJunctionName = "Junc0"
     obj.LocalPortsJson = json.dumps([_port("N0#C_seam0", "end", True), _port("C", "start", False)])
 
-    registry = _FakeRegistry(_FakeTypeDef([]), {"shape": object(), "connection_lengths": []})
+    registry = _FakeRegistry(_FakeTypeDef([]), {"layers": {"shape": {"shape": object()}}, "connection_lengths": []})
     _patch_registry(monkeypatch, registry)
 
     dc = _bare_component(obj)
@@ -474,7 +474,7 @@ def test_execute_context_includes_parent_analysis(monkeypatch):
         _port("A", "end", True), _port("B", "start", False), _port("C", "start", False),
     ])
 
-    registry = _FakeRegistry(_FakeTypeDef([]), {"shape": object(), "connection_lengths": []})
+    registry = _FakeRegistry(_FakeTypeDef([]), {"layers": {"shape": {"shape": object()}}, "connection_lengths": []})
     _patch_registry(monkeypatch, registry)
 
     dc = _bare_component(obj)
@@ -775,7 +775,7 @@ def test_execute_syncs_custom_loss_coefficients_to_outlet_ports_only(monkeypatch
     obj.CustomLossCoefficients = [0.18]
     _give_single_implicit_layer(obj)
 
-    geometry_result = {"shape": object(), "connection_lengths": [], "computed_properties": {}}
+    geometry_result = {"layers": {"shape": {"shape": object()}}, "connection_lengths": [], "computed_properties": {}}
     _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([]), geometry_result))
 
     dc = _bare_component(obj)

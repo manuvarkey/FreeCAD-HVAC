@@ -45,7 +45,7 @@ def _editable_length_pdef(name="Length", default=100.0):
 
 
 def _result(computed_properties=None):
-    raw = {"shape": object(), "connection_lengths": []}
+    raw = {"layers": {"shape": {"shape": object()}}, "connection_lengths": []}
     if computed_properties is not None:
         raw["computed_properties"] = computed_properties
     return geometry_result_mod.normalize(raw)
@@ -120,7 +120,7 @@ def test_legacy_generator_return_with_no_computed_properties_key_does_not_error(
     type_def = _FakeTypeDef([_readonly_angle_pdef()])
 
     # A legacy generator's raw dict has no "computed_properties" key at all.
-    result = geometry_result_mod.normalize({"shape": object(), "connection_lengths": []})
+    result = geometry_result_mod.normalize({"layers": {"shape": {"shape": object()}}, "connection_lengths": []})
 
     changed = _geometry_apply.apply_computed_properties(obj, type_def, result)
 

@@ -63,6 +63,7 @@ def test_load_type_def_file_normalizes_string_family_to_list(tmp_path):
                 "id": "circular_straight",
                 "label": "Circular Straight",
                 "category": "segment",
+                "geometry": {"backend": "generator", "module": "m", "function": "f"},
                 "family": "straight_segment",
                 "profiles": ["Circular"],
             }
@@ -82,7 +83,7 @@ def test_load_type_def_file_normalizes_string_family_to_list(tmp_path):
 def test_build_geometry_dispatches_legacy_generator_and_aliases_params_as_properties(monkeypatch):
     # Regression for the Library.py/Segment.py/Junction.py rewiring: every
     # existing generator function (smacna/builtin_basic) still reads
-    # context["properties"], not context["params"] -- build_geometry must
+    # context["properties"], not context["properties"] -- build_geometry must
     # keep aliasing the resolved params dict onto "properties" for the
     # legacy generator_module/generator_function backend.
     fake_module = types.ModuleType("fake_hvac_lib_pkg.junctions")
@@ -90,8 +91,8 @@ def test_build_geometry_dispatches_legacy_generator_and_aliases_params_as_proper
 
     def build_elbow(context):
         captured["properties"] = context["properties"]
-        captured["params"] = context["params"]
-        return {"shape": "SHAPE"}
+        captured["properties"] = context["properties"]
+        return {"layers": {"shape": {"shape": "SHAPE"}}}
 
     fake_module.build_elbow = build_elbow
     sys.modules["fake_hvac_lib_pkg.junctions"] = fake_module
@@ -111,14 +112,14 @@ def test_build_geometry_dispatches_legacy_generator_and_aliases_params_as_proper
         reg = HVACLibraryRegistry()
         reg.register_library(lib)
 
-        result = reg.build_geometry("lib", type_def, {"params": {"Diameter": 100.0}})
+        result = reg.build_geometry("lib", type_def, {"properties": {"Diameter": 100.0}})
 
         # build_geometry always normalizes a backend's raw return value into
         # a GeometryResult -- a legacy {"shape": ...} generator's shape
         # becomes a single layer, id "shape" (see library/geometry_result.py).
         assert result.layers["shape"].shape == "SHAPE"
-        assert captured["params"] == {"Diameter": 100.0}
-        assert captured["properties"] is captured["params"]
+        assert captured["properties"] == {"Diameter": 100.0}
+        assert captured["properties"] is captured["properties"]
     finally:
         sys.modules.pop("fake_hvac_lib_pkg.junctions", None)
 
@@ -129,7 +130,7 @@ def test_build_geometry_injects_geometry_and_loss_apis():
 
     def build(context):
         captured.update(context)
-        return {"shape": "SHAPE"}
+        return {"layers": {"shape": {"shape": "SHAPE"}}}
 
     fake_module.build = build
     sys.modules["fake_hvac_lib_pkg.context_probe"] = fake_module
@@ -148,7 +149,7 @@ def test_build_geometry_injects_geometry_and_loss_apis():
         reg = HVACLibraryRegistry()
         reg.register_library(lib)
 
-        reg.build_geometry("lib", type_def, {"params": {}})
+        reg.build_geometry("lib", type_def, {"properties": {}})
 
         assert captured["hvac_api"] is HVACLibraryAPI
         assert captured["hvac_api_version"] == HVACLibraryAPI.API_VERSION
@@ -200,7 +201,7 @@ def test_load_type_def_file_parses_generator_module_and_function(tmp_path):
                 "label": "Elbow",
                 "category": "junction",
                 "family": ["through.elbow"],
-                "generator": {"module": "junctions", "function": "build_elbow"},
+                "geometry": {"backend": "generator", "module": "junctions", "function": "build_elbow"},
             }
         )
     )
@@ -221,7 +222,7 @@ def test_load_type_def_file_parses_construction_block(tmp_path):
                 "label": "Circular Straight",
                 "category": "segment",
                 "family": ["straight_segment"],
-                "generator": {"module": "segments", "function": "build_circular_straight"},
+                "geometry": {"backend": "generator", "module": "segments", "function": "build_circular_straight"},
                 "construction": {
                     "layers": [
                         {
@@ -260,7 +261,7 @@ def test_load_type_def_file_parses_features_block(tmp_path):
                 "label": "Circular Straight",
                 "category": "segment",
                 "family": ["straight_segment"],
-                "generator": {"module": "segments", "function": "build_circular_straight"},
+                "geometry": {"backend": "generator", "module": "segments", "function": "build_circular_straight"},
                 "construction": {
                     "layers": [{"id": "casing", "roles": ["flow_surface", "structural_shell"]}],
                     "features": [
@@ -303,7 +304,7 @@ def test_load_type_def_file_parses_features_module_override(tmp_path):
                 "label": "Circular Straight",
                 "category": "segment",
                 "family": ["straight_segment"],
-                "generator": {"module": "segments", "function": "build_circular_straight"},
+                "geometry": {"backend": "generator", "module": "segments", "function": "build_circular_straight"},
                 "construction": {
                     "layers": [{"id": "casing", "roles": ["flow_surface"]}],
                     "features": [
@@ -334,7 +335,7 @@ def test_load_type_def_file_features_default_to_optional_fields_unset(tmp_path):
                 "label": "Circular Straight",
                 "category": "segment",
                 "family": ["straight_segment"],
-                "generator": {"module": "segments", "function": "build_circular_straight"},
+                "geometry": {"backend": "generator", "module": "segments", "function": "build_circular_straight"},
                 "construction": {
                     "layers": [{"id": "casing", "roles": ["flow_surface"]}],
                     "features": [{"id": "stiffener", "host_layer": "casing", "generator": "generate_stiffener"}],
@@ -363,7 +364,7 @@ def test_load_type_def_file_defaults_construction_to_empty_list(tmp_path):
                 "label": "Circular Straight",
                 "category": "segment",
                 "family": ["straight_segment"],
-                "generator": {"module": "segments", "function": "build_circular_straight"},
+                "geometry": {"backend": "generator", "module": "segments", "function": "build_circular_straight"},
             }
         )
     )
@@ -385,6 +386,7 @@ def _junction_type_json(id_="branch_tee_generic", loss=None, constraints=None):
         "id": id_,
         "label": id_,
         "category": "junction",
+        "geometry": {"backend": "generator", "module": "m", "function": "f"},
         "topology": "branch",
         "family": ["branch.tee"],
         "profiles": ["Circular"],
@@ -576,7 +578,7 @@ def test_build_geometry_stamps_layer_roles_from_construction_defs():
         reg = HVACLibraryRegistry()
         reg.register_library(lib)
 
-        result = reg.build_geometry("lib", type_def, {"params": {}})
+        result = reg.build_geometry("lib", type_def, {"properties": {}})
 
         assert result.layers["casing"].roles == ["flow_surface", "structural_shell"]
         assert result.layers["insulation"].roles == ["thermal_insulation"]
@@ -644,7 +646,7 @@ def test_build_geometry_invokes_an_enabled_features_own_generator_with_filtered_
         )
 
         result = reg.build_geometry(
-            "lib", type_def, {"params": {"FlangeDepth": 25.0, "FlangeThickness": 1.0, "SomethingElse": 999}}
+            "lib", type_def, {"properties": {"FlangeDepth": 25.0, "FlangeThickness": 1.0, "SomethingElse": 999}}
         )
 
         assert len(calls) == 1
@@ -687,7 +689,7 @@ def test_build_geometry_skips_a_disabled_feature_entirely():
             ]
         )
 
-        result = reg.build_geometry("lib", type_def, {"params": {"FlangeEnabled": False}})
+        result = reg.build_geometry("lib", type_def, {"properties": {"FlangeEnabled": False}})
 
         assert calls == []
         assert "transverse_flange" not in result.features
@@ -712,7 +714,7 @@ def test_build_geometry_stamps_visible_false_from_visible_parameter():
             ]
         )
 
-        result = reg.build_geometry("lib", type_def, {"params": {"FlangeVisible": False}})
+        result = reg.build_geometry("lib", type_def, {"properties": {"FlangeVisible": False}})
 
         # Not visible, but still generated -- present in result.features,
         # unlike a disabled feature.
@@ -737,7 +739,7 @@ def test_build_geometry_raises_for_a_feature_referencing_an_unbuilt_host_layer()
         )
 
         try:
-            reg.build_geometry("lib", type_def, {"params": {}})
+            reg.build_geometry("lib", type_def, {"properties": {}})
         except ValueError as exc:
             assert "does_not_exist" in str(exc)
         else:
@@ -766,7 +768,7 @@ def test_build_geometry_resolves_a_feature_from_its_own_declared_module():
             ]
         )
 
-        result = reg.build_geometry("lib", type_def, {"params": {}})
+        result = reg.build_geometry("lib", type_def, {"properties": {}})
 
         assert len(calls) == 1
         assert result.features["stiffener"].shape == "STIFFENER_SHAPE"
@@ -802,7 +804,7 @@ def test_build_geometry_resolves_each_feature_from_its_own_module_independently(
             ]
         )
 
-        result = reg.build_geometry("lib", type_def, {"params": {}})
+        result = reg.build_geometry("lib", type_def, {"properties": {}})
 
         assert len(default_calls) == 1
         assert len(custom_calls) == 1
@@ -816,7 +818,7 @@ def test_build_geometry_resolves_each_feature_from_its_own_module_independently(
 
 def test_build_geometry_with_no_features_declared_leaves_result_features_empty():
     reg, type_def = _register_fake_type()
-    result = reg.build_geometry("lib", type_def, {"params": {}})
+    result = reg.build_geometry("lib", type_def, {"properties": {}})
     assert result.features == {}
 
 
@@ -824,7 +826,7 @@ def test_build_geometry_leaves_roles_empty_for_layers_with_no_matching_construct
     fake_module = types.ModuleType("fake_hvac_lib_pkg.segments_unmigrated")
 
     def build(context):
-        return {"shape": "SHAPE"}
+        return {"layers": {"shape": {"shape": "SHAPE"}}}
 
     fake_module.build = build
     sys.modules["fake_hvac_lib_pkg.segments_unmigrated"] = fake_module
@@ -844,7 +846,7 @@ def test_build_geometry_leaves_roles_empty_for_layers_with_no_matching_construct
         reg = HVACLibraryRegistry()
         reg.register_library(lib)
 
-        result = reg.build_geometry("lib", type_def, {"params": {}})
+        result = reg.build_geometry("lib", type_def, {"properties": {}})
 
         assert result.layers["shape"].roles == []
     finally:

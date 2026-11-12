@@ -75,7 +75,8 @@
       "default": 2
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:wyes",
     "function": "build_wye_mitered"
   },

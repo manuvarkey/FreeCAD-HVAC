@@ -72,4 +72,4 @@ def build_rectangular_straight_fcstd(context):
         result_object="ResultObject",
     )
 
-    return {"shape": shape}
+    return api.single_layer(context, shape)

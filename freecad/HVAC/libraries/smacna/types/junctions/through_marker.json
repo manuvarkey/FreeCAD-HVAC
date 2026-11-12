@@ -21,7 +21,8 @@
       "default": 240.0
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:markers",
     "function": "build_transition_marker"
   }

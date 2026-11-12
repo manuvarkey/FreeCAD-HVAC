@@ -57,7 +57,8 @@
       "default": 0.0
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:inline",
     "function": "build_obstruction_generic"
   },

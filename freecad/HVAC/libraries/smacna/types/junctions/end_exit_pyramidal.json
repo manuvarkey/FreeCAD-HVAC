@@ -161,7 +161,8 @@
       }
     ]
   },
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:terminals",
     "function": "build_terminal_diffusing"
   },

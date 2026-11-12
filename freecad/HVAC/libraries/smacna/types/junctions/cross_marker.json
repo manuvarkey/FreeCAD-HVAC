@@ -21,7 +21,8 @@
       "default": 280.0
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:markers",
     "function": "build_cross_marker"
   }

@@ -109,7 +109,8 @@
       }
     ]
   },
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:stars",
     "function": "build_wye_generic"
   },

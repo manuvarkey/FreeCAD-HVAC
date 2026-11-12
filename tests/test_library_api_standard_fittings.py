@@ -39,7 +39,7 @@ def _terminal_context(params):
         "profile_x_axis": None,
         "segment_end": "start",
     }
-    return {"hvac_api": HVACLibraryAPI, "params": params, "connected_ports": [port]}
+    return {"hvac_api": HVACLibraryAPI, "properties": params, "connected_ports": [port]}
 
 
 def test_measure_fitting_dispatches_to_the_named_fitting():

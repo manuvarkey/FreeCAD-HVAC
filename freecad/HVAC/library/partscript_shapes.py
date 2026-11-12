@@ -24,7 +24,7 @@ class PartScriptSchemaError(PartScriptError):
 
 
 _MODULE_CACHE = {}
-_PARTSCRIPT_API_VERSION = 2
+_PARTSCRIPT_API_VERSION = 3
 
 
 def _module_signature(path):
@@ -49,9 +49,7 @@ def _load_module(script_path):
     if cached is not None and cached[0] == signature:
         return cached[1]
 
-    module_name = "_freecad_hvac_partscript_{}".format(
-        hashlib.sha1(path.encode("utf-8")).hexdigest()
-    )
+    module_name = "_freecad_hvac_partscript_{}".format(hashlib.sha1(path.encode("utf-8")).hexdigest())
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
         raise PartScriptSchemaError("Cannot load PartScript '{}'".format(path))
@@ -80,9 +78,7 @@ def execute_partscript(script_path, context):
     version = int(getattr(module, "HVAC_PARTSCRIPT_API", _PARTSCRIPT_API_VERSION))
     if version != _PARTSCRIPT_API_VERSION:
         raise PartScriptSchemaError(
-            "PartScript '{}' requires API {}; loader supports {}".format(
-                script_path, version, _PARTSCRIPT_API_VERSION
-            )
+            "PartScript '{}' requires API {}; loader supports {}".format(script_path, version, _PARTSCRIPT_API_VERSION)
         )
 
     # Step 2: an optional validate(context) gets first refusal -- it can
@@ -96,41 +92,34 @@ def execute_partscript(script_path, context):
     # Step 3: generate(context) is required and must build the shape.
     generator = getattr(module, "generate", None)
     if not callable(generator):
-        raise PartScriptSchemaError(
-            "PartScript '{}' must define generate(context)".format(script_path)
-        )
+        raise PartScriptSchemaError("PartScript '{}' must define generate(context)".format(script_path))
 
     result = generator(context)
     if hasattr(result, "isNull"):
-        result = {"shape": result}
+        # A bare shape is one solid: it goes on the type's first layer.
+        result = context["hvac_api"].single_layer(context, result)
     if not isinstance(result, dict):
         raise PartScriptSchemaError(
-            "PartScript '{}' must return Part.Shape or dict".format(script_path)
+            "PartScript '{}' must return Part.Shape or a {{\"layers\": ...}} dict".format(script_path)
         )
 
-    # Step 4: the result must contain at least one real, non-empty shape --
-    # either the legacy result["shape"], or a shape in one of
-    # result["layers"]'s entries (the multilayer construction contract; see
-    # library/geometry_result.py). Never hardcodes a layer id -- a
-    # PartScript names its own construction layers however it likes.
-    if "layers" in result:
-        layers = dict(result.get("layers") or {})
-        shapes = {}
-        for layer_id, layer_value in layers.items():
-            shape = layer_value.get("shape") if isinstance(layer_value, dict) else getattr(layer_value, "shape", None)
-            shapes[layer_id] = shape
-
-        if not any(hasattr(s, "isNull") and not s.isNull() for s in shapes.values() if s is not None):
-            raise PartScriptSchemaError(
-                "PartScript '{}' did not return a real Part.Shape in any of result['layers']".format(script_path)
+    # Step 4: the result must hold at least one real, non-empty shape in
+    # result["layers"] (the one result form; see library/geometry_result.py).
+    # Never hardcodes a layer id -- a PartScript names its own construction
+    # layers however it likes.
+    if "layers" not in result:
+        raise PartScriptSchemaError(
+            'PartScript \'{}\' must return {{"layers": ...}} (the {{"shape": ...}} form was removed)'.format(
+                script_path
             )
-    else:
-        shape = result.get("shape")
-        if shape is None or not hasattr(shape, "isNull"):
-            raise PartScriptSchemaError(
-                "PartScript '{}' did not return a Part.Shape in result['shape']".format(script_path)
-            )
-        if shape.isNull():
-            raise PartScriptSchemaError("PartScript '{}' returned an empty shape".format(script_path))
+        )
+    shapes = [
+        layer_value.get("shape") if isinstance(layer_value, dict) else getattr(layer_value, "shape", None)
+        for layer_value in dict(result.get("layers") or {}).values()
+    ]
+    if not any(hasattr(s, "isNull") and not s.isNull() for s in shapes if s is not None):
+        raise PartScriptSchemaError(
+            "PartScript '{}' did not return a real Part.Shape in any of result['layers']".format(script_path)
+        )
 
     return dict(result)

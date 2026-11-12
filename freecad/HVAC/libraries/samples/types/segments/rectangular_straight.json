@@ -63,7 +63,8 @@
       "default": true
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "segments",
     "function": "build_rectangular_straight_fcstd"
   }

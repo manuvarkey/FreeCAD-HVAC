@@ -31,7 +31,7 @@ def _port(profile="Circular", **section):
 
 
 def _ctx(params, port=None):
-    return {"hvac_api": HVACLibraryAPI, "params": dict(params), "connected_ports": [port or _port()]}
+    return {"hvac_api": HVACLibraryAPI, "properties": dict(params), "connected_ports": [port or _port()]}
 
 
 def _layout(kind, params, port=None):

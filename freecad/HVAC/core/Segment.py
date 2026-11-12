@@ -158,7 +158,7 @@ class DuctSegment:
                 "obj": obj,
                 "start_point": start_point,
                 "end_point": end_point,
-                "params": params,
+                "properties": params,
                 "family": getattr(obj, "Family", ""),
                 "profile": getattr(obj, "Profile", ""),
                 "profile_x_axis": getattr(obj, "ProfileXAxis", None),

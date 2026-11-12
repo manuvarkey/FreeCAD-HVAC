@@ -160,7 +160,8 @@
       }
     ]
   },
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:tees",
     "function": "build_lateral_tee_mitered"
   },

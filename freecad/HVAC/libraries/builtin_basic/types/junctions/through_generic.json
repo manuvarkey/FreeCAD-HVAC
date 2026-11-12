@@ -36,7 +36,8 @@
       "default": 300.0
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:through",
     "function": "build_through_generic"
   },

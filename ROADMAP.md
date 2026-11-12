@@ -1044,6 +1044,25 @@ software is alpha. That settles (b) and (c) and simplifies the design:
   next sync of a document, and old stored per-port lists may be reset.
 - (3) No warning aliases: private methods are renamed outright.
 
+**Status, single-form schema (1 of 6.4): done 13 November 2026.**
+- Type-defs: `"geometry"` with a required `backend` (`generator` with
+  `module` / `function`, `partscript` with `file`, `static` with
+  `descriptor`); the top-level `"generator"` key is refused. All 130
+  shipped type-defs converted.
+- Results: `{"layers": ...}` only; `geometry_result.normalize` refuses a
+  `{"shape"}` dict. New `HVACLibraryAPI.single_layer(context, shape,
+  **extra)` puts a one-solid result on the type's first layer (markers,
+  the duct closure, a fitting with no wall, static shapes, a PartScript
+  returning a bare shape).
+- Context: `properties` only (resolved values; undeclared supplied
+  values pass through); `params` is gone. PartScript API bumped to 3.
+- No JSON Schema files were added: `Library._load_type_def_file` stays the
+  enforcing check (FreeCAD ships no `jsonschema`).
+- Smoke run: 597 builds compared before and after, 0 differences.
+- `smacna/branch_wye_radius` removed: with the 0.8 mm SMACNA wall it hangs
+  inside an OpenCascade boolean for over 14 minutes on the first case (the
+  builtin one fails in seconds, as known). Back when the wye fuse is fixed.
+
 **(a) checked across save and reload (13 November 2026, FreeCAD 1.1.4).**
 The owner asked to check the current scheme, which exists to keep keys
 stable. Findings:

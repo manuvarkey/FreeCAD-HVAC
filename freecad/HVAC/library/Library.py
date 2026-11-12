@@ -104,6 +104,11 @@ SHARED_MODULE_PREFIX = "shared:"
 SHARED_FITTINGS_PACKAGE = "freecad.HVAC.library.fittings"
 
 # Selection kinds a type descriptor may declare under "selection.kind".
+GEOMETRY_BACKEND_GENERATOR = "generator"
+GEOMETRY_BACKEND_PARTSCRIPT = "partscript"
+GEOMETRY_BACKEND_STATIC = "static"
+VALID_GEOMETRY_BACKENDS = {GEOMETRY_BACKEND_GENERATOR, GEOMETRY_BACKEND_PARTSCRIPT, GEOMETRY_BACKEND_STATIC}
+
 SELECTION_KIND_MODEL = "model"
 SELECTION_KIND_PLACEHOLDER = "placeholder"
 SELECTION_KIND_INLINE = "inline"
@@ -187,8 +192,8 @@ class HVACTypeDef:
     # Construction layers this type declares (see library/construction.py
     # and the "construction" JSON block below) -- empty for a type that
     # hasn't been migrated to the multilayer model, which build_geometry()
-    # treats as a single, roleless implicit layer (geometry_result.normalize()'s
-    # legacy {"shape": ...} wrapping). Parsed from the JSON "construction"
+    # treats as a single, roleless implicit layer (HVACLibraryAPI.single_layer).
+    # Parsed from the JSON "construction"
     # block's own "layers" array.
     construction: list[ConstructionLayerDef] = field(default_factory=list)
     # Construction features this type declares (localized attachments --
@@ -790,13 +795,13 @@ class HVACLibraryRegistry:
         # reaching past the API into Library.py's own HVACTypeDef.
         prepared["construction_layers"] = list(getattr(type_def, "construction", []) or [])
 
-        params = prepared.get("params")
-        if params is None:
-            params = self.resolve_params(type_def, obj=prepared.get("obj"), supplied=prepared.get("properties"))
-        prepared["params"] = dict(params or {})
-
-        # Backward compatibility for existing generators/loss helpers.
-        prepared["properties"] = prepared["params"]
+        # The type's resolved property values: anything the caller supplied
+        # (already resolved, or raw overrides) on top of the object's own
+        # values and the type-def defaults. One key, "properties".
+        supplied = dict(prepared.get("properties") or {})
+        resolved = self.resolve_params(type_def, obj=prepared.get("obj"), supplied=supplied) or {}
+        # Supplied values the type does not declare are passed through as given.
+        prepared["properties"] = {**supplied, **resolved}
         validation.validate_context(type_def, prepared)
         return prepared
 
@@ -805,10 +810,10 @@ class HVACLibraryRegistry:
         Build a type's geometry by dispatching to whichever of the three
         supported geometry backends it declares: "partscript" (a Python
         script under the library), "static" (a pre-built BREP/STEP file
-        plus a placement descriptor), or -- if neither is set -- the legacy
-        generator_module/generator_function pair. Whatever the backend
-        returns (a legacy {"shape": ...} dict or a new-style
-        {"layers": {...}} dict) is normalized here, once, into a real
+        plus a placement descriptor), or "generator" (a Python function,
+        geometry.module / geometry.function). Whatever the backend returns
+        ({"layers": {...}}, the one result form) is normalized here, once,
+        into a real
         GeometryResult -- every caller downstream (DuctSegment/DuctComponent/
         DuctJunction) only ever sees a GeometryResult, never a raw dict.
 
@@ -820,6 +825,10 @@ class HVACLibraryRegistry:
         context = self._prepare_geometry_context(type_def, context)
         geometry = getattr(type_def, "geometry", None)
         backend = str(getattr(geometry, "backend", "") or "").lower()
+        if not backend and type_def.generator_module and type_def.generator_function:
+            # An HVACTypeDef built in code (not loaded from JSON, where the
+            # backend is required) may name only its generator.
+            backend = GEOMETRY_BACKEND_GENERATOR
 
         if backend == "partscript":
             from . import partscript_shapes
@@ -831,15 +840,13 @@ class HVACLibraryRegistry:
 
             descriptor_path = self.resolve_library_file(library_id, geometry.descriptor)
             raw = static_shapes.build_static_geometry(descriptor_path, context)
-        elif backend:
-            raise ValueError("Type '{}' uses unsupported geometry backend '{}'".format(type_def.id, backend))
-        elif type_def.generator_module and type_def.generator_function:
-            # Legacy generator backend.
+        elif backend == GEOMETRY_BACKEND_GENERATOR:
+            # A Python function: geometry.module / geometry.function.
             module = self.import_generator(library_id, type_def.generator_module)
             func = getattr(module, type_def.generator_function)
             raw = func(context)
         else:
-            raise ValueError("Type '{}' has no geometry definition".format(type_def.id))
+            raise ValueError("Type '{}' uses unsupported geometry backend '{}'".format(type_def.id, backend))
 
         result = geometry_result.normalize(raw)
 
@@ -860,7 +867,7 @@ class HVACLibraryRegistry:
         construction.features generators, storing each enabled one's
         returned Part.Shape into result.features. A feature's own
         enabled_parameter/visible_parameter/parameters only ever reference
-        property names already resolved into context["params"] by
+        property names already resolved into context["properties"] by
         _prepare_geometry_context() above -- no second parameter
         resolution, per the "existing parameter system, unchanged" rule.
 
@@ -881,7 +888,7 @@ class HVACLibraryRegistry:
         if not feature_defs:
             return
 
-        params = dict(context.get("params", {}) or {})
+        params = dict(context.get("properties", {}) or {})
         modules_by_name = {}
 
         for feature_def in feature_defs:
@@ -1265,7 +1272,12 @@ class HVACLibraryRegistry:
                     )
                 )
 
-        gen = raw.get("generator", {}) or {}
+        if "generator" in raw:
+            raise ValueError(
+                "Type '{}' in '{}': the top-level 'generator' key was replaced by "
+                '"geometry": {{"backend": "generator", "module": ..., "function": ...}}'.format(raw.get("id", "?"), filepath)
+            )
+        gen = {}
         lengths = raw.get("connection_lengths", {}) or {}
         loss = raw.get("loss", {}) or {}
         friction = raw.get("friction", {}) or {}
@@ -1292,8 +1304,21 @@ class HVACLibraryRegistry:
             )
 
         geometry_raw = raw.get("geometry", {}) or {}
+        backend = str(geometry_raw.get("backend", "") or "")
+        if backend not in VALID_GEOMETRY_BACKENDS:
+            raise ValueError(
+                "Type '{}' in '{}' needs geometry.backend, one of {}".format(
+                    raw.get("id", "?"), filepath, ", ".join(sorted(VALID_GEOMETRY_BACKENDS))
+                )
+            )
+        if backend == GEOMETRY_BACKEND_GENERATOR:
+            gen = {"module": geometry_raw.get("module", ""), "function": geometry_raw.get("function", "")}
+            if not gen["module"] or not gen["function"]:
+                raise ValueError(
+                    "Type '{}' in '{}': a generator backend needs module and function".format(raw.get("id", "?"), filepath)
+                )
         geometry = HVACGeometryDef(
-            backend=geometry_raw.get("backend", ""),
+            backend=backend,
             file=geometry_raw.get("file", ""),
             descriptor=geometry_raw.get("descriptor", ""),
         )

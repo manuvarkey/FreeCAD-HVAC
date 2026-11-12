@@ -180,7 +180,8 @@
       }
     ]
   },
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:inline",
     "function": "build_vav_box"
   },

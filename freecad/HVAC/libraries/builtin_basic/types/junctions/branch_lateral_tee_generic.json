@@ -43,7 +43,8 @@
       "default": 100.0
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:tees",
     "function": "build_lateral_tee"
   },

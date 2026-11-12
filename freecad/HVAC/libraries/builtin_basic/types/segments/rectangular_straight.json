@@ -36,7 +36,8 @@
       "default": 100.0
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:segments",
     "function": "build_rectangular_straight"
   }

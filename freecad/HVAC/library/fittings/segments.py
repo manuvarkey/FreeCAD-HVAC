@@ -7,7 +7,7 @@ from ._common import _finish
 
 
 def _properties(context):
-    return dict(context.get("params") or context.get("properties") or {})
+    return dict(context.get("properties") or {})
 
 
 def _build(context, profile, section):

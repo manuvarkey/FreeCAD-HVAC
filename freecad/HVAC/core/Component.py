@@ -167,7 +167,7 @@ class DuctComponent:
             context = {
                 "obj": obj,
                 "center_point": HVACLibraryAPI.average_point([p["position"] for p in ports]),
-                "params": params,
+                "properties": params,
                 "connected_ports": ports,
                 # Full node topology analysis (collinear_pairs,
                 # orthogonal_pairs, edge_angles, edge_eccentricities,

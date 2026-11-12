@@ -90,7 +90,8 @@
       }
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:tees",
     "function": "build_tee_radius_center"
   },

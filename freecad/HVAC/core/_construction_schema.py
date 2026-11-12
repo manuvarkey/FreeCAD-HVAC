@@ -65,7 +65,7 @@ def apply_construction_schema(obj, library_id, type_id):
 
     A type with no declared construction (not yet migrated to the
     multilayer model) gets a single implicit layer id, matching
-    geometry_result.normalize()'s legacy {"shape": ...} wrapping, so it
+    HVACLibraryAPI.single_layer() when a type declares no layers, so it
     still gets one Layer_shape_Shape/Layer_shape_Material pair rather than
     none at all.
     """

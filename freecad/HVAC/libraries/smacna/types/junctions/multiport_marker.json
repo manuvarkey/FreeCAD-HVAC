@@ -21,7 +21,8 @@
       "default": 320.0
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:markers",
     "function": "build_manifold_marker"
   }

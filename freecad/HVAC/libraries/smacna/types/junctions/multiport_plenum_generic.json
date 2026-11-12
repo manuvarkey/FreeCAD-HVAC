@@ -165,7 +165,8 @@
       }
     ]
   },
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:boxes",
     "function": "build_plenum"
   },

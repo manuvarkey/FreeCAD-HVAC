@@ -29,7 +29,8 @@
       "default": 3.0
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:terminals",
     "function": "build_duct_closure_generic"
   },

@@ -1,9 +1,9 @@
-HVAC_PARTSCRIPT_API = 2
+HVAC_PARTSCRIPT_API = 3
 
 
 def generate(context):
     api = context["hvac_api"]
-    p = dict(context.get("params") or context.get("properties") or {})
+    p = dict(context.get("properties") or {})
     ports = list(api.connected_ports(context))
     if len(ports) != 2:
         raise ValueError(f"Expected 2 connected ports, got {len(ports)}")

@@ -16,7 +16,7 @@ def _marker(context, diameter, trim=0.0):
         center = sum((api.port_position(p) for p in ports), api.vec((0, 0, 0))) / len(ports)
     else:
         center = api.vec(context.get("position", (0, 0, 0)))
-    result = {"shape": api.make_sphere(center, diameter)}
+    result = api.single_layer(context, api.make_sphere(center, diameter))
     if ports and trim > 0:
         result["connection_lengths"] = api.build_trim_rec_from_port_lengths([(p, trim) for p in ports])
     return result
@@ -47,10 +47,11 @@ def build_terminal_marker(context):
     first_line = api.make_line(center - first_axis * radius, center + first_axis * radius)
     second_line = api.make_line(center - second_axis * radius, center + second_axis * radius)
 
-    return {
-        "shape": api.compound([first_line, second_line]),
-        "connection_lengths": api.build_trim_rec_from_context_uniform(context, 0.0),
-    }
+    return api.single_layer(
+        context,
+        api.compound([first_line, second_line]),
+        connection_lengths=api.build_trim_rec_from_context_uniform(context, 0.0),
+    )
 
 
 def build_transition_marker(context):

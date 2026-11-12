@@ -71,7 +71,8 @@
       }
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:crosses",
     "function": "build_cross_tee_straight"
   },

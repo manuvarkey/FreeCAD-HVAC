@@ -14,13 +14,12 @@ class _Shape:
     """Stand-in for a Part.Shape -- identity is all these tests care about."""
 
 
-def test_normalize_wraps_legacy_shape_dict_as_a_single_layer():
-    shape = _Shape()
-    result = gr.normalize({"shape": shape, "connection_lengths": [{"edge_key": "A"}]})
+def test_normalize_rejects_the_removed_shape_form():
+    # Stage 11: one result form. A bare {"shape": ...} dict is refused with a pointer to single_layer.
+    import pytest
 
-    assert set(result.layers.keys()) == {"shape"}
-    assert result.layers["shape"].shape is shape
-    assert result.connection_lengths == [{"edge_key": "A"}]
+    with pytest.raises(TypeError, match="single_layer"):
+        gr.normalize({"shape": _Shape(), "connection_lengths": [{"edge_key": "A"}]})
 
 
 def test_normalize_accepts_layers_dict_with_plain_dict_values():
@@ -75,7 +74,7 @@ def test_normalize_passthrough_of_a_geometry_result_returns_the_same_object():
 
 def test_normalize_preserves_trim_planes_and_computed_properties():
     result = gr.normalize({
-        "shape": _Shape(),
+        "layers": {"shape": {"shape": _Shape()}},
         "start_trim_plane_json": '{"position": [0, 0, 0]}',
         "end_trim_plane_json": None,
         "computed_properties": {"angle": 42.0},
@@ -86,7 +85,7 @@ def test_normalize_preserves_trim_planes_and_computed_properties():
 
 
 def test_normalize_preserves_unknown_keys_in_extra():
-    result = gr.normalize({"shape": _Shape(), "some_future_output": "value"})
+    result = gr.normalize({"layers": {"shape": {"shape": _Shape()}}, "some_future_output": "value"})
     assert result.extra == {"some_future_output": "value"}
 
 
@@ -96,7 +95,7 @@ def test_normalize_never_populates_features_from_a_raw_backend_dict():
     # part of the contract, it would just land in .extra like any other
     # unrecognized key. GeometryResult.features is only ever populated by
     # HVACLibraryRegistry.build_geometry()'s own second pass (see Library.py).
-    result = gr.normalize({"shape": _Shape()})
+    result = gr.normalize({"layers": {"shape": {"shape": _Shape()}}})
     assert result.features == {}
 
 

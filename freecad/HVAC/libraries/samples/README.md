@@ -8,13 +8,9 @@ ship the types actually meant for day-to-day use.
 
 There are three ways to wire geometry to a type-def. All three receive the same
 `context` dict (`hvac_api`, `loss_api`, `library_id`, `start_point`/`end_point`
-for segments or `connected_ports` for junctions, `params`/`properties`, ...)
-and must return
-one of:
+for segments or `connected_ports` for junctions, `properties`, ...)
+and must return the one result form:
 
-- `{"shape": <Part.Shape>}` -- the legacy, single-shape form. Fine for a type
-  with only one construction layer (most shipped types); `build_geometry()`
-  normalizes it to a single layer, id `"shape"`.
 - `{"layers": {"casing": {"shape": <Part.Shape>}, "insulation": {"shape": <Part.Shape or None>}}}`
   -- for a type with more than one construction layer (e.g. a casing plus
   its own insulation solid, as in `smacna/models/circular_straight.py`,
@@ -42,7 +38,7 @@ The full set of keys a backend can rely on being present in `context`:
 - `hvac_api` -- the `HVACLibraryAPI` class itself (`freecad/HVAC/library/library_api.py`), the only sanctioned entry point into geometry/port helpers.
 - `loss_api` -- the `HVACLossAPI` class (`freecad/HVAC/library/loss_api.py`); loss modules only.
 - `library_id` -- this library's own `id`, matching its `library.json`.
-- `params` / `properties` -- this type-def instance's resolved property values (`HVACLibrary.resolve_params`); either key holds the same dict, so read via `context.get("params") or context.get("properties")`.
+- `properties` -- this type-def instance's resolved property values (`HVACLibrary.resolve_params`).
 - Segments only: `start_point` / `end_point`.
 - Junctions only: `connected_ports` -- one dict per connected port (`position`, `direction` (outward, away from the node), `profile`, `section_params`, `profile_x_axis`, `edge_key`, ...) -- see `HVACLibraryAPI.connected_ports` / the `port_*` accessors.
 - Junctions only: `center_point` -- the node's representative point (falls back to the average of `connected_ports`' positions, via `HVACLibraryAPI.center_from_context`, when absent).
@@ -57,8 +53,9 @@ The full set of keys a backend can rely on being present in `context`:
 A plain Python file, loaded and executed directly (`freecad/HVAC/library/partscript_shapes.py`),
 with access to every geometry primitive through `context["hvac_api"]`
 (`make_profile`, `sweep`, `loft`, boolean operations, ...). It must set
-`HVAC_PARTSCRIPT_API = 2` and define
-`generate(context) -> {"shape": ...}` (an optional `validate(context)` runs
+`HVAC_PARTSCRIPT_API = 3` and define
+`generate(context) -> {"layers": ...}` (a bare `Part.Shape` is also
+accepted and put on the type's first layer; an optional `validate(context)` runs
 first if present). This is the preferred backend for new parametric types --
 no JSON schema beyond pointing at the file, and the model author uses the same
 public geometry API as a generator function.
@@ -80,9 +77,11 @@ Example here: `types/junctions/end_diffuser_static.json` ->
 `models/static_diffuser.json` (descriptor) -> `models/static_diffuser.step`
 (geometry).
 
-## 3. Legacy generator function (`"generator": {"module": "...", "function": "..."}`)
+## 3. Generator function (`"geometry": {"backend": "generator", "module": "...", "function": "..."}`)
 
-A Python function `func(context) -> {"shape": ..., "connection_lengths": ...}`
+A Python function `func(context) -> {"layers": ..., "connection_lengths": ...}`
+(`HVACLibraryAPI.single_layer(context, shape, connection_lengths=...)` builds
+the result for a fitting that is one solid)
 in `<library>/generators/<module>.py`, or in one of the addon's shared
 fitting modules (`freecad/HVAC/library/fittings/`, named with the `shared:`
 module prefix -- see `libraries/README.md`). This is the original,
@@ -107,7 +106,7 @@ Example here: `types/segments/rectangular_straight.json` ->
 - New parametric type, comfortable writing the geometry in Python: **PartScript**.
 - Fixed/imported geometry (vendor part, STEP export), no parametrics needed: **static**.
 - Geometry is more naturally authored/edited in the FreeCAD GUI as a `.FCStd`
-  document (sketches, VarSet-driven expressions): **legacy generator + `shape_from_fcstd`**.
+  document (sketches, VarSet-driven expressions): **generator + `shape_from_fcstd`**.
 - Anything needing bespoke Python logic beyond what PartScript's `generate()`
   contract offers (e.g. dispatching to different sub-models based on size, or
-  reuse of shared helper code across many types): **legacy generator function**.
+  reuse of shared helper code across many types): **generator function**.

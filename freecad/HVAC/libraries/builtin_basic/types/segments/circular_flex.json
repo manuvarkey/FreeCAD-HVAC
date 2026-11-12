@@ -38,7 +38,8 @@
       "validation": {"minimum": 0.0, "maximum": 30.0}
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:segments",
     "function": "build_circular_curved"
   },

@@ -57,7 +57,7 @@ def test_measure_connection_lengths_dispatches_prepares_context_and_normalizes()
         # diverging context-building path for measurement.
         assert captured["hvac_api"] is HVACLibraryAPI
         assert captured["hvac_api_version"] == HVACLibraryAPI.API_VERSION
-        assert "params" in captured
+        assert "properties" in captured and "params" not in captured
 
         # Normalized (see normalize_connection_lengths tests below) --
         # a materially-valid record round-trips unchanged.

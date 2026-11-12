@@ -21,7 +21,7 @@ Three libraries ship today:
   __init__.py                  # empty package marker + SPDX header
   generators/
     __init__.py
-    <module>.py                # legacy "generator": {module, function} targets
+    <module>.py                # "geometry": {"backend": "generator", module, function} targets
   models/
     <name>.py                  # PartScript files
     <name>.FCStd                # FCStd-template documents
@@ -61,7 +61,7 @@ reason to diverge.
   type is addressed as `(library_id, type_id)`.
 - `label`: display name.
 - `generators_package`: the Python package `import_generator(library_id, module)`
-  imports `<generators_package>.<module>` from, for the legacy `"generator"` backend.
+  imports `<generators_package>.<module>` from, for the `"generator"` geometry backend.
 - `default_construction`: optional construction layers inherited by every
   type that does not declare its own `construction.layers`. This keeps the
   material construction uniform for simple parts within one library.
@@ -124,8 +124,7 @@ Common fields, both segments and junctions:
 | `constraints` | e.g. `{"degree": 1}` restricting how many ports a junction may have; junctions can additionally constrain `flow_class`, `qualifiers.<key>`, `profile_relation`, `inlet_profile`, `outlet_profile`, and any `derived_values` entry (e.g. `area_ratio`) -- see below |
 | `properties` | list of property defs (below) |
 | `construction` | optional `{"layers": [...], "features": [...]}` object (below); when omitted, inherits the library manifest's `default_construction`, or falls back to one roleless implicit layer if the manifest has no default |
-| `geometry` | `{"backend": "partscript"\|"static", "file"\|"descriptor": "..."}` |
-| `generator` | legacy alternative to `geometry`: `{"module": "...", "function": "..."}` |
+| `geometry` | required: `{"backend": "generator", "module": "...", "function": "..."}`, `{"backend": "partscript", "file": "..."}` or `{"backend": "static", "descriptor": "..."}`. The old top-level `"generator"` key is refused |
 | `connection_lengths` | optional: `{"module": "...", "function": "..."}` -- a lightweight, independent per-port trim *measurement* function (parsed onto `HVACTypeDef.lengths_module`/`lengths_function`; see below) |
 | `loss_module` / `loss_function` | optional: fitting-loss coefficient function for the airflow solver; its context provides `HVACLossAPI` as `context["loss_api"]`. May instead (or also) declare `loss.variants` for flow-dependent formulas -- see below |
 | `friction` | optional, segments only: `{"module": "...", "function": "..."}` -- a straight-duct friction model factory (see below) |
@@ -152,11 +151,11 @@ SMACNA Fig. 14-4 correction for `CompressionPercent`.
 ### `connection_lengths`: independent trim measurement
 
 ```json
-"generator": {"module": "shared:elbows", "function": "build_elbow"},
+"geometry": {"backend": "generator", "module": "shared:elbows", "function": "build_elbow"},
 "connection_lengths": {"module": "shared:elbows", "function": "measure_elbow"}
 ```
 
-`generator` (or `geometry`, for a PartScript/static backend) builds the
+`geometry` (any backend) builds the
 type's final fitting `Shape`. `connection_lengths` is a separate, optional
 function that computes just the same fitting's per-port trim lengths (the
 standard `[{"edge_key", "segment_end", "length"}, ...]` records also
@@ -404,9 +403,10 @@ uses one per-port `TrimLength`. The same goes for flange switches:
 `ShowFlange<Role>` for a role, one per-port `ShowFlange` otherwise.
 
 See `samples/README.md` for the three geometry backends (`partscript`,
-`static`, and the legacy `generator` function -- including its use as a
+`static`, and the `generator` function -- including its use as a
 FCStd-template loader via `HVACLibraryAPI.shape_from_fcstd`), how to choose
-between them, and the `{"shape": ...}`/`{"layers": {...}}` result contract
+between them, and the `{"layers": {...}}` result contract (the one form;
+`HVACLibraryAPI.single_layer` builds it for a one-solid fitting)
 every backend's return value is normalized into (see
 `freecad/HVAC/library/geometry_result.py` and ARCHITECTURE.md's "Component
 geometry & materials").
@@ -665,7 +665,6 @@ and also when this table is out of date (regenerate it with
 | smacna | `branch_tee_straight` | Circular, Rectangular, Oval | model | `loss_tee_generic`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
 | smacna | `branch_wye_generic` | Circular, Rectangular, Oval, Generic | model | `loss_wye_generic`; diverging, common_leg run: `loss_branch_diverging_run`; converging, common_leg run: `loss_branch_converging_run`; diverging, common_leg branch: `loss_branch_diverging_branch`; converging, common_leg branch: `loss_branch_converging_branch` |
 | smacna | `branch_wye_mitered` | Circular, Rectangular, Oval | model | `loss_wye_generic` |
-| smacna | `branch_wye_radius` | Circular, Rectangular, Oval | model | `loss_wye_generic` |
 | smacna | `cross_double_wye_mitered` | Circular, Rectangular, Oval | model | `loss_cross_generic` |
 | smacna | `cross_double_wye_radius` | Circular, Rectangular, Oval | model | `loss_cross_generic` |
 | smacna | `cross_generic` | Circular, Rectangular, Oval, Generic | model | `loss_cross_generic` |

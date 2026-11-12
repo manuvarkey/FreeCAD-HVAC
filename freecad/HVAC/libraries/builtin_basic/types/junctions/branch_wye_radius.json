@@ -68,7 +68,8 @@
       "default": 150.0
     }
   ],
-  "generator": {
+  "geometry": {
+    "backend": "generator",
     "module": "shared:wyes",
     "function": "build_wye_radius"
   },
