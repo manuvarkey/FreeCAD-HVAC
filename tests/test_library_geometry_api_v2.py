@@ -78,13 +78,15 @@ def test_libraries_use_geometry_v2_not_legacy_hollow_helpers():
     assert not offenders, "Legacy geometry helper use remains:\n" + "\n".join(offenders)
 
 
-def test_geometry_v2_is_owned_directly_by_library_api():
-    assert GEOMETRY_V2_METHODS <= HVACLibraryAPI.__dict__.keys()
+def test_geometry_v2_is_on_the_public_class():
+    # The methods are written in topic mixin modules (_api_*.py, owner's
+    # decision of 13 November 2026); HVACLibraryAPI is still the one surface.
+    assert all(callable(getattr(HVACLibraryAPI, name, None)) for name in GEOMETRY_V2_METHODS)
 
 
-def test_split_geometry_api_module_is_removed():
+def test_old_split_geometry_api_module_is_removed():
     assert not (ROOT / "freecad" / "HVAC" / "library" / "_geometry_api.py").exists()
 
 
 def test_legacy_duplicate_geometry_helpers_are_removed_from_public_api():
-    assert not (FORBIDDEN_LEGACY_CALLS & HVACLibraryAPI.__dict__.keys())
+    assert not (FORBIDDEN_LEGACY_CALLS & set(dir(HVACLibraryAPI)))

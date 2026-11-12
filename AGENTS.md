@@ -30,14 +30,14 @@ code inside library parts, which is still in an exploratory/testing stage.
 - `freecad/HVAC/library/validation.py` — property validation
 - `freecad/HVAC/library/static_shapes.py` — descriptor loading, placement transform, port validation
 - `freecad/HVAC/library/partscript_shapes.py` — module loading/caching and `generate()`/`validate()` contract checking (not the PartScript's own geometry code)
-- `freecad/HVAC/library/library_api.py` — property/port/context helpers only: `vec`/`xyz`/`unit`/`angle_between`/`average_point`, `center_from_context`, `connected_ports`, `port_*` accessors, `copy_port`, `build_trim_rec_from_*`, and the loss-orchestration methods (`elbow_loss`, `transition_loss`, `branch_loss`, `manifold_loss`, `terminal_component_loss`, `inline_device_loss`)
+- `freecad/HVAC/library/library_api.py` / `_api_ports.py` (the `HVACLibraryAPI` class is assembled in `library_api.py` from the `_api_*.py` mixin modules) — property/port/context helpers only: `vec`/`xyz`/`unit`/`angle_between`/`average_point`, `center_from_context`, `connected_ports`, `port_*` accessors, `copy_port`, `build_trim_rec_from_*`, and the loss-orchestration methods (`elbow_loss`, `transition_loss`, `branch_loss`, `manifold_loss`, `terminal_component_loss`, `inline_device_loss`)
 
 **Out of scope for unit tests** (geometry generation inside library parts —
 still in testing/exploratory stage, do not write tests for these):
 - Any `generators/*.py` module inside a library (e.g. `smacna/generators/segments.py`)
 - Any PartScript model file under a library's `models/*.py`
 - `freecad/HVAC/library/template_shapes.py` — an FCStd-template shape-generation primitive, used the same way a generator uses `make_straight_shape`
-- The shape-construction primitives in `library_api.py`: `make_profile_frame`, `make_line_edge`, `make_wire_from_edges`, `make_rectangular_wire`, `make_circular_wire`, `make_oval_wire`, `make_section_wire(_from_port)`, `make_section_face(_from_port)`, `make_straight_shape`, `make_curved_shape`, `make_pipe_shell`, `make_loft`, `line_wire`, `arc_wire`, `fuse_shapes`, `shape_from_fcstd`
+- The shape-construction primitives of `HVACLibraryAPI` (`_api_profiles.py`, `_api_solids.py`, `_api_booleans.py`, `_api_recipes.py`): `make_profile_frame`, `make_line_edge`, `make_wire_from_edges`, `make_rectangular_wire`, `make_circular_wire`, `make_oval_wire`, `make_section_wire(_from_port)`, `make_section_face(_from_port)`, `make_straight_shape`, `make_curved_shape`, `make_pipe_shell`, `make_loft`, `line_wire`, `arc_wire`, `fuse_shapes`, `shape_from_fcstd`
 - Any other code whose job is producing/assembling `Part.Shape` geometry
 
 If it's unclear which bucket a module or function falls into, ask before
