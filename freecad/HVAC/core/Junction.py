@@ -35,7 +35,7 @@ from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
 
 from ..library.library_api import HVACLibraryAPI
-from . import _custom_fitting
+from . import _custom_fitting, _terminal_function
 from ..utils import hvaclib
 
 
@@ -105,7 +105,23 @@ class DuctJunction:
         # (see Component.py's own execute()). Nothing to do here.
         pass
 
+    def _requestOwnerSync(self, obj):
+        """Re-classify after an edit that changes this terminal's function (6.5)."""
+        doc = getattr(obj, "Document", None)
+        if doc is None or getattr(doc, "Restoring", False) or getattr(obj, "Topology", "") != "end":
+            return
+        owner = hvaclib.getOwnerNetwork(obj)
+        if owner is not None and getattr(owner, "Proxy", None) is not None:
+            try:
+                owner.Proxy.requestSync()
+            except Exception:
+                pass
+
     def onChanged(self, obj, prop):
+        if prop == "TerminalFunction" or (
+            prop == "FlowBoundary" and str(getattr(obj, "TerminalFunction", "Auto") or "Auto") == "Auto"
+        ):
+            self._requestOwnerSync(obj)
         # DesignFlowRate/FlowBoundary each have a two-way mirror onto the
         # Primary component's own copy (see Component.py's onChanged) -- a
         # junction has no Shape and can't be picked in the 3D view, so a
@@ -193,6 +209,17 @@ class DuctJunction:
             )
             obj.FlowBoundary = ["Auto", "Fixed", "Closed"]
             obj.FlowBoundary = "Auto"
+        if "TerminalFunction" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyEnumeration",
+                "TerminalFunction",
+                "Airflow",
+                "What this terminal does: Auto (from the network's SystemType; the balancing terminal is "
+                "the Source), Supply outlet, Return / Exhaust inlet, OutdoorAir intake, Discharge to "
+                "outside, or Source (where the system meets its fan or equipment)",
+            )
+            obj.TerminalFunction = list(_terminal_function.TERMINAL_FUNCTIONS)
+            obj.TerminalFunction = "Auto"
         self._addProperty(
             obj,
             "App::PropertyFloat",
@@ -318,6 +345,8 @@ class DuctJunction:
             is_terminal = getattr(obj, "Topology", "") == "end"
             boundary = str(getattr(obj, "FlowBoundary", "Auto") or "Auto")
             obj.setEditorMode("FlowBoundary", 0 if is_terminal else 2)
+            if "TerminalFunction" in getattr(obj, "PropertiesList", []):
+                obj.setEditorMode("TerminalFunction", 0 if is_terminal else 2)
             # DesignFlowRate is only meaningful (and editable) when Fixed;
             # still shown read-only for Auto/Closed on a terminal.
             if is_terminal:

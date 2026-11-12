@@ -1152,6 +1152,20 @@ joined by equipment; (f) terminal function defaults from the system
 with port markers (the custom-model route exists for corner cases the
 library cannot model; no equipment library types).
 
+**Status, terminal function: done, not tried in the GUI.**
+`DuctNetwork.SystemType`; end junctions' `TerminalFunction` (`Auto`,
+`Supply`, `Return`, `Exhaust`, `OutdoorAir`, `Discharge` -- added for an
+outlet to outside, e.g. after an exhaust fan -- and `Source`), resolved by
+`core/_terminal_function.py` during junction sync and stored as the end
+node's `terminal_function` qualifier (a new `KNOWN_QUALIFIER_KEYS` entry);
+changing either property re-syncs the network. Constraints in both
+libraries: intake hood `OutdoorAir`, exhaust hood `Discharge`, diffusers,
+grilles and registers `Supply` / `Return` / `Exhaust`. Calculate Airflow
+and Size Ducts warn about each terminal drawn the wrong way for its
+function. Not done: per-system colours (one network is one system, so the
+existing network totals are the system totals). Tests:
+`tests/test_terminal_function.py`.
+
 **Questions as asked:**
 - (e) One system per network (supply and return as separate networks
   joined by equipment), or one network spanning both through the AHU?

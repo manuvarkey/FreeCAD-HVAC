@@ -27,6 +27,7 @@ KNOWN_QUALIFIER_KEYS = frozenset(
         "profile_relation",
         "inlet_profile",
         "outlet_profile",
+        "terminal_function",  # end nodes, from the system (ROADMAP 6.5)
     }
 )
 # NOTE: this is deliberately only the vocabulary NetworkParser.classify_flow

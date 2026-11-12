@@ -30,7 +30,9 @@ and solving it; AirflowSolver.py and DuctSizer.py both import
 solve_flow_components() from here to share that one step.
 """
 
-from . import _analysis_adapter
+import json
+
+from . import _analysis_adapter, _terminal_function
 from ..analysis import flow as _flow
 
 FlowSolveError = _flow.FlowSolveError
@@ -60,4 +62,29 @@ def solve_flow_components(net_obj):
     warnings = _analysis_adapter.humanize_diagnostics(
         warnings, segment_map, junction_map, component_map
     )
+    warnings = terminal_direction_warnings(net_obj, junction_map) + list(warnings)
     return network_model, segment_map, junction_map, component_map, components, warnings
+
+
+def terminal_direction_warnings(net_obj, junction_map):
+    """
+    One warning per terminal drawn the wrong way for its function (ROADMAP
+    6.5): e.g. a supply outlet whose duct is drawn as bringing air in. Read
+    off each end junction's own classification (AnalysisJson).
+    """
+    system = str(getattr(net_obj, "SystemType", "Supply") or "Supply")
+    out = []
+    for junction in junction_map.values():
+        if getattr(junction, "Topology", "") != "end":
+            continue
+        try:
+            analysis = json.loads(getattr(junction, "AnalysisJson", "") or "{}")
+        except ValueError:
+            continue
+        function = (analysis.get("qualifiers") or {}).get("terminal_function", "")
+        message = _terminal_function.direction_warning(
+            _analysis_adapter.element_identifier(junction), function, system, analysis.get("flow_class", "")
+        )
+        if message:
+            out.append(message)
+    return out

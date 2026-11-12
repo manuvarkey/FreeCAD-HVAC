@@ -16,7 +16,16 @@
     "priority": 89
   },
   "constraints": {
-    "degree": 1
+    "degree": 1,
+    "qualifiers": {
+      "terminal_function": {
+        "enum": [
+          "Supply",
+          "Return",
+          "Exhaust"
+        ]
+      }
+    }
   },
   "properties": [
     {

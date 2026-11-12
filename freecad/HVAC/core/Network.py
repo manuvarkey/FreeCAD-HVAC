@@ -29,7 +29,7 @@ from dataclasses import asdict
 
 import FreeCAD
 
-from ..core import _construction_schema
+from ..core import _construction_schema, _terminal_function
 from ..core.Component import DuctComponent
 from ..core.Junction import DuctJunction, DuctJunctionVirtual
 from ..core.NetworkParser import DuctNetworkParser
@@ -138,6 +138,12 @@ class DuctNetwork:
         # Layer / feature visibility is display only: re-render, never rebuild.
         if prop == "ShowFeatures" or prop.startswith("ShowLayer_"):
             self.refreshAppearance()
+        # The system decides every Auto terminal's function: re-classify.
+        if prop == "SystemType" and not getattr(getattr(obj, "Document", None), "Restoring", False):
+            try:
+                self.requestSync()
+            except Exception:
+                pass
 
     def refreshAppearance(self):
         """Re-apply the per-layer / per-feature appearance of every segment and component of this network."""
@@ -289,6 +295,19 @@ class DuctNetwork:
                     16,  # Prop_NoRecompute
                 )
                 setattr(obj, prop_name, True)
+        # One system per network (ROADMAP 6.5): what its terminals do unless
+        # a terminal's own TerminalFunction says otherwise.
+        if "SystemType" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyEnumeration",
+                "SystemType",
+                "Airflow",
+                "The air system this network is: Supply, Return, Exhaust or OutdoorAir. Terminals left at "
+                "TerminalFunction Auto take their role from it (the balancing terminal is the Source)",
+            )
+            obj.SystemType = list(_terminal_function.SYSTEM_TYPES)
+            obj.SystemType = "Supply"
+
         if "ShowFeatures" not in obj.PropertiesList:
             obj.addProperty(
                 "App::PropertyBool",
@@ -1385,6 +1404,15 @@ class DuctNetwork:
             junction_analysis = parser.build_junction_analysis(node_id, segment_map)
             if not junction_analysis:
                 continue
+            if junction_analysis.topology == "end":
+                # The terminal's function (6.5) joins the classification, so
+                # type constraints, loss variants and the Edit Type list see it.
+                known = existing_junctions.get(node_key)
+                junction_analysis.qualifiers["terminal_function"] = _terminal_function.resolve(
+                    getattr(net, "SystemType", "Supply"),
+                    getattr(known, "TerminalFunction", "Auto") if known is not None else "Auto",
+                    getattr(known, "FlowBoundary", "Auto") if known is not None else "Auto",
+                )
             analysis_dict = asdict(junction_analysis)
             analysis_json = json.dumps(analysis_dict)
             connected_ports = analysis_dict["connected_ports"]
