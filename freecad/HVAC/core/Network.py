@@ -1624,6 +1624,14 @@ class DuctNetwork:
                 comp.CustomLossCoefficientEdgeKeys = new_keys
                 changed = True
 
+        # A custom fitting's manual port overrides (6.3) are edge keys too.
+        if primary is not None and "CustomPortEdgeKeys" in primary.PropertiesList:
+            stored_keys = list(getattr(primary, "CustomPortEdgeKeys", None) or [])
+            new_keys, keys_changed = _custom_loss.remap_persisted_edge_keys(stored_keys, edge_key_remap)
+            if keys_changed:
+                primary.CustomPortEdgeKeys = new_keys
+                changed = True
+
         # Per-port type properties (a plenum's own trim per port, ...) are
         # stored by edge_key as well, so they need the same carry forward.
         if edge_key_remap:
