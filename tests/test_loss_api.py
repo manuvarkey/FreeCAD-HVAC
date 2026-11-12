@@ -887,3 +887,42 @@ def test_face_mounted_decision_measures_a_rectangular_run_along_the_offset():
             port["profile_x_axis"] = [0.0, 0.0, 1.0]
         source = _path_for(api.branch_loss(context), "BRANCH").source
         assert (source == "smacna_branch_face_mounted") is face
+
+
+# ----------------------------------------------------------------------------
+# offset_loss -- reads the offset's own length property
+# ----------------------------------------------------------------------------
+
+
+def _offset_context(properties):
+    inlet = _port("IN", (-1, 0, 0), True, diameter=200.0)
+    outlet = _port("OUT", (1, 0, 0), False, diameter=200.0)
+    inlet["position"] = [0.0, 0.0, 0.0]
+    outlet["position"] = [0.0, 100.0, 0.0]
+    return {"connected_ports": [inlet, outlet], "properties": properties}
+
+
+def test_offset_loss_reads_offset_length():
+    by_offset_name = api.offset_loss(_offset_context({"OffsetLength": 300.0}))
+    by_transition_name = api.offset_loss(_offset_context({"TransitionLength": 300.0}))
+    assert by_offset_name.status == api.EXACT
+    assert _paths_by_edge(by_offset_name)["OUT"] > 0.0
+    assert _paths_by_edge(by_offset_name) == pytest.approx(_paths_by_edge(by_transition_name))
+
+
+def test_offset_loss_prefers_offset_length_and_a_longer_offset_loses_less():
+    short = _paths_by_edge(api.offset_loss(_offset_context({"OffsetLength": 200.0, "TransitionLength": 900.0})))["OUT"]
+    long = _paths_by_edge(api.offset_loss(_offset_context({"OffsetLength": 900.0})))["OUT"]
+    assert long < short
+
+
+def test_offset_loss_without_a_length_uses_the_duct_size_like_the_geometry():
+    unset = api.offset_loss(_offset_context({"OffsetLength": 0.0}))
+    by_size = api.offset_loss(_offset_context({"OffsetLength": 200.0}))
+    assert unset.status == api.EXACT
+    assert _paths_by_edge(unset) == pytest.approx(_paths_by_edge(by_size))
+
+
+def test_radiussed_offset_is_an_approximation():
+    result = api.offset_loss(_offset_context({"OffsetLength": 300.0, "OffsetRadius": 200.0}))
+    assert result.status == api.APPROXIMATION

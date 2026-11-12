@@ -225,17 +225,17 @@ class HVACLossAPI:
         Lateral-offset (jog) fitting loss: a same-size collinear pair whose
         axes are transversely displaced -- the "through.offset" case (see
         TOPOLOGY_CLASSIFICATION.md), as opposed to transition_loss's area
-        change. Expects exactly 2 connected_ports and a "TransitionLength"
-        entry in properties (the offset body's own axial length, shared with
-        through.transition's angled/mitered/radiussed builders).
+        change. Expects exactly 2 connected_ports and the offset body's own
+        axial length in properties: "OffsetLength" (an offset type) or
+        "TransitionLength" (a transition-style type used for an offset).
 
         Modelled as two corner deflections in series, each at the fitting's
         own turn angle (HVACLibraryAPI.offset_transition_axis), using
         SMACNA's generic-angle mitered-elbow tables (A7C/A7D) -- unlike the
         90-deg-only smooth-radius tables (elbow_zeta_round/rect), these are
         indexed by angle directly, which an offset's shallow corners need.
-        A "TransitionRadius" entry in properties (the radiussed corner
-        style) still borrows the mitered coefficient, since SMACNA has no
+        An "OffsetRadius"/"TransitionRadius" entry in properties (the
+        radiussed style) still borrows the mitered coefficient, since SMACNA has no
         generic-angle smooth-radius table -- that case comes back as
         APPROXIMATION rather than EXACT.
         """
@@ -249,9 +249,21 @@ class HVACLossAPI:
             inlet = next((p for p in ports if p is not outlet), None)
 
             properties = context.get("properties") or {}
-            length_mm = float(properties.get("TransitionLength", 0.0) or 0.0)
+            # An offset type names its length OffsetLength; a transition-style
+            # type used for an offset (the generic through fitting) names it
+            # TransitionLength.
+            length_mm = float(properties.get("OffsetLength", properties.get("TransitionLength", 0.0)) or 0.0)
             if length_mm <= 0.0:
-                return HVACLossAPI._unsupported("invalid TransitionLength")
+                # Not set: the geometry then uses the duct size (at least 100 mm), so the loss does too.
+                sizes = []
+                for port in ports:
+                    if HVACLibraryAPI.port_profile(port) == "Circular":
+                        sizes.append(float(HVACLibraryAPI.port_diameter(port)))
+                    else:
+                        sizes.append(
+                            max(float(HVACLibraryAPI.port_width(port)), float(HVACLibraryAPI.port_height(port)))
+                        )
+                length_mm = max(max(sizes), 100.0)
 
             axis = HVACLibraryAPI.offset_transition_axis(ports[0], ports[1], length_mm)
             theta_deg = math.degrees(axis["turn_angle"])
@@ -273,7 +285,7 @@ class HVACLossAPI:
                 return HVACLossAPI._unsupported("no offset table for profile '{}'".format(profile))
 
             path = HVACLossAPI._leg_path(outlet, inlet["edge_key"], 2.0 * corner_zeta, source="smacna_offset")
-            if "TransitionRadius" in properties:
+            if "OffsetRadius" in properties or "TransitionRadius" in properties:
                 return HVACLossAPI._approximation(
                     [path],
                     warning=(

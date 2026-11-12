@@ -85,8 +85,8 @@ can use them the same way; nothing has to be copied into its `generators/`.
 Only a plain module name may follow the prefix.
 
 The shared geometry modules are `segments`, `elbows`, `transitions`, `taps`,
-`tees`, `wyes`, `crosses`, `stars`, `terminals`, `inline`, `through` and
-`markers`. Every
+`offsets`, `tees`, `wyes`, `crosses`, `stars`, `terminals`, `inline`,
+`through` and `markers`. Every
 fitting in them is built as an *envelope*: its air space grown outward by a
 wall offset. What comes out therefore depends only on what the type-def
 declares:

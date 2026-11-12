@@ -80,3 +80,35 @@ def test_star_layout_reports_each_ports_role_for_flange_switches():
     context = _tee_context({"TrimRunA": 110.0, "TrimRunB": 120.0, "TrimBranch": 130.0})
     _ports, _center, _trims, suffixes = stars._star_junction_layout(context, 0.6, align_branch=True)
     assert suffixes == {"A": "RunA", "B": "RunB", "C": "Branch"}
+
+
+# ----------------------------------------------------------------------------
+# Offsets read their own properties and reuse the transition geometry
+# ----------------------------------------------------------------------------
+
+
+def _offset_ports():
+    a = _port("A", (-1.0, 0.0, 0.0))
+    b = _port("B", (1.0, 0.0, 0.0))
+    b["position"] = [0.0, 150.0, 0.0]
+    return [a, b]
+
+
+def test_offset_length_sets_the_trims_not_transition_length():
+    from freecad.HVAC.library.fittings import offsets
+
+    context = {
+        "hvac_api": HVACLibraryAPI,
+        "params": {"OffsetLength": 400.0, "TransitionLength": 999.0},
+        "connected_ports": _offset_ports(),
+    }
+    records = offsets.measure_offset_angled(context)
+    assert [rec["length"] for rec in records] == [200.0, 200.0]
+
+
+def test_offset_does_not_change_the_callers_params():
+    from freecad.HVAC.library.fittings import offsets
+
+    params = {"OffsetLength": 400.0}
+    offsets.measure_offset_angled({"hvac_api": HVACLibraryAPI, "params": params, "connected_ports": _offset_ports()})
+    assert params == {"OffsetLength": 400.0}

@@ -1117,10 +1117,48 @@ def test_bundled_builtin_basic_circular_to_rectangular_transition_reaches_dedica
     request = _junction_request("through", "through.transition", "Mixed", ports)
     selection = reg.select_type("builtin_basic", request, strict=True)
     assert selection.status == "exact"
-    # through_transition_angled (priority 50) beats through_transition_mitered
-    # (45) and through_transition_radiussed (40) -- same priority ordering as
-    # a homogeneous-profile transition would use.
-    assert selection.type_def.id == "through_transition_angled"
+    # A round-to-rectangular transition has no classified alignment, so it
+    # gets the concentric transition, the default of the three.
+    assert selection.type_def.id == "through_transition_concentric"
+
+
+def _rect_transition_request(**qualifiers):
+    ports = _ports(2, "Rectangular")
+    if not qualifiers:
+        return _junction_request("through", "through.transition", "Rectangular", ports)
+    return _junction_request_ctx("through", "through.transition", "Rectangular", ports, qualifiers=qualifiers)
+
+
+def test_bundled_builtin_basic_transition_is_chosen_by_alignment():
+    reg = _load_bundled_registry()
+    expected = {
+        "concentric": "through_transition_concentric",
+        "unknown": "through_transition_concentric",
+        "eccentric": "through_transition_eccentric",
+        "double_eccentric": "through_transition_eccentric",
+        "offset": "through_transition_offset",
+    }
+    for alignment, type_id in expected.items():
+        selection = reg.select_type("builtin_basic", _rect_transition_request(alignment=alignment), strict=True)
+        assert selection.status == "exact", alignment
+        assert selection.type_def.id == type_id, alignment
+
+
+def test_bundled_builtin_basic_transition_without_alignment_data_is_concentric():
+    reg = _load_bundled_registry()
+    selection = reg.select_type("builtin_basic", _rect_transition_request(), strict=True)
+    assert selection.type_def.id == "through_transition_concentric"
+
+
+def test_bundled_builtin_basic_offset_types_use_their_own_properties():
+    lib = _load_bundled_registry().get_library("builtin_basic")
+    for style in ("angled", "mitered", "radiussed"):
+        type_def = lib.get_type("through_offset_" + style)
+        names = {p.name for p in type_def.properties}
+        assert "OffsetLength" in names
+        assert "TransitionLength" not in names
+        assert type_def.generator_module == "shared:offsets"
+    assert "OffsetRadius" in {p.name for p in lib.get_type("through_offset_radiussed").properties}
 
 
 def test_bundled_generic_fallback_still_used_when_no_concrete_type_covers_profile():
