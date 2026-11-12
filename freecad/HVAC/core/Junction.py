@@ -22,17 +22,20 @@
 ################################################################################
 
 """This module implements HVAC duct description classes."""
+
 import json
 import traceback
 
-import FreeCAD, Part
+import FreeCAD
 import FreeCADGui as Gui
-from PySide import QtWidgets, QtCore
+import Part
+from PySide import QtCore, QtWidgets
 from PySide.QtCore import QT_TRANSLATE_NOOP
+
 translate = FreeCAD.Qt.translate
 
-from ..utils import hvaclib
 from ..library.library_api import HVACLibraryAPI
+from ..utils import hvaclib
 
 
 def _json_safe_port(port):
@@ -70,16 +73,7 @@ class DuctJunction:
 
     TYPE = "DuctJunction"
 
-    def __init__(
-        self,
-        obj,
-        owner=None,
-        node_id=0,
-        node_key="",
-        center_point=None,
-        degree=0,
-        topology=""
-    ):
+    def __init__(self, obj, owner=None, node_id=0, node_key="", center_point=None, degree=0, topology=""):
         obj.Proxy = self
         self.Object = obj
         self._allow_delete = False
@@ -87,12 +81,7 @@ class DuctJunction:
         self._mirroring_flow_boundary = False
         self.setProperties(obj)
         self.updateMetadata(
-            owner=owner,
-            node_id=node_id,
-            node_key=node_key,
-            center_point=center_point,
-            degree=degree,
-            topology=topology
+            owner=owner, node_id=node_id, node_key=node_key, center_point=center_point, degree=degree, topology=topology
         )
 
     def onDocumentRestored(self, obj):
@@ -169,30 +158,84 @@ class DuctJunction:
         self._addProperty(obj, "App::PropertyInteger", "NodeId", "HVAC", "Parser node id")
         self._addProperty(obj, "App::PropertyString", "NodeKey", "HVAC", "Persistent snapped node key")
         # Prop_NoRecompute -- documentation only, never affects geometry.
-        self._addProperty(obj, "App::PropertyString", "Number", "HVAC", "Documentation number assigned by Renumber Network (e.g. 'J007'), blank until first renumbered", attr=16)
+        self._addProperty(
+            obj,
+            "App::PropertyString",
+            "Number",
+            "HVAC",
+            "Documentation number assigned by Renumber Network (e.g. 'J007'), blank until first renumbered",
+            attr=16,
+        )
         self._addProperty(obj, "App::PropertyVector", "CenterPoint", "HVAC", "Junction center point")
         self._addProperty(obj, "App::PropertyInteger", "Degree", "HVAC", "Node degree")
         self._addProperty(obj, "App::PropertyString", "Topology", "HVAC", "Junction topology")
         self._addProperty(obj, "App::PropertyString", "Family", "HVAC", "Classified fitting family")
 
         self._addProperty(obj, "App::PropertyStringList", "ConnectedEdgeKeys", "HVAC", "Connected segment keys")
-        self._addProperty(obj, "App::PropertyString", "ConnectionLengthsJson", "HVAC", "Aggregate per-edge connection lengths (from the outermost component on each side)")
+        self._addProperty(
+            obj,
+            "App::PropertyString",
+            "ConnectionLengthsJson",
+            "HVAC",
+            "Aggregate per-edge connection lengths (from the outermost component on each side)",
+        )
         self._addProperty(obj, "App::PropertyString", "AnalysisJson", "HVAC", "Serialized topology analysis")
 
         if "FlowBoundary" not in obj.PropertiesList:
             obj.addProperty(
-                "App::PropertyEnumeration", "FlowBoundary", "Airflow",
+                "App::PropertyEnumeration",
+                "FlowBoundary",
+                "Airflow",
                 "Terminal flow condition: Auto (solved by mass balance -- exactly one terminal per "
                 "sub-network), Fixed (use Design Flow Rate as-is, 0 included), or Closed (sealed "
-                "termination, always 0 flow)"
+                "termination, always 0 flow)",
             )
             obj.FlowBoundary = ["Auto", "Fixed", "Closed"]
             obj.FlowBoundary = "Auto"
-        self._addProperty(obj, "App::PropertyFloat", "DesignFlowRate", "Airflow", "User-specified design flow rate for this terminal (L/s), used when Flow Boundary is 'Fixed' -- 0 is a valid value. Ignored when Flow Boundary is 'Auto' or 'Closed'.")
-        self._addProperty(obj, "App::PropertyFloat", "CalcTotalFlowRate", "Airflow", "Computed through-flow at this junction (L/s) -- max(total inflow, total outflow) across its connected ports, not the sum of every leg's own flow (see analysis/pressure.py's Phase G)")
-        self._addProperty(obj, "App::PropertyFloat", "CalcStaticPressure", "Airflow", "Computed relative static pressure (Pa), referenced to 0 Pa at this sub-network's balancing terminal")
-        self._addProperty(obj, "App::PropertyBool", "IsFlowSource", "Airflow", "True if flow physically leaves the system at this terminal (a supply/source opening) -- meaningless off a terminal, see updateMetadata()'s own topology-based editor mode")
-        self._addProperty(obj, "App::PropertyString", "CalcLossWarning", "Airflow", "Non-fatal warning from the last calculation (e.g. fallback loss coefficient used)")
+        self._addProperty(
+            obj,
+            "App::PropertyFloat",
+            "DesignFlowRate",
+            "Airflow",
+            "User-specified design flow rate for this terminal (L/s), used when Flow Boundary is 'Fixed' -- 0 is a valid value. Ignored when Flow Boundary is 'Auto' or 'Closed'.",
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyFloat",
+            "CalcTotalFlowRate",
+            "Airflow",
+            "Computed through-flow at this junction (L/s) -- max(total inflow, total outflow) across its connected ports, not the sum of every leg's own flow (see analysis/pressure.py's Phase G)",
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyFloat",
+            "CalcStaticPressure",
+            "Airflow",
+            "Computed relative static pressure (Pa), referenced to 0 Pa at this sub-network's balancing terminal",
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyBool",
+            "IsFlowSource",
+            "Airflow",
+            "True if flow physically leaves the system at this terminal (a supply/source opening) -- meaningless off a terminal, see updateMetadata()'s own topology-based editor mode",
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyString",
+            "CalcLossWarning",
+            "Airflow",
+            "Non-fatal warning from the last calculation (e.g. fallback loss coefficient used)",
+        )
+        if "AllowSizeChange" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyBool",
+                "AllowSizeChange",
+                "HVAC Duct Sizing",
+                "Whether Size Ducts may give the ducts on either side of this straight node different sizes "
+                "(a reducer here). Off keeps them one size. Only used when the network's SizeChangePolicy is AtReducers",
+            )
+            obj.AllowSizeChange = True
 
         for prop in ("CalcTotalFlowRate", "CalcStaticPressure", "CalcLossWarning"):
             try:
@@ -209,13 +252,7 @@ class DuctJunction:
         if not getattr(obj, "AnalysisJson", ""):
             obj.AnalysisJson = "{}"
 
-        for prop in (
-            "NodeKey",
-            "CenterPoint",
-            "Degree",
-            "Topology",
-            "Family",
-        ):
+        for prop in ("NodeKey", "CenterPoint", "Degree", "Topology", "Family"):
             try:
                 obj.setEditorMode(prop, 1)
             except Exception:
@@ -224,13 +261,7 @@ class DuctJunction:
         # Internal bookkeeping/JSON blobs -- kept (never removed) for the
         # addon's own use, just hidden from the property editor since a
         # user never needs to read or edit them directly.
-        for prop in (
-            "OwnerNetworkName",
-            "NodeId",
-            "ConnectedEdgeKeys",
-            "ConnectionLengthsJson",
-            "AnalysisJson",
-        ):
+        for prop in ("OwnerNetworkName", "NodeId", "ConnectedEdgeKeys", "ConnectionLengthsJson", "AnalysisJson"):
             try:
                 obj.setEditorMode(prop, 2)
             except Exception:
@@ -293,6 +324,9 @@ class DuctJunction:
             else:
                 obj.setEditorMode("DesignFlowRate", 2)
             obj.setEditorMode("IsFlowSource", 1 if is_terminal else 2)
+            # Only a two-port node can hold a reducer.
+            if "AllowSizeChange" in obj.PropertiesList:
+                obj.setEditorMode("AllowSizeChange", 0 if getattr(obj, "Topology", "") == "through" else 2)
         except Exception:
             pass
 
@@ -330,15 +364,18 @@ class DuctJunction:
         if geometry is None:
             return []
         out = [
-            c for c in geometry.OutList
+            c
+            for c in geometry.OutList
             if hvaclib.isDuctComponent(c) and getattr(c, "ParentJunctionName", "") == obj.Name
         ]
-        out.sort(key=lambda c: (
-            0 if getattr(c, "ComponentRole", "") == "Primary" else 1,
-            getattr(c, "AttachedEdgeKey", ""),
-            int(getattr(c, "PortSequence", 0)),
-            c.Name,
-        ))
+        out.sort(
+            key=lambda c: (
+                0 if getattr(c, "ComponentRole", "") == "Primary" else 1,
+                getattr(c, "AttachedEdgeKey", ""),
+                int(getattr(c, "PortSequence", 0)),
+                c.Name,
+            )
+        )
         return out
 
     def getPrimaryComponent(self):
@@ -421,9 +458,7 @@ class DuctJunction:
         primary.Profile = hvaclib.HVACLibraryService.match_profile_from_ports(ports)
 
         chains = {
-            edge_key: chain
-            for edge_key, chain in self.getPortChains().items()
-            if edge_key in ports_by_edge and chain
+            edge_key: chain for edge_key, chain in self.getPortChains().items() if edge_key in ports_by_edge and chain
         }
         if not chains:
             return
@@ -432,7 +467,8 @@ class DuctJunction:
         # junction's REAL topology/family, since the Primary can now be a
         # branch/cross tee with a chain on just one of its legs.
         primary_trims = self._peekConnectionLengths(
-            primary, ports,
+            primary,
+            ports,
             topology=getattr(obj, "Topology", "through"),
             family=getattr(obj, "Family", ""),
             analysis=analysis,
@@ -455,8 +491,10 @@ class DuctJunction:
             inner_tpls, outer_tpls, trims_in, trims_out = [], [], [], []
             for j, comp_obj in enumerate(chain):
                 inner_tpl = HVACLibraryAPI.copy_port(
-                    real_port, direction=dir_e * -1.0,
-                    edge_key="{}#{}_seam{}".format(node_key, edge_key, j), segment_end="end",
+                    real_port,
+                    direction=dir_e * -1.0,
+                    edge_key="{}#{}_seam{}".format(node_key, edge_key, j),
+                    segment_end="end",
                 )
                 inner_tpl["flow_into_junction"] = not into_e
                 inner_tpl["flow_role"] = "inlet" if not into_e else "outlet"
@@ -465,8 +503,10 @@ class DuctJunction:
                     outer_tpl = dict(real_port)  # outermost: the real external interface
                 else:
                     outer_tpl = HVACLibraryAPI.copy_port(
-                        real_port, direction=dir_e,
-                        edge_key="{}#{}_seam{}".format(node_key, edge_key, j + 1), segment_end="start",
+                        real_port,
+                        direction=dir_e,
+                        edge_key="{}#{}_seam{}".format(node_key, edge_key, j + 1),
+                        segment_end="start",
                     )
                 outer_tpl["flow_into_junction"] = into_e
                 outer_tpl["flow_role"] = "outlet" if not into_e else "inlet"
@@ -474,7 +514,7 @@ class DuctJunction:
                 inner_tpls.append(inner_tpl)
                 outer_tpls.append(outer_tpl)
                 trims = self._peekConnectionLengths(
-                    comp_obj, [inner_tpl, outer_tpl], topology="through", family="", analysis=analysis,
+                    comp_obj, [inner_tpl, outer_tpl], topology="through", family="", analysis=analysis
                 )
                 trims_in.append(trims.get((inner_tpl["edge_key"], inner_tpl["segment_end"]), 0.0))
                 trims_out.append(trims.get((outer_tpl["edge_key"], outer_tpl["segment_end"]), 0.0))
@@ -639,7 +679,7 @@ class DuctJunction:
             node_key=node_key,
             center_point=center_point,
             degree=degree,
-            topology=topology
+            topology=topology,
         )
         DuctJunctionViewProvider(junction.ViewObject)
         return junction
@@ -717,10 +757,7 @@ class DuctJunctionVirtual:
         obj.Proxy = self
         self.Object = obj
         self.setProperties(obj)
-        self.updateMetadata(
-            owner=owner,
-            member_node_keys=member_node_keys or [],
-            member_points=member_points or [] )
+        self.updateMetadata(owner=owner, member_node_keys=member_node_keys or [], member_points=member_points or [])
 
     def onDocumentRestored(self, obj):
         obj.Proxy = self
@@ -754,7 +791,6 @@ class DuctJunctionVirtual:
 
         if not getattr(obj, "MemberPoints", []):
             obj.MemberPoints = []
-
 
     def updateMetadata(self, owner=None, member_node_keys=[], member_points=[]):
         obj = self.Object

@@ -74,6 +74,7 @@ _STATIC_REGAIN_MAX_ITERATIONS = 5
 @dataclass
 class SegmentSizeResult:
     """Proposed new size for one segment, plus its old size for comparison."""
+
     edge_key: str
     profile: str
     flow_lps: float = 0.0
@@ -87,10 +88,159 @@ class SegmentSizeResult:
 
 
 @dataclass
+class ReducerSuggestion:
+    """
+    Advice, never an automatic edit: the shared size of a sizing section is
+    much larger than `edge_key`'s own flow needs, so a reducer at its
+    upstream end (a new straight node in the base geometry) would save
+    material. `area_ratio` = shared section area / the area its own flow needs.
+    """
+
+    edge_key: str
+    area_ratio: float
+
+
+@dataclass
 class DuctSizingResult:
     """Whole-network sizing result: one SegmentSizeResult per segment, plus any warnings."""
+
     segments: Dict[str, SegmentSizeResult] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
+    # The sizing sections used (lists of edge_keys sharing one size); empty
+    # when every segment was sized on its own.
+    sections: List[List[str]] = field(default_factory=list)
+    reducer_suggestions: List[ReducerSuggestion] = field(default_factory=list)
+
+
+# ----------------------------------------------------------------------------
+# Sizing sections: where a duct may change size
+# ----------------------------------------------------------------------------
+
+
+def sizing_sections(network: NetworkModel) -> List[List[str]]:
+    """
+    Group the network's segments into sizing sections: runs of duct that
+    must share one cross-section, because there is no place between them
+    where a reducer could go.
+
+    Two segments meeting at a node join one section when:
+    - the node is a bend (a two-port node whose ducts are not in line):
+      an elbow keeps its size;
+    - they are a run pair of a branch or cross node (the straight-through
+      legs of a tee, a cross's runs): the main keeps its size through the
+      takeoff, which is also what most SMACNA tee tables assume (As = Ac);
+    - the node is an in-line two-port node (straight, offset, transition)
+      whose AllowSizeChange is off: the user pinned it.
+    A section ends at every other in-line two-port node (where a reducer
+    can go), at every branch leg, at terminals and at multiport nodes.
+    Segments of different profiles never join (a change of shape needs a
+    transition anyway).
+
+    Returns the sections as sorted lists of edge_keys, in a stable order.
+    """
+    parent = {edge_key: edge_key for edge_key in network.segments}
+
+    def find(edge_key):
+        while parent[edge_key] != edge_key:
+            parent[edge_key] = parent[parent[edge_key]]
+            edge_key = parent[edge_key]
+        return edge_key
+
+    def join(a, b):
+        if a not in parent or b not in parent:
+            return
+        if network.segments[a].section.profile != network.segments[b].section.profile:
+            return
+        root_a, root_b = find(a), find(b)
+        if root_a != root_b:
+            parent[max(root_a, root_b)] = min(root_a, root_b)
+
+    for node in network.nodes.values():
+        edge_keys = [port.edge_key for port in node.ports if port.is_real_edge]
+        family = str(node.family or "").split(".")[0]
+        if node.topology == "through" and len(edge_keys) == 2:
+            # Only a family known to be a bend joins; an unknown one is
+            # treated as a place a reducer can go (the old behaviour).
+            bend = family.startswith("bend")
+            if bend or not node.allow_size_change:
+                join(*edge_keys)
+        elif node.topology in ("branch", "cross"):
+            for a, b in node.run_edge_pairs:
+                join(a, b)
+
+    groups: Dict[str, List[str]] = {}
+    for edge_key in network.segments:
+        groups.setdefault(find(edge_key), []).append(edge_key)
+    return sorted((sorted(group) for group in groups.values()), key=lambda group: group[0])
+
+
+def _resize_to(seg, sres: SegmentSizeResult, section: SectionModel, air) -> SegmentSizeResult:
+    """`sres` with its size replaced by `section`, velocity and friction rate recomputed at that size."""
+    if sres.flow_lps <= 1e-9:
+        velocity, reynolds, friction = 0.0, 0.0, 0.0
+    else:
+        area = physics.section_area_m2(section)
+        dh = physics.section_hydraulic_diameter_m(section)
+        velocity = physics.velocity_from_flow(physics.lps_to_m3s(sres.flow_lps), area)
+        reynolds = physics.reynolds_number(velocity, dh, air.kinematic_viscosity_m2_s)
+        factor = physics.friction_factor_altshul_tsal(reynolds, physics.mm_to_m(seg.roughness_mm) / dh)
+        friction = physics.darcy_weisbach_pressure_loss(factor, 1.0, dh, air.density_kg_m3, velocity)
+    old = sres.old_section
+    changed = (
+        abs(section.diameter_mm - old.diameter_mm) > 1e-6
+        or abs(section.width_mm - old.width_mm) > 1e-6
+        or abs(section.height_mm - old.height_mm) > 1e-6
+    )
+    return SegmentSizeResult(
+        edge_key=sres.edge_key,
+        profile=sres.profile,
+        flow_lps=sres.flow_lps,
+        old_section=old,
+        new_section=section,
+        velocity_ms=velocity,
+        reynolds=reynolds,
+        friction_rate_pa_per_m=friction,
+        regain_balanced=sres.regain_balanced,
+        changed=changed,
+    )
+
+
+def apply_sizing_sections(
+    network: NetworkModel, result: DuctSizingResult, settings: SizingSettings
+) -> DuctSizingResult:
+    """
+    Make every sizing section share one size: the size of its member with
+    the largest flow (the section's upstream end), which every member then
+    gets, with its velocity and friction rate recomputed at that size.
+    Members whose own flow would need much less area are listed as reducer
+    suggestions. With size_change_policy "EverySegment" nothing changes.
+
+    For the static regain methods each segment was sized against its own
+    upstream velocity first; the section then takes its upstream end's
+    size, so regain is effectively evaluated at section boundaries.
+    """
+    if str(settings.size_change_policy or "AtReducers") != "AtReducers":
+        return result
+    sections = sizing_sections(network)
+    result.sections = [group for group in sections if any(edge_key in result.segments for edge_key in group)]
+    ratio_limit = float(settings.reducer_advice_area_ratio or 0.0)
+    for group in result.sections:
+        sized = [edge_key for edge_key in group if edge_key in result.segments]
+        if len(sized) < 2:
+            continue
+        lead = max(sized, key=lambda edge_key: (result.segments[edge_key].flow_lps, edge_key))
+        shared = result.segments[lead].new_section
+        shared_area = physics.section_area_m2(shared)
+        for edge_key in sized:
+            if edge_key == lead:
+                continue
+            own = result.segments[edge_key]
+            own_area = physics.section_area_m2(own.new_section) if own.flow_lps > 1e-9 else 0.0
+            result.segments[edge_key] = _resize_to(network.segments[edge_key], own, shared, network.air)
+            if ratio_limit > 0.0 and own_area > 0.0 and shared_area / own_area >= ratio_limit:
+                result.reducer_suggestions.append(ReducerSuggestion(edge_key, shared_area / own_area))
+    result.reducer_suggestions.sort(key=lambda suggestion: suggestion.edge_key)
+    return result
 
 
 def _round_up(value_mm, increment_mm):
@@ -119,8 +269,10 @@ def _size_dims(sres: SegmentSizeResult):
 # Per-segment sizing -- shared by all three methods
 # ----------------------------------------------------------------------------
 
-def _size_one_segment(seg, flow_lps, settings: SizingSettings, air, method,
-                       upstream_velocity_pressure_pa=0.0, fitting_loss_pa=0.0) -> SegmentSizeResult:
+
+def _size_one_segment(
+    seg, flow_lps, settings: SizingSettings, air, method, upstream_velocity_pressure_pa=0.0, fitting_loss_pa=0.0
+) -> SegmentSizeResult:
     profile = seg.section.profile
     old_section = seg.section
     if profile not in ("Circular", "Rectangular", "Oval"):
@@ -173,14 +325,23 @@ def _size_one_segment(seg, flow_lps, settings: SizingSettings, air, method,
             diameter_m = physics.circular_diameter_for_velocity(flow_m3s, target_velocity)
         elif method == "StaticRegain":
             diameter_m, regain_balanced = physics.circular_diameter_for_static_regain(
-                flow_m3s, upstream_velocity_pressure_pa, settings.regain_factor, length_m,
-                roughness_m, air.kinematic_viscosity_m2_s, air.density_kg_m3, settings.min_velocity_ms,
+                flow_m3s,
+                upstream_velocity_pressure_pa,
+                settings.regain_factor,
+                length_m,
+                roughness_m,
+                air.kinematic_viscosity_m2_s,
+                air.density_kg_m3,
+                settings.min_velocity_ms,
                 fitting_loss_pa=fitting_loss_pa,
             )
         else:
             diameter_m = physics.circular_diameter_for_friction_rate(
-                flow_m3s, settings.target_friction_rate_pa_per_m, roughness_m,
-                air.kinematic_viscosity_m2_s, air.density_kg_m3,
+                flow_m3s,
+                settings.target_friction_rate_pa_per_m,
+                roughness_m,
+                air.kinematic_viscosity_m2_s,
+                air.density_kg_m3,
             )
         new_diameter_mm = _round_up(diameter_m * 1000.0, settings.rounding_mm)
         new_section = SectionModel(profile="Circular", diameter_mm=new_diameter_mm)
@@ -204,15 +365,29 @@ def _size_one_segment(seg, flow_lps, settings: SizingSettings, air, method,
             )
         elif method == "StaticRegain":
             width_m, height_m, regain_balanced = dims_regain(
-                flow_m3s, upstream_velocity_pressure_pa, settings.regain_factor, length_m,
-                roughness_m, air.kinematic_viscosity_m2_s, air.density_kg_m3, settings.min_velocity_ms,
-                mode, aspect_ratio=aspect_ratio, fixed_dim_m=fixed_dim_m, fitting_loss_pa=fitting_loss_pa,
+                flow_m3s,
+                upstream_velocity_pressure_pa,
+                settings.regain_factor,
+                length_m,
+                roughness_m,
+                air.kinematic_viscosity_m2_s,
+                air.density_kg_m3,
+                settings.min_velocity_ms,
+                mode,
+                aspect_ratio=aspect_ratio,
+                fixed_dim_m=fixed_dim_m,
+                fitting_loss_pa=fitting_loss_pa,
             )
         else:
             width_m, height_m = dims_friction(
-                flow_m3s, settings.target_friction_rate_pa_per_m, roughness_m,
-                air.kinematic_viscosity_m2_s, air.density_kg_m3,
-                mode, aspect_ratio=aspect_ratio, fixed_dim_m=fixed_dim_m,
+                flow_m3s,
+                settings.target_friction_rate_pa_per_m,
+                roughness_m,
+                air.kinematic_viscosity_m2_s,
+                air.density_kg_m3,
+                mode,
+                aspect_ratio=aspect_ratio,
+                fixed_dim_m=fixed_dim_m,
             )
 
         # Only the solved (free) dimension is rounded; a fixed dimension is
@@ -248,15 +423,20 @@ def _size_one_segment(seg, flow_lps, settings: SizingSettings, air, method,
     )
 
     return SegmentSizeResult(
-        new_section=new_section, velocity_ms=velocity_ms, reynolds=reynolds,
-        friction_rate_pa_per_m=friction_rate_pa_per_m, regain_balanced=regain_balanced,
-        changed=changed, **base
+        new_section=new_section,
+        velocity_ms=velocity_ms,
+        reynolds=reynolds,
+        friction_rate_pa_per_m=friction_rate_pa_per_m,
+        regain_balanced=regain_balanced,
+        changed=changed,
+        **base,
     )
 
 
 # ----------------------------------------------------------------------------
 # ConstantVelocity / ConstantFrictionRate -- each segment sized independently
 # ----------------------------------------------------------------------------
+
 
 def _size_independently(network: NetworkModel, components, settings: SizingSettings, method) -> DuctSizingResult:
     result = DuctSizingResult()
@@ -268,7 +448,7 @@ def _size_independently(network: NetworkModel, components, settings: SizingSetti
                 result.segments[edge_key] = _size_one_segment(seg, flow_lps, settings, network.air, method)
             except ValueError as exc:
                 result.warnings.append("{}: {}".format(edge_key, exc))
-    return result
+    return apply_sizing_sections(network, result, settings)
 
 
 class ConstantVelocitySizer:
@@ -285,6 +465,7 @@ class ConstantFrictionRateSizer:
 # LocalStaticRegainSizer -- today's "StaticRegain" algorithm, unchanged in meaning
 # ----------------------------------------------------------------------------
 
+
 class LocalStaticRegainSizer:
     """
     Parent-to-child sizing by velocity-pressure regain: each section's size
@@ -297,7 +478,7 @@ class LocalStaticRegainSizer:
         result = DuctSizingResult()
         for comp in components:
             self._solve_component(network, comp, settings, result)
-        return result
+        return apply_sizing_sections(network, result, settings)
 
     def _solve_component(self, network, comp, settings, result):
         size_tolerance_mm = max(settings.rounding_mm, 0.5)
@@ -352,8 +533,13 @@ class LocalStaticRegainSizer:
 
             try:
                 sres = _size_one_segment(
-                    seg, flow_lps, settings, network.air, method,
-                    upstream_velocity_pressure_pa=upstream_vp, fitting_loss_pa=fitting_loss_pa,
+                    seg,
+                    flow_lps,
+                    settings,
+                    network.air,
+                    method,
+                    upstream_velocity_pressure_pa=upstream_vp,
+                    fitting_loss_pa=fitting_loss_pa,
                 )
                 seg_results[edge_key] = sres
                 velocity_by_node[node_id] = sres.velocity_ms
@@ -425,18 +611,17 @@ class LocalStaticRegainSizer:
                 }
             evaluation = (
                 primary.loss_evaluator(port_velocities)
-                if primary is not None and primary.loss_evaluator is not None else None
+                if primary is not None and primary.loss_evaluator is not None
+                else None
             )
             paths, _status, _warning = resolve_loss_evaluation(
-                evaluation, node.ports, degree, "node '{}'".format(node_id),
-                discarded_warnings, discarded_warnings,
+                evaluation, node.ports, degree, "node '{}'".format(node_id), discarded_warnings, discarded_warnings
             )
 
             for path in paths:
                 v = provisional_velocity(path.reference_edge_key)
-                fitting_loss_by_edge[path.reference_edge_key] = (
-                    fitting_loss_by_edge.get(path.reference_edge_key, 0.0)
-                    + path.loss_coefficient * physics.velocity_pressure(network.air.density_kg_m3, v)
-                )
+                fitting_loss_by_edge[path.reference_edge_key] = fitting_loss_by_edge.get(
+                    path.reference_edge_key, 0.0
+                ) + path.loss_coefficient * physics.velocity_pressure(network.air.density_kg_m3, v)
 
         return fitting_loss_by_edge

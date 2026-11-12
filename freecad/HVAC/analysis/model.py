@@ -45,6 +45,7 @@ class SectionModel:
     section_hydraulic_diameter_m for how each profile turns this into an
     area/hydraulic diameter.
     """
+
     profile: str = ""
     diameter_mm: float = 0.0
     width_mm: float = 0.0
@@ -67,6 +68,7 @@ class PortModel:
     call instead, so the same model can be re-solved (e.g. across
     PressureBalanceCoordinator's iterations) without stale leftovers.
     """
+
     edge_key: str
     node_id: str
     flow_into_node: Optional[bool]
@@ -104,6 +106,7 @@ class ComponentModel:
     resolved repeatedly (e.g. across PressureBalanceCoordinator's
     iterations) without stale data from a previous solve leaking in.
     """
+
     component_id: str
     role: str  # "primary" | "inline"
     ports: List[PortModel] = field(default_factory=list)
@@ -127,6 +130,7 @@ class NodeModel:
     simple through/2-port node) -- each chain is evaluated against that
     edge's own flow only, independently of the Primary.
     """
+
     node_id: str
     topology: str
     degree: int
@@ -135,6 +139,14 @@ class NodeModel:
     flow_boundary: str = "Auto"
     primary_component: Optional[ComponentModel] = None
     inline_chains: Dict[str, List[ComponentModel]] = field(default_factory=dict)
+    # Classifier family without the topology ("tee", "bend_90", "straight",
+    # "transition", ...) and the edge_key pairs it found in line with each
+    # other (a tee's run, a cross's two runs). Used to decide where a duct
+    # may change size (see sizing.sizing_sections).
+    family: str = ""
+    run_edge_pairs: List[Tuple[str, str]] = field(default_factory=list)
+    # False pins a straight through node: the ducts on both sides keep one size.
+    allow_size_change: bool = True
 
 
 @dataclass
@@ -156,6 +168,7 @@ class SegmentModel:
     analysis/paths.py can report duct/fitting/component loss separately
     along a path. total_loss_pa is their sum.
     """
+
     edge_key: str
     section: SectionModel
     length_mm: float
@@ -179,6 +192,7 @@ class SegmentModel:
 @dataclass
 class AirState:
     """Air properties used throughout a solve -- density for velocity pressure, viscosity for Reynolds number."""
+
     density_kg_m3: float = 1.204
     kinematic_viscosity_m2_s: float = 1.51e-5
 
@@ -191,6 +205,7 @@ class SizingSettings:
     through every sizing call, mirroring DuctNetwork's own "HVAC Duct
     Sizing" property group.
     """
+
     method: str = "ConstantVelocity"
     rectangular_mode: str = "aspect_ratio"  # "aspect_ratio" | "fixed_height" | "fixed_width"
     aspect_ratio: float = 2.0
@@ -204,6 +219,13 @@ class SizingSettings:
     default_height_mm: float = 0.0
     balance_tolerance_pa: float = 5.0
     balance_max_iterations: int = 10
+    # "AtReducers": a duct keeps one size from one place a reducer can go to
+    # the next (see sizing.sizing_sections). "EverySegment": every segment
+    # is sized for its own flow (the size steps at every junction).
+    size_change_policy: str = "AtReducers"
+    # Suggest an extra reducer where a segment's shared size has at least
+    # this many times the area its own flow would need.
+    reducer_advice_area_ratio: float = 1.25
 
 
 @dataclass
@@ -216,6 +238,7 @@ class NetworkModel:
     stored on it, since the same network can be solved/sized under
     different settings without rebuilding it.
     """
+
     nodes: Dict[str, NodeModel] = field(default_factory=dict)
     segments: Dict[str, SegmentModel] = field(default_factory=dict)
     edges: Dict[str, Tuple[str, str]] = field(default_factory=dict)
@@ -231,7 +254,9 @@ class NetworkModel:
         for edge_key, section in overrides.items():
             seg = new_segments[edge_key]
             new_segments[edge_key] = SegmentModel(
-                edge_key=seg.edge_key, section=section, length_mm=seg.length_mm,
+                edge_key=seg.edge_key,
+                section=section,
+                length_mm=seg.length_mm,
                 roughness_mm=seg.roughness_mm,
                 velocity_override_ms=seg.velocity_override_ms,
                 rectangular_mode_override=seg.rectangular_mode_override,

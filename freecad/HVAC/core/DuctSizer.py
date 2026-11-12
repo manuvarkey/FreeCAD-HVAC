@@ -39,17 +39,13 @@ calling apply().
 
 from dataclasses import dataclass, field
 
-from .FlowNetwork import solve_flow_components
 from ..analysis.balancing import PressureBalanceCoordinator
 from ..analysis.model import SizingSettings
 from ..analysis.sizing import ConstantFrictionRateSizer, ConstantVelocitySizer, LocalStaticRegainSizer
 from . import _analysis_adapter
+from .FlowNetwork import solve_flow_components
 
-_RECT_MODE_MAP = {
-    "FixedAspectRatio": "aspect_ratio",
-    "FixedHeight": "fixed_height",
-    "FixedWidth": "fixed_width",
-}
+_RECT_MODE_MAP = {"FixedAspectRatio": "aspect_ratio", "FixedHeight": "fixed_height", "FixedWidth": "fixed_width"}
 
 _SIZERS = {
     "ConstantVelocity": ConstantVelocitySizer,
@@ -62,6 +58,7 @@ _SIZERS = {
 @dataclass
 class SegmentSizeResult:
     """Proposed new size for one segment, plus its old size for comparison."""
+
     key: str
     obj: object
     profile: str
@@ -91,6 +88,7 @@ class BalancingRequirementRow:
     live object (kept alongside its own raw key so the UI still has
     something to show in that case).
     """
+
     junction_obj: object
     branch_obj: object
     junction_key: str
@@ -102,6 +100,7 @@ class BalancingRequirementRow:
 @dataclass
 class DuctSizingResult:
     """Whole-network sizing result: one SegmentSizeResult per segment, plus any warnings."""
+
     segments: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
     # Only ever populated when SizingMethod is PressureBalancedStaticRegain
@@ -123,46 +122,71 @@ class DuctSizer:
 
     def solve(self):
         net = self.net_obj
-        network_model, segment_map, junction_map, component_map, components, flow_warnings = (
-            solve_flow_components(net)
-        )
+        network_model, segment_map, junction_map, component_map, components, flow_warnings = solve_flow_components(net)
 
         settings = self._build_settings(net)
         sizer_cls = _SIZERS.get(settings.method, ConstantVelocitySizer)
         pure_result = sizer_cls().size(network_model, components, settings)
 
-        result = DuctSizingResult(warnings=list(flow_warnings) + _analysis_adapter.humanize_diagnostics(
-            pure_result.warnings, segment_map, junction_map, component_map
-        ))
+        result = DuctSizingResult(
+            warnings=list(flow_warnings)
+            + _analysis_adapter.humanize_diagnostics(pure_result.warnings, segment_map, junction_map, component_map)
+        )
         for edge_key, sres in pure_result.segments.items():
             obj = segment_map[edge_key]
-            result.segments.append(SegmentSizeResult(
-                key=edge_key, obj=obj, profile=sres.profile, flow_lps=sres.flow_lps,
-                old_diameter_mm=sres.old_section.diameter_mm, old_width_mm=sres.old_section.width_mm,
-                old_height_mm=sres.old_section.height_mm,
-                new_diameter_mm=sres.new_section.diameter_mm, new_width_mm=sres.new_section.width_mm,
-                new_height_mm=sres.new_section.height_mm,
-                velocity_ms=sres.velocity_ms, reynolds=sres.reynolds,
-                friction_rate_pa_per_m=sres.friction_rate_pa_per_m,
-                regain_balanced=sres.regain_balanced, changed=sres.changed,
-            ))
+            result.segments.append(
+                SegmentSizeResult(
+                    key=edge_key,
+                    obj=obj,
+                    profile=sres.profile,
+                    flow_lps=sres.flow_lps,
+                    old_diameter_mm=sres.old_section.diameter_mm,
+                    old_width_mm=sres.old_section.width_mm,
+                    old_height_mm=sres.old_section.height_mm,
+                    new_diameter_mm=sres.new_section.diameter_mm,
+                    new_width_mm=sres.new_section.width_mm,
+                    new_height_mm=sres.new_section.height_mm,
+                    velocity_ms=sres.velocity_ms,
+                    reynolds=sres.reynolds,
+                    friction_rate_pa_per_m=sres.friction_rate_pa_per_m,
+                    regain_balanced=sres.regain_balanced,
+                    changed=sres.changed,
+                )
+            )
+
+        # Advice only: where a duct's shared section size is far larger than
+        # its own flow needs, a reducer (a new straight node) would save material.
+        for suggestion in getattr(pure_result, "reducer_suggestions", []) or []:
+            label = _analysis_adapter.element_identifier(segment_map.get(suggestion.edge_key)) or suggestion.edge_key
+            result.warnings.append(
+                "Size change: duct '{}' keeps the size of the duct upstream of it, which has {:.1f} times the "
+                "area its own flow needs -- a reducer at its upstream end would allow a smaller size.".format(
+                    label, suggestion.area_ratio
+                )
+            )
 
         requirements = getattr(pure_result, "balancing_requirements", [])
         if requirements:
             for req in requirements:
                 junction_obj = junction_map.get(req.junction_id)
                 branch_obj = segment_map.get(req.branch_port)
-                result.balancing_requirements.append(BalancingRequirementRow(
-                    junction_obj=junction_obj, branch_obj=branch_obj,
-                    junction_key=req.junction_id, branch_key=req.branch_port,
-                    pressure_deficit_pa=req.pressure_deficit_pa, required_k=req.required_k,
-                ))
+                result.balancing_requirements.append(
+                    BalancingRequirementRow(
+                        junction_obj=junction_obj,
+                        branch_obj=branch_obj,
+                        junction_key=req.junction_id,
+                        branch_key=req.branch_port,
+                        pressure_deficit_pa=req.pressure_deficit_pa,
+                        required_k=req.required_k,
+                    )
+                )
                 result.warnings.append(
                     "Pressure balancing: node '{}' branch '{}' has an unresolved deficit of {:.1f} Pa "
                     "-- consider a balancing damper here (required loss coefficient K ≈ {:.2f}).".format(
                         _analysis_adapter.element_identifier(junction_obj) or req.junction_id,
                         _analysis_adapter.element_identifier(branch_obj) or req.branch_port,
-                        req.pressure_deficit_pa, req.required_k
+                        req.pressure_deficit_pa,
+                        req.required_k,
                     )
                 )
 
@@ -187,6 +211,7 @@ class DuctSizer:
             default_roughness_mm=float(getattr(net, "DefaultRoughness", 0.09) or 0.09),
             default_width_mm=float(getattr(net, "DefaultWidth", 0.0) or 0.0),
             default_height_mm=float(getattr(net, "DefaultHeight", 0.0) or 0.0),
+            size_change_policy=str(getattr(net, "SizeChangePolicy", "AtReducers") or "AtReducers"),
         )
 
     def apply(self, result):

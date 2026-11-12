@@ -37,7 +37,7 @@ or a library type-def.
 import json
 import re
 
-from ..analysis.model import ComponentModel, NetworkModel, NodeModel, PortModel, SectionModel, SegmentModel, AirState
+from ..analysis.model import AirState, ComponentModel, NetworkModel, NodeModel, PortModel, SectionModel, SegmentModel
 from ..library.library_api import HVACLibraryAPI
 from ..utils import hvaclib
 from . import _custom_loss
@@ -45,11 +45,7 @@ from .Construction import construction_for
 
 # A segment's own RectangularSizingMode enum value ("UseNetworkDefault" means
 # "no override") -> the plain mode string SegmentModel/SizingSettings use.
-RECT_MODE_MAP = {
-    "FixedAspectRatio": "aspect_ratio",
-    "FixedHeight": "fixed_height",
-    "FixedWidth": "fixed_width",
-}
+RECT_MODE_MAP = {"FixedAspectRatio": "aspect_ratio", "FixedHeight": "fixed_height", "FixedWidth": "fixed_width"}
 
 
 def element_identifier(obj):
@@ -122,14 +118,7 @@ def build_network_model(net_obj):
         if ja is None:
             continue
         nodes[node_key] = _build_node_model(
-            node_key,
-            junction_obj,
-            ja,
-            segment_map,
-            reg,
-            air,
-            component_map,
-            default_roughness_mm,
+            node_key, junction_obj, ja, segment_map, reg, air, component_map, default_roughness_mm
         )
 
     network = NetworkModel(nodes=nodes, segments=segments, edges=edges, air=air)
@@ -139,6 +128,7 @@ def build_network_model(net_obj):
 # ----------------------------------------------------------------------------
 # FreeCAD object -> pure dataclass
 # ----------------------------------------------------------------------------
+
 
 def _section_from_params(profile, section_params):
     section_params = section_params or {}
@@ -156,16 +146,15 @@ def _build_segment_model(seg_obj, default_roughness_mm):
     # The material on the flow-surface layer is authoritative. The network
     # default exists only for an unassigned material or an older card that
     # does not expose HydraulicRoughness.
-    roughness_mm = float(
-        construction_for(seg_obj).hydraulic_roughness(default_roughness_mm)
-    )
+    roughness_mm = float(construction_for(seg_obj).hydraulic_roughness(default_roughness_mm))
 
     rect_mode_raw = str(getattr(seg_obj, "RectangularSizingMode", "UseNetworkDefault") or "UseNetworkDefault")
     rect_mode_override = RECT_MODE_MAP.get(rect_mode_raw, "") if rect_mode_raw != "UseNetworkDefault" else ""
 
     edge_key = getattr(seg_obj, "SegmentKey", "") or seg_obj.Name
     return SegmentModel(
-        edge_key=edge_key, section=section,
+        edge_key=edge_key,
+        section=section,
         length_mm=float(getattr(seg_obj, "EffectiveLength", 0.0) or 0.0),
         roughness_mm=roughness_mm,
         velocity_override_ms=float(getattr(seg_obj, "Velocity", 0.0) or 0.0),
@@ -177,8 +166,11 @@ def _build_segment_model(seg_obj, default_roughness_mm):
 def _junction_ports_to_models(connected_ports, node_key):
     return [
         PortModel(
-            edge_key=jp.edge_key, node_id=node_key, flow_into_node=jp.flow_into_junction,
-            section=_section_from_params(jp.profile, jp.section_params), is_real_edge=True,
+            edge_key=jp.edge_key,
+            node_id=node_key,
+            flow_into_node=jp.flow_into_junction,
+            section=_section_from_params(jp.profile, jp.section_params),
+            is_real_edge=True,
         )
         for jp in connected_ports
     ]
@@ -188,7 +180,9 @@ def _local_ports_to_models(local_ports_json, node_key, segment_map):
     ports = json.loads(local_ports_json or "[]")
     return [
         PortModel(
-            edge_key=p.get("edge_key", ""), node_id=node_key, flow_into_node=p.get("flow_into_junction"),
+            edge_key=p.get("edge_key", ""),
+            node_id=node_key,
+            flow_into_node=p.get("flow_into_junction"),
             section=_section_from_params(p.get("profile", ""), p.get("section_params", {})),
             is_real_edge=p.get("edge_key", "") in segment_map,
         )
@@ -207,17 +201,15 @@ def _stable_component_id(comp_obj):
     return name if name else "id:{}".format(id(comp_obj))
 
 
-def _build_node_model(
-    node_key,
-    junction_obj,
-    ja,
-    segment_map,
-    reg,
-    air,
-    component_map,
-    default_roughness_mm,
-):
+def _build_node_model(node_key, junction_obj, ja, segment_map, reg, air, component_map, default_roughness_mm):
     ports = _junction_ports_to_models(ja.connected_ports, node_key)
+    # The run pairs the classifier found, as edge_keys (its pairs index connected_ports).
+    run_edge_pairs = []
+    for pair in getattr(ja, "collinear_pairs", None) or []:
+        try:
+            run_edge_pairs.append((ja.connected_ports[pair.a].edge_key, ja.connected_ports[pair.b].edge_key))
+        except (IndexError, AttributeError):
+            continue
     design_flow_lps = float(getattr(junction_obj, "DesignFlowRate", 0.0) or 0.0)
     flow_boundary = str(getattr(junction_obj, "FlowBoundary", "Auto") or "Auto")
 
@@ -253,28 +245,33 @@ def _build_node_model(
             component_id = _stable_component_id(comp_obj)
             construction = construction_for(comp_obj)
             roughness_mm = float(construction.hydraulic_roughness(default_roughness_mm))
-            models.append(ComponentModel(
-                component_id=component_id,
-                role="inline",
-                ports=_local_ports_to_models(getattr(comp_obj, "LocalPortsJson", "[]"), node_key, segment_map),
-                # An Inline component has no Family of its own.
-                loss_evaluator=build_loss_evaluator(
-                    reg,
-                    comp_obj,
-                    air,
-                    family="",
-                    construction=construction,
-                    hydraulic_roughness_mm=roughness_mm,
-                ),
-                roughness_mm=roughness_mm,
-            ))
+            models.append(
+                ComponentModel(
+                    component_id=component_id,
+                    role="inline",
+                    ports=_local_ports_to_models(getattr(comp_obj, "LocalPortsJson", "[]"), node_key, segment_map),
+                    # An Inline component has no Family of its own.
+                    loss_evaluator=build_loss_evaluator(
+                        reg, comp_obj, air, family="", construction=construction, hydraulic_roughness_mm=roughness_mm
+                    ),
+                    roughness_mm=roughness_mm,
+                )
+            )
             component_map[component_id] = comp_obj
         inline_chains[edge_key] = models
 
     return NodeModel(
-        node_id=node_key, topology=ja.topology, degree=ja.degree, ports=ports,
-        design_flow_lps=design_flow_lps, flow_boundary=flow_boundary,
-        primary_component=primary_component, inline_chains=inline_chains,
+        node_id=node_key,
+        topology=ja.topology,
+        degree=ja.degree,
+        ports=ports,
+        design_flow_lps=design_flow_lps,
+        flow_boundary=flow_boundary,
+        primary_component=primary_component,
+        inline_chains=inline_chains,
+        family=str(getattr(ja, "family", "") or ""),
+        run_edge_pairs=run_edge_pairs,
+        allow_size_change=bool(getattr(junction_obj, "AllowSizeChange", True)),
     )
 
 
@@ -329,8 +326,7 @@ def build_loss_evaluator(
 
     local_ports = json.loads(getattr(comp_obj, "LocalPortsJson", "") or "[]")
     center_point = (
-        HVACLibraryAPI.average_point([p["position"] for p in local_ports])
-        if local_ports else (0.0, 0.0, 0.0)
+        HVACLibraryAPI.average_point([p["position"] for p in local_ports]) if local_ports else (0.0, 0.0, 0.0)
     )
 
     def evaluate(port_velocities):
@@ -362,4 +358,3 @@ def build_loss_evaluator(
         return reg.call_loss(library_id, type_def, context)
 
     return evaluate
-

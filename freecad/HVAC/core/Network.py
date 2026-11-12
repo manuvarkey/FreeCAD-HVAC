@@ -364,6 +364,18 @@ class DuctNetwork:
                 "PressureBalancedStaticRegain",
             ]
 
+        if "SizeChangePolicy" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyEnumeration",
+                "SizeChangePolicy",
+                "HVAC Duct Sizing",
+                "Where Size Ducts may change a duct's size. AtReducers: only at straight nodes, where a reducer "
+                "can go (a duct keeps its size through bends and along the run of a tee). EverySegment: every "
+                "segment is sized for its own flow",
+            )
+            obj.SizeChangePolicy = ["AtReducers", "EverySegment"]
+            obj.SizeChangePolicy = "AtReducers"
+
         if "TargetVelocity" not in obj.PropertiesList:
             obj.addProperty(
                 "App::PropertyFloat",
