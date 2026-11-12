@@ -195,6 +195,17 @@ def _build_one(reg, library_id, type_def, family, profile, section):
         total += volume or 0.0
     trims = {rec["edge_key"]: round(float(rec["length"]), 2) for rec in (result.connection_lengths or [])}
     entry = {"status": "ok" if valid else "invalid", "volume": round(total, 1), "layers": layers, "trims": trims}
+    features = {}
+    for feature_id, feature in (result.features or {}).items():
+        shape = feature.shape
+        if shape is None or shape.isNull():
+            features[feature_id] = None
+            continue
+        if not shape.isValid():
+            entry["status"] = "invalid"
+        features[feature_id] = _volume(shape)
+    if features:
+        entry["features"] = features
     if result.computed_properties:
         entry["computed"] = {
             name: round(float(value), 2) if isinstance(value, (int, float)) else value

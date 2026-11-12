@@ -206,6 +206,10 @@ class FeatureContext:
         property for this build -- never a second/separate resolution).
     host_layer: this feature's own host layer's already-built LayerGeometry
         (shape + roles) for this same build_geometry() call.
+    host_layer_id: the feature def's host_layer id (the key into
+        context["construction_layers"]).
+    result: the geometry backend's own normalized GeometryResult for this
+        build (its layers and connection_lengths), before any feature.
     context: the full underlying geometry-build context dict (ports,
         start/end points, profile, profile_x_axis, path info, ...) -- an
         escape hatch for anything a feature generator needs beyond its own
@@ -215,3 +219,8 @@ class FeatureContext:
     parameters: dict = field(default_factory=dict)
     host_layer: object = None
     context: dict = field(default_factory=dict)
+    # The feature def's own host_layer id, and the backend's normalized
+    # GeometryResult (layers, connection_lengths) for this same build, so a
+    # feature can find a fitting's real end faces (ROADMAP 6.2).
+    host_layer_id: str = ""
+    result: object = None

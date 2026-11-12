@@ -79,14 +79,14 @@ def _finish(context, envelope, connection_lengths, port_suffixes=None):
     that way, so one fitting works for any wall build-up:
 
     - The type declares construction layers with a thickness: each layer
-      becomes its own hollow shell (HVACLibraryAPI.build_layered_geometry),
-      and flanges are added at the fitting's ends if the type asks for them
-      (see _add_flanges).
+      becomes its own hollow shell (HVACLibraryAPI.build_layered_geometry).
+      Flanges are not part of it: they are a construction feature of their
+      own (fittings/features.py, transverse_flange).
     - No layer has a thickness: there is no wall to build, so the plain
       air-space solid is returned as the single legacy "shape".
 
-    `port_suffixes` optionally names each port's role by edge_key (e.g.
-    {"E1": "RunA"}), used to find that port's own ShowFlange<Role> property.
+    `port_suffixes` is accepted for older callers and no longer used: the
+    flange feature reads port roles itself.
     """
     api = context["hvac_api"]
     params = _props(context)
@@ -94,7 +94,6 @@ def _finish(context, envelope, connection_lengths, port_suffixes=None):
 
     if any(_layer_thickness(layer_def, params) > _EPS for layer_def in layer_defs):
         result = api.build_layered_geometry(envelope, layer_defs, params)
-        _add_flanges(context, result, connection_lengths, port_suffixes or {})
     else:
         result = {"shape": api.refine(envelope(0.0))}
     result["connection_lengths"] = connection_lengths
@@ -146,50 +145,6 @@ def _flange_enabled(params, index, suffix, port=None):
             value = value.for_port(port) if port is not None else value.default
         return True if value is None else bool(value)
     return True
-
-
-def _add_flanges(context, result, connection_lengths, port_suffixes):
-    """
-    Fuse a flange collar onto the structural layer at each end of a fitting.
-
-    Only does anything when the type declares FlangeThickness and
-    FlangeHeight above zero. A fitting's ends are where its trims say they
-    are: each connected port pushed outward by its own connection length.
-    The collar sits on the outside of the structural layer, so the port
-    section is first grown by every wall layer up to and including it.
-    """
-    api = context["hvac_api"]
-    params = _props(context)
-    flange_thickness = float(params.get("FlangeThickness", 0.0) or 0.0)
-    flange_height = float(params.get("FlangeHeight", 0.0) or 0.0)
-    if flange_thickness <= _EPS or flange_height <= _EPS:
-        return
-
-    # Step 1: find the layer the flanges belong to.
-    layers = result.get("layers") or {}
-    host = _structural_layer_def(context, result)
-    if host is None:
-        return
-
-    # Step 2: wall build-up from the air boundary to the host's outer face.
-    outer_offset = 0.0
-    for layer_def in context.get("construction_layers") or []:
-        outer_offset += _layer_thickness(layer_def, params)
-        if layer_def is host:
-            break
-
-    # Step 3: one collar per enabled port, at that port's own end plane.
-    lengths = {rec["edge_key"]: float(rec["length"]) for rec in (connection_lengths or [])}
-    flanges = []
-    for index, port in enumerate(api.connected_ports(context)):
-        edge_key = port.get("edge_key")
-        if edge_key not in lengths or not _flange_enabled(params, index, port_suffixes.get(edge_key), port):
-            continue
-        end = api.grow_port_section(_trimmed(api, port, lengths[edge_key]), outer_offset)
-        flanges.append(api.make_flange(end, api.port_direction(port) * -1.0, flange_thickness, flange_height))
-
-    if flanges:
-        layers[host.id] = {"shape": api.refine(api.fuse(layers[host.id]["shape"], *flanges))}
 
 
 def _profile_extent(profile):

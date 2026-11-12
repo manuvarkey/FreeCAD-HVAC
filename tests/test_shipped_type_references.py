@@ -34,7 +34,27 @@ def _function_references(type_def):
         ("friction", type_def.friction_module, type_def.friction_function),
     ]
     refs.extend(("loss variant", variant.module, variant.function) for variant in type_def.loss_variants)
+    refs.extend(
+        ("feature " + feature.id, feature.module or "features", feature.generator)
+        for feature in getattr(type_def, "features", []) or []
+    )
     return [ref for ref in refs if ref[1] or ref[2]]
+
+
+def test_every_flanged_layered_type_builds_its_flange_as_a_feature():
+    # ROADMAP 6.2: flanges are a construction feature of their own, never fused into a layer.
+    reg = _load_registry()
+    missing = []
+    for library_id, library in sorted(reg._libraries.items()):
+        for type_def in library.list_types():
+            names = {prop.name for prop in type_def.properties}
+            if "FlangeThickness" not in names or not type_def.construction:
+                continue
+            if type_def.generator_function.endswith("_fcstd"):
+                continue  # an FCStd template draws its own flanges (samples library)
+            if not any(f.generator == "transverse_flange" for f in getattr(type_def, "features", []) or []):
+                missing.append("{}/{}".format(library_id, type_def.id))
+    assert missing == []
 
 
 def _all_references():

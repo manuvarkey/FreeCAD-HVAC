@@ -16,7 +16,7 @@ def generate(context):
         radius = 0.6 * size
     radius = max(radius, 0.5 * size)
     route = api.make_elbow_path(ports[0], ports[1], radius)
-    # The transverse_flange feature (generators/features.py) mounts here,
+    # The transverse_flange feature (shared:features) mounts here,
     # not on the raw connected ports -- those sit further back, before the
     # bend's own tangent trim.
     context["flange_ports"] = route["ports"]

@@ -904,7 +904,13 @@ class HVACLibraryRegistry:
 
             feature_params = {name: params.get(name) for name in feature_def.parameters}
 
-            ctx = FeatureContext(parameters=feature_params, host_layer=host_layer_geometry, context=context)
+            ctx = FeatureContext(
+                parameters=feature_params,
+                host_layer=host_layer_geometry,
+                context=context,
+                host_layer_id=feature_def.host_layer,
+                result=result,
+            )
 
             module_name = feature_def.module or "features"
             features_module = modules_by_name.get(module_name)

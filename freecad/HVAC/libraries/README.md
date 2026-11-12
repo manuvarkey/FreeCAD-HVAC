@@ -492,8 +492,8 @@ type-def's `"construction"` block, as a sibling `"features"` array:
       "id": "transverse_flange",
       "role": "transverse_joint",
       "host_layer": "casing",
-      "module": "features",
-      "generator": "generate_transverse_flange",
+      "module": "shared:features",
+      "generator": "transverse_flange",
       "enabled_parameter": "FlangeEnabled",
       "visible_parameter": "FlangeVisible",
       "parameters": ["Diameter", "FlangeHeight", "FlangeThickness"]
@@ -519,18 +519,25 @@ type-def's `"construction"` block, as a sibling `"features"` array:
 - `module` (optional): the name of the `<generators_package>` submodule
   this feature's own generator function lives in, resolved the same way
   `generator`/`loss` modules already are (`import_generator()`). Defaults
-  to the conventional `"features"` submodule (e.g.
-  `smacna/generators/features.py`) when omitted, so most type-defs never
-  need to set this -- only useful when a library wants a feature's
-  generator to live somewhere else (e.g. alongside a related fitting's own
-  generator module).
+  to the library's own `"features"` submodule when omitted.
+  `"shared:features"` names the shared module
+  (`freecad/HVAC/library/fittings/features.py`), which provides
+  `transverse_flange`: a flange collar at every enabled end of a fitting
+  or segment, on the outer face of `host_layer`, from `FlangeThickness`,
+  `FlangeHeight` and `ShowFlange<Role>` / `ShowFlange<N>` / `ShowFlange`.
+  Flanges are always this feature, never fused into a layer: a type that
+  declares `FlangeThickness` and construction layers must declare it
+  (`tests/test_shipped_type_references.py`).
 - `generator`: the name of a function inside that module (see `module`
   above), with the signature
   `generate_<name>(api, ctx) -> Part.Shape | None`. `api` is
   `HVACLibraryAPI`; `ctx` (a `FeatureContext`) provides `ctx.parameters`
   (this feature's own declared `parameters`, already-resolved values --
   never the type's full property set), `ctx.host_layer` (the host layer's
-  own `LayerGeometry` for this build), and `ctx.context` (the full
+  own `LayerGeometry` for this build), `ctx.host_layer_id` (its id),
+  `ctx.result` (the geometry backend's own `GeometryResult` for this
+  build: its layers and `connection_lengths`, which locate a fitting's
+  real end faces), and `ctx.context` (the full
   underlying geometry-build context dict -- ports, start/end points,
   profile, profile_x_axis, path info, ... -- an escape hatch for anything
   else the generator needs). If a feature's geometry is naturally several
