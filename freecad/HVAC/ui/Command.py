@@ -1408,6 +1408,62 @@ class CommandReloadHVACLibraries:
         hvaclib.debug_print_loaded_libraries()
         
         
+class CommandAddCustomPort:
+    """Mark the selected planar end face(s) of a modelled fitting as HVAC ports (custom fittings, ROADMAP 6.3)."""
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("EditPlacement.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_AddCustomPort', 'Add HVAC Port'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_AddCustomPort',
+                'Mark the selected planar end face(s) of a modelled fitting as duct ports. Each port is a '
+                'coordinate system on the opening (Z out of the fitting) with its profile and size read from '
+                'the opening. Use the App::Part that holds them as a component\'s CustomFitting',
+            ),
+            'CmdType': 'ForEdit',
+        }
+
+    @staticmethod
+    def _selected_faces():
+        faces = []
+        for sel in Gui.Selection.getSelectionEx("", 0) or []:
+            obj = sel.Object
+            for sub in sel.SubElementNames or []:
+                name = sub.split(".")[-1]
+                if name.startswith("Face"):
+                    faces.append((obj, sub, name))
+        return faces
+
+    def IsActive(self):
+        return Gui.ActiveDocument is not None and bool(self._selected_faces())
+
+    def Activated(self):
+        from ..core import _custom_fitting
+
+        doc = FreeCAD.ActiveDocument
+        doc.openTransaction("Add HVAC Port")
+        try:
+            for owner, sub, face_name in self._selected_faces():
+                # The selection may run through an App::Part: resolve to the body that owns the face.
+                body = owner
+                if "." in sub:
+                    resolved = owner.getSubObject(sub, retType=1)
+                    body = resolved if resolved is not None else owner
+                try:
+                    lcs = _custom_fitting.add_port(body, face_name)
+                    FreeCAD.Console.PrintMessage(
+                        "HVAC - Added port '{}' ({}) on {}.{}\n".format(lcs.Label, lcs.PortProfile, body.Label, face_name)
+                    )
+                except Exception as e:
+                    FreeCAD.Console.PrintWarning(
+                        "HVAC - Add HVAC Port - {}.{}: {}\n".format(body.Label, face_name, e)
+                    )
+        finally:
+            doc.commitTransaction()
+        doc.recompute()
+
+
 #=================================================
 # Register Commands
 #=================================================
@@ -1435,4 +1491,5 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_RenumberNetwork', CommandRenumberNetwork())
     FreeCAD.Gui.addCommand('HVAC_SelectAllSegments', CommandSelectAllSegments())
     FreeCAD.Gui.addCommand('HVAC_SelectAllComponents', CommandSelectAllComponents())
+    FreeCAD.Gui.addCommand('HVAC_AddCustomPort', CommandAddCustomPort())
     FreeCAD.Gui.addCommand('HVAC_ReloadLibraries', CommandReloadHVACLibraries())  # Debug method

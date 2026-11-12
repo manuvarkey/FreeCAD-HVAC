@@ -35,6 +35,7 @@ from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
 
 from ..library.library_api import HVACLibraryAPI
+from . import _custom_fitting
 from ..utils import hvaclib
 
 
@@ -584,6 +585,12 @@ class DuctJunction:
         component has no type selected yet, or its type's measurement/
         geometry backend fails/reports nothing.
         """
+        if _custom_fitting.is_custom(comp_obj) and getattr(comp_obj, "ComponentRole", "") == "Primary":
+            try:
+                return _custom_fitting.measure(comp_obj, local_ports)
+            except Exception:
+                return {}
+
         library_id = getattr(comp_obj, "LibraryId", "")
         type_id = getattr(comp_obj, "TypeId", "")
         if not library_id or not type_id:

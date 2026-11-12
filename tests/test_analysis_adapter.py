@@ -404,3 +404,25 @@ def test_library_loss_behaviour_unchanged_when_source_is_library():
 
     assert evaluator({}) == 0.3
     assert captured["library_id"] == "smacna"
+
+
+def test_custom_fitting_loss_sees_the_custom_port_sizes():
+    # ROADMAP 6.3: the loss reads the custom fitting's own openings, not the ducts'.
+    ports = [
+        {"edge_key": "a", "profile": "Circular", "section_params": {"Diameter": 200.0}},
+        {"edge_key": "b", "profile": "Circular", "section_params": {"Diameter": 200.0}},
+    ]
+    comp = SimpleNamespace(
+        GeometrySource="Custom",
+        CustomPortMapJson=json.dumps(
+            {"b": {"port": "P2", "profile": "Rectangular", "section_params": {"Width": 300.0, "Height": 150.0}}}
+        ),
+    )
+    out = _analysis_adapter.custom_port_sections(comp, ports)
+    assert out[0] == ports[0]
+    assert out[1]["profile"] == "Rectangular" and out[1]["section_params"] == {"Width": 300.0, "Height": 150.0}
+    assert ports[1]["profile"] == "Circular"  # the input is not modified
+    library = SimpleNamespace(GeometrySource="Library", CustomPortMapJson=comp.CustomPortMapJson)
+    assert _analysis_adapter.custom_port_sections(library, ports) is ports
+    broken = SimpleNamespace(GeometrySource="Custom", CustomPortMapJson="{not json")
+    assert _analysis_adapter.custom_port_sections(broken, ports) is ports

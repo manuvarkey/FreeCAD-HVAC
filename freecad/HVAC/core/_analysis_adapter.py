@@ -330,6 +330,28 @@ def segment_friction_model(reg, seg_obj, base_model, seg_model):
     return reg.call_friction(library_id, type_def, context)
 
 
+def custom_port_sections(comp_obj, local_ports):
+    """
+    A custom fitting's ports (ROADMAP 6.3) with each duct's profile and size
+    replaced by the custom port it meets (CustomPortMapJson, written by the
+    last fit), so the loss sees the fitting's own openings. Unchanged for a
+    library component or before the first successful fit.
+    """
+    if str(getattr(comp_obj, "GeometrySource", "Library") or "Library") != "Custom":
+        return local_ports
+    try:
+        port_map = json.loads(getattr(comp_obj, "CustomPortMapJson", "") or "{}")
+    except ValueError:
+        return local_ports
+    out = []
+    for port in local_ports:
+        entry = port_map.get(port.get("edge_key"))
+        if entry and entry.get("profile"):
+            port = dict(port, profile=entry["profile"], section_params=dict(entry.get("section_params") or {}))
+        out.append(port)
+    return out
+
+
 def build_loss_evaluator(
     reg,
     comp_obj,
@@ -380,6 +402,7 @@ def build_loss_evaluator(
             properties[pdef.name] = getattr(pdef, "default", None)
 
     local_ports = json.loads(getattr(comp_obj, "LocalPortsJson", "") or "[]")
+    local_ports = custom_port_sections(comp_obj, local_ports)
     center_point = (
         HVACLibraryAPI.average_point([p["position"] for p in local_ports]) if local_ports else (0.0, 0.0, 0.0)
     )

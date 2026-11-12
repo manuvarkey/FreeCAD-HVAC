@@ -1,0 +1,322 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# SPDX-FileNotice: Part of the HVAC addon.
+
+"""
+Custom fittings (ROADMAP 6.3), FreeCAD side.
+
+A custom fitting is an `App::Part` holding the user's fully modelled fitting
+(walls included) and one port marker per opening: a
+`Part::LocalCoordinateSystem` whose origin is the centre of the opening, Z
+points out of the fitting and X along the width of a rectangular or oval
+opening, carrying the port's profile and clear-air size as dynamic
+properties (group "HVAC Port"). `add_port()` makes one from a selected end
+face.
+
+A Primary `DuctComponent` with `GeometrySource = Custom` and
+`CustomFitting` set to that container owns an `App::Link` to it. Every
+execute fits the container onto the node (library/custom_fitting.py), moves
+the link there, and reports each duct's trim as the distance from the node
+to its port, so the ducts end exactly at the port faces.
+"""
+
+import json
+
+import FreeCAD
+import Part
+
+from ..library import custom_fitting as fit_math
+from ..library.library_api import HVACLibraryAPI
+
+PORT_GROUP = "HVAC Port"
+PORT_PROFILES = ["Circular", "Rectangular", "Oval"]
+
+
+# ----------------------------------------------------------------------------
+# Port markers
+# ----------------------------------------------------------------------------
+
+
+def is_port(obj):
+    return obj is not None and "PortProfile" in getattr(obj, "PropertiesList", [])
+
+
+def ensure_port_properties(lcs):
+    """Add the HVAC port properties to a coordinate system (idempotent)."""
+    if "PortProfile" not in lcs.PropertiesList:
+        lcs.addProperty("App::PropertyEnumeration", "PortProfile", PORT_GROUP, "Profile of the opening")
+        lcs.PortProfile = PORT_PROFILES
+        lcs.PortProfile = "Circular"
+    for name, description in (
+        ("PortDiameter", "Clear-air diameter of a round opening"),
+        ("PortWidth", "Clear-air width of a rectangular or oval opening, along the marker's X axis"),
+        ("PortHeight", "Clear-air height of a rectangular or oval opening"),
+    ):
+        if name not in lcs.PropertiesList:
+            lcs.addProperty("App::PropertyLength", name, PORT_GROUP, description)
+    if "PortName" not in lcs.PropertiesList:
+        lcs.addProperty("App::PropertyString", "PortName", PORT_GROUP, "Optional name shown in messages")
+
+
+def container_ports(container):
+    """The port markers inside a custom fitting container, in a stable order (by Label, then Name)."""
+    members = list(getattr(container, "OutListRecursive", []) or [])
+    ports = [obj for obj in members if is_port(obj)]
+    return sorted(ports, key=lambda obj: (str(obj.Label), obj.Name))
+
+
+def _section(lcs):
+    profile = str(lcs.PortProfile)
+    if profile == "Circular":
+        return profile, {"Diameter": float(lcs.PortDiameter)}
+    return profile, {"Width": float(lcs.PortWidth), "Height": float(lcs.PortHeight)}
+
+
+def read_ports(container):
+    """The container's ports as fit_math.CustomPort, in the container's own coordinates."""
+    to_local = container.getGlobalPlacement().inverse()
+    ports = []
+    for lcs in container_ports(container):
+        placement = to_local.multiply(lcs.getGlobalPlacement())
+        profile, section = _section(lcs)
+        ports.append(
+            fit_math.CustomPort(
+                name=str(getattr(lcs, "PortName", "") or lcs.Label),
+                origin=tuple(placement.Base),
+                z=tuple(placement.Rotation.multVec(FreeCAD.Vector(0, 0, 1))),
+                x=None if profile == "Circular" else tuple(placement.Rotation.multVec(FreeCAD.Vector(1, 0, 0))),
+                profile=profile,
+                section=section,
+            )
+        )
+    return ports
+
+
+# ----------------------------------------------------------------------------
+# Making a port from a face
+# ----------------------------------------------------------------------------
+
+
+def _opening_wire(face):
+    """The air opening of an end face: its largest inner wire, or the outer wire for a face with no hole."""
+    inner = [w for w in face.Wires if not w.isSame(face.OuterWire)]
+    if not inner:
+        return face.OuterWire
+    return max(inner, key=lambda w: Part.Face(w).Area)
+
+
+def _opening_size(wire, normal):
+    """(profile, section, x_axis or None, centre) read off an opening wire; profile "" when it is not recognised."""
+    edges = wire.Edges
+    kinds = [type(edge.Curve).__name__ for edge in edges]
+    if len(edges) == 1 and kinds[0] == "Circle":
+        circle = edges[0].Curve
+        return "Circular", {"Diameter": 2.0 * circle.Radius}, None, circle.Center
+    lines = [edge for edge, kind in zip(edges, kinds) if kind in ("Line", "LineSegment")]
+    arcs = [edge for edge, kind in zip(edges, kinds) if kind == "Circle"]
+    centre = Part.Face(wire).CenterOfMass
+    if len(edges) == 4 and len(lines) == 4:
+        lengths = sorted({round(edge.Length, 6) for edge in lines})
+        longest = max(lines, key=lambda edge: edge.Length)
+        x_axis = (longest.Vertexes[1].Point - longest.Vertexes[0].Point).normalize()
+        width = longest.Length
+        height = min(lines, key=lambda edge: edge.Length).Length if len(lengths) > 1 else width
+        return "Rectangular", {"Width": width, "Height": height}, x_axis, centre
+    if len(lines) == 2 and len(arcs) == 2:
+        radius = arcs[0].Curve.Radius
+        straight = lines[0]
+        x_axis = (straight.Vertexes[1].Point - straight.Vertexes[0].Point).normalize()
+        return "Oval", {"Width": straight.Length + 2.0 * radius, "Height": 2.0 * radius}, x_axis, centre
+    return "", {}, None, centre
+
+
+def add_port(body, face_name, container=None, name=""):
+    """
+    Create a port marker on `body`'s planar end face `face_name`: a
+    Part::LocalCoordinateSystem attached to the face (FlatFace), with an
+    attachment offset that puts its origin on the centre of the opening, Z
+    out of the fitting and X along the opening's width; its profile and
+    size are read from the opening. The marker goes into `container` (an
+    App::Part), else into the App::Part holding `body`, else a new
+    "CustomFitting" App::Part that `body` is moved into. Returns the marker.
+    An opening whose shape is not recognised gets profile Circular and size
+    0, to be set by hand (a console warning says so).
+    """
+    doc = body.Document
+    face = body.Shape.getElement(face_name)
+    if not isinstance(face.Surface, Part.Plane):
+        raise ValueError("A port needs a planar end face; '{}' is not planar".format(face_name))
+
+    if container is None:
+        container = next((obj for obj in body.InList if obj.TypeId == "App::Part"), None)
+    if container is None:
+        container = doc.addObject("App::Part", "CustomFitting")
+        container.addObject(body)
+
+    lcs = doc.addObject("Part::LocalCoordinateSystem", "HVACPort")
+    container.addObject(lcs)
+    lcs.AttachmentSupport = [(body, face_name)]
+    lcs.MapMode = "FlatFace"
+    doc.recompute()
+
+    # Where the face attachment put it, and where the port should be (all global).
+    attached = lcs.Placement
+    global_face = face.copy()
+    normal = global_face.normalAt(*global_face.Surface.parameter(global_face.CenterOfMass))
+    probe = global_face.CenterOfMass + normal * 1.0e-3
+    if body.Shape.isInside(probe, 1.0e-6, True):
+        normal = normal * -1.0
+    profile, section, x_axis, centre = _opening_size(_opening_wire(global_face), normal)
+    if x_axis is None:
+        x_axis = attached.Rotation.multVec(FreeCAD.Vector(1, 0, 0))
+        x_axis = (x_axis - normal * x_axis.dot(normal)).normalize()
+    rotation = FreeCAD.Rotation(x_axis, normal.cross(x_axis), normal, "ZXY")
+    wanted = FreeCAD.Placement(centre, rotation)
+    lcs.AttachmentOffset = attached.inverse().multiply(wanted)
+    ensure_port_properties(lcs)
+    if profile:
+        lcs.PortProfile = profile
+        if profile == "Circular":
+            lcs.PortDiameter = section["Diameter"]
+        else:
+            lcs.PortWidth = section["Width"]
+            lcs.PortHeight = section["Height"]
+    else:
+        FreeCAD.Console.PrintWarning(
+            "HVAC - Custom fitting port '{}': the opening is not round, rectangular or a slot; "
+            "set PortProfile and its size by hand\n".format(lcs.Label)
+        )
+    if name:
+        lcs.PortName = name
+    doc.recompute()
+    return lcs
+
+
+# ----------------------------------------------------------------------------
+# Fitting a component's custom geometry onto its node
+# ----------------------------------------------------------------------------
+
+
+def is_custom(comp_obj):
+    return str(getattr(comp_obj, "GeometrySource", "Library") or "Library") == "Custom"
+
+
+def _duct_ends(local_ports):
+    ends = []
+    for port in local_ports:
+        x_axis = port.get("profile_x_axis")
+        ends.append(
+            fit_math.DuctEnd(
+                edge_key=str(port.get("edge_key", "")),
+                direction=tuple(HVACLibraryAPI.xyz(HVACLibraryAPI.vec(port["direction"]))),
+                x=tuple(HVACLibraryAPI.xyz(HVACLibraryAPI.vec(x_axis))) if x_axis is not None else None,
+                profile=str(port.get("profile", "") or ""),
+                section=dict(port.get("section_params", {}) or {}),
+            )
+        )
+    return ends
+
+
+def _overrides(comp_obj, ports):
+    """CustomPortEdgeKeys: entry i names the edge key custom port i must go on (empty = automatic)."""
+    keys = list(getattr(comp_obj, "CustomPortEdgeKeys", []) or [])
+    return {key: index for index, key in enumerate(keys[: len(ports)]) if key}
+
+
+def fit_component(comp_obj, local_ports):
+    """(container, ports, FitResult) for a custom Primary component on its current ports; raises on any problem."""
+    container = getattr(comp_obj, "CustomFitting", None)
+    if container is None:
+        raise ValueError("GeometrySource is Custom but CustomFitting is not set")
+    ports = read_ports(container)
+    if not local_ports:
+        raise ValueError("The component has no ports yet")
+    node = HVACLibraryAPI.xyz(HVACLibraryAPI.vec(local_ports[0]["position"]))
+    result = fit_math.fit(ports, _duct_ends(local_ports), node, _overrides(comp_obj, ports))
+    return container, ports, result
+
+
+def trim_records(local_ports, result):
+    """connection_lengths records (edge_key, segment_end, length) from a fit."""
+    return HVACLibraryAPI.build_trim_rec_from_port_lengths(
+        [(port, max(0.0, result.trims.get(port.get("edge_key"), 0.0))) for port in local_ports]
+    )
+
+
+def measure(comp_obj, local_ports):
+    """{(edge_key, segment_end): trim} without touching the link (DuctJunction's trim peek)."""
+    _container, _ports, result = fit_component(comp_obj, local_ports)
+    return {(rec["edge_key"], rec["segment_end"]): rec["length"] for rec in trim_records(local_ports, result)}
+
+
+def port_map(ports, result):
+    """{edge_key: {"port", "profile", "section_params"}}: which custom port each duct meets, for the loss."""
+    return {
+        edge_key: {"port": ports[index].name, "profile": ports[index].profile, "section_params": ports[index].section}
+        for edge_key, index in result.mapping.items()
+    }
+
+
+def placement_of(result):
+    """The link placement for a fit: custom frame -> world."""
+    r = result.rotation
+    matrix = FreeCAD.Matrix(
+        r[0][0], r[0][1], r[0][2], result.translation[0],
+        r[1][0], r[1][1], r[1][2], result.translation[1],
+        r[2][0], r[2][1], r[2][2], result.translation[2],
+        0.0, 0.0, 0.0, 1.0,
+    )  # fmt: skip
+    return FreeCAD.Placement(matrix)
+
+
+def owned_link(comp_obj):
+    name = str(getattr(comp_obj, "CustomLinkName", "") or "")
+    doc = getattr(comp_obj, "Document", None)
+    return doc.getObject(name) if (name and doc is not None) else None
+
+
+def ensure_link(comp_obj, container):
+    """The component's own App::Link to `container`, created on first use."""
+    link = owned_link(comp_obj)
+    if link is None:
+        link = comp_obj.Document.addObject("App::Link", comp_obj.Name + "_Custom")
+        comp_obj.CustomLinkName = link.Name
+        link.Label = "{} (custom)".format(comp_obj.Label)
+    if link.LinkedObject != container:
+        link.LinkedObject = container
+    return link
+
+
+def remove_link(comp_obj):
+    link = owned_link(comp_obj)
+    if link is not None:
+        try:
+            comp_obj.Document.removeObject(link.Name)
+        except Exception:
+            pass
+    if getattr(comp_obj, "CustomLinkName", ""):
+        comp_obj.CustomLinkName = ""
+
+
+def apply(comp_obj, local_ports):
+    """
+    Fit, move the link, and write the component's ConnectionLengthsJson,
+    CustomPortMapJson and CustomFitWarnings. Returns the FitResult; raises
+    on a fit problem (the caller reports it as GeometryError).
+    """
+    container, ports, result = fit_component(comp_obj, local_ports)
+    link = ensure_link(comp_obj, container)
+    placement = placement_of(result)
+    if not link.Placement.isSame(placement, 1e-9):
+        link.Placement = placement
+
+    lengths_json = json.dumps(trim_records(local_ports, result))
+    if getattr(comp_obj, "ConnectionLengthsJson", "") != lengths_json:
+        comp_obj.ConnectionLengthsJson = lengths_json
+    map_json = json.dumps(port_map(ports, result), sort_keys=True)
+    if getattr(comp_obj, "CustomPortMapJson", "") != map_json:
+        comp_obj.CustomPortMapJson = map_json
+    if list(getattr(comp_obj, "CustomFitWarnings", []) or []) != result.warnings:
+        comp_obj.CustomFitWarnings = result.warnings
+    for warning in result.warnings:
+        FreeCAD.Console.PrintWarning("HVAC - Custom fitting '{}': {}\n".format(comp_obj.Label, warning))
+    return result

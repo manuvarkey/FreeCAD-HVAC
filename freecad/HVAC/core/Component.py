@@ -44,6 +44,7 @@ translate = FreeCAD.Qt.translate
 from ..library.library_api import HVACLibraryAPI
 from ..utils import hvaclib
 from . import Construction as _construction
+from . import _custom_fitting
 from . import (
     _component_appearance,
     _component_results,
@@ -142,6 +143,14 @@ class DuctComponent:
         if not ports:
             return
 
+        # A user-modelled fitting replaces the library geometry (ROADMAP 6.3);
+        # the library type still provides the loss.
+        if _custom_fitting.is_custom(obj) and getattr(obj, "ComponentRole", "") == "Primary":
+            self._executeCustom(obj, ports)
+            return
+        if getattr(obj, "CustomLinkName", ""):
+            _custom_fitting.remove_link(obj)
+
         try:
             reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
             type_def = reg.resolve_type(library_id, type_id)
@@ -210,6 +219,22 @@ class DuctComponent:
                 "HVAC - DuctComponent - Execute Error generating component '{}': {}\n".format(obj.Label, message)
             )
             FreeCAD.Console.PrintMessage(traceback.format_exc())
+
+    def _executeCustom(self, obj, ports):
+        """Place this component's custom fitting on the node; its own shape stays empty (the link is the geometry)."""
+        try:
+            _custom_fitting.apply(obj, ports)
+            if not obj.Shape.isNull():
+                obj.Shape = Part.Shape()
+            if getattr(obj, "GeometryError", ""):
+                obj.GeometryError = ""
+        except Exception as e:
+            message = str(e) or e.__class__.__name__
+            if "GeometryError" in getattr(obj, "PropertiesList", []):
+                obj.GeometryError = message
+            FreeCAD.Console.PrintError(
+                "HVAC - DuctComponent - Custom fitting '{}': {}\n".format(obj.Label, message)
+            )
 
     @staticmethod
     def _parentAttr(obj, name, default=""):
@@ -521,6 +546,52 @@ class DuctComponent:
             obj.setEditorMode("GeometryError", 1)
         except Exception:
             pass
+
+        # Custom geometry (ROADMAP 6.3): a user-modelled fitting (an App::Part
+        # with HVAC port markers) placed at the node instead of the library
+        # geometry. Primary components only.
+        if "GeometrySource" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyEnumeration",
+                "GeometrySource",
+                "HVAC Custom Geometry",
+                "Library: the selected type builds the geometry. Custom: the App::Part in CustomFitting is "
+                "linked at the node and the ducts end at its port markers",
+            )
+            obj.GeometrySource = ["Library", "Custom"]
+            obj.GeometrySource = "Library"
+        self._addProperty(
+            obj,
+            "App::PropertyLink",
+            "CustomFitting",
+            "HVAC Custom Geometry",
+            "App::Part holding the modelled fitting and one HVAC port marker per opening (see Add HVAC Port)",
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyStringList",
+            "CustomPortEdgeKeys",
+            "HVAC Custom Geometry",
+            "Optional: entry N is the edge key of the duct custom port N must go on (empty entry = automatic)",
+        )
+        self._addProperty(
+            obj,
+            "App::PropertyStringList",
+            "CustomFitWarnings",
+            "HVAC Custom Geometry",
+            "Warnings from the last fit, e.g. a port whose size differs from its duct's",
+        )
+        self._addProperty(
+            obj, "App::PropertyString", "CustomLinkName", "HVAC", "Internal: name of the App::Link this component owns"
+        )
+        self._addProperty(
+            obj, "App::PropertyString", "CustomPortMapJson", "HVAC", "Internal: which custom port each duct meets"
+        )
+        for name, mode in (("CustomFitWarnings", 1), ("CustomLinkName", 2), ("CustomPortMapJson", 2)):
+            try:
+                obj.setEditorMode(name, mode)
+            except Exception:
+                pass
 
         # Per-construction-layer Layer_<id>_Shape/Layer_<id>_Material
         # properties are added/removed by applyTypeSchema() (via
@@ -864,7 +935,14 @@ class DuctComponentViewProvider:
     def getIcon(self):
         return hvaclib.get_icon_path("DuctsIcon.svg")
 
+    def claimChildren(self):
+        # A custom fitting's link shows under its component.
+        obj = getattr(self, "Object", None)
+        link = _custom_fitting.owned_link(obj) if obj is not None else None
+        return [link] if link is not None else []
+
     def onDelete(self, vobj, subelements):
+        _custom_fitting.remove_link(vobj.Object)
         # Permit direct deletion from the tree -- e.g. of a stale component
         # left over from an older schema that the owning network's own
         # sync loop never picked up for cleanup. If a live network still
