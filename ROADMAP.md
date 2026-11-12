@@ -929,3 +929,116 @@ returns the placed shape.
   GUI), the command itself, and the tree display of the link.
 - Known limit: editing a port marker or the modelled body does not by
   itself re-fit the node; recompute the network.
+
+### 6.4 Gap analysis and API freeze (Stage 11)
+
+Written 13 November 2026. **For the owner's review; nothing implemented.**
+
+**What a freeze means here.** After the freeze, a library written against
+the frozen surface keeps working until a declared major version change:
+its JSON type-defs, the context its functions receive, the
+`HVACLibraryAPI` / `HVACLossAPI` methods it calls, and what it returns.
+Everything else stays free to change.
+
+**State today (checked in the code):**
+- Versions: `HVACLibraryAPI.API_VERSION = 2`, `HVACLossAPI.API_VERSION = 1`,
+  PartScripts `HVAC_PARTSCRIPT_API = 2` (checked at load), static
+  descriptors `schema_version` 1 (checked). Type-defs and `library.json`
+  carry no version.
+- Dual forms still accepted: 134 type-defs use `"generator"`, 6 use
+  `"geometry"`; a generator may return `{"shape"}` or `{"layers"}` (the
+  shared finisher still returns `{"shape"}` for a fitting with no wall);
+  the context carries both `params` and `properties` (same dict).
+- Identity: a segment's `edge_key` is the sketch geometry `Tag`, or the
+  wire's name plus index; a node key is built from its edges. Rebuilding
+  a sketch or wire changes them; `DuctNetwork._edge_key_remap` and
+  `_custom_loss.remap_persisted_edge_keys` patch the stored keys
+  (`CustomLossCoefficientEdgeKeys`, per-port property lists, and now
+  `CustomPortEdgeKeys`).
+- No list says which `HVACLibraryAPI` methods are public; library code
+  may call anything on it.
+
+**Design.**
+
+1. **Schema versions.**
+   - `library.json` and every type-def get `"schema_version"`. Version 1
+     is today's format, both forms allowed. Version 2 allows one form only:
+     `"geometry": {"backend": "generator" | "partscript" | "static", ...}`
+     (the generator module/function move inside it), results as
+     `{"layers": ...}` only, context `params` only.
+   - The loader reads both. A version 1 library loads with one warning
+     per library naming what to change. A missing version means 1.
+   - `tools/migrate_typedefs.py` rewrites a library to version 2
+     (mechanical); the shipped libraries are migrated with it, and
+     `_finish` returns `{"layers"}` always (a single roleless layer for no
+     wall).
+   - JSON Schema files for `library.json`, a type-def and a static
+     descriptor go in `freecad/HVAC/library/schemas/`. FreeCAD does not
+     ship `jsonschema`, so the loader keeps `validation.py` as the
+     enforcing code, and a test checks the shipped libraries against the
+     schema files (with `jsonschema` in the test environment only) so the
+     two cannot drift.
+
+2. **Stable identity** (the one irreversible choice).
+   - (A) **Persisted ids.** The network keeps `EdgeIdentityJson`: one
+     UUID per edge, with a fingerprint (end points, source object, index).
+     On every sync, edges are matched to the stored ones by key, then by
+     fingerprint; a match keeps its UUID, anything new gets one. Everything
+     stored on objects (per-port lists, custom-port overrides, results
+     keyed by edge) uses the UUID. The remap helpers go away.
+   - (B) **Derived keys plus remap** (today), frozen as is.
+   - Recommendation: A. Every stored per-port value (Stage 3), custom
+     fitting overrides (6.3) and future schedules depend on it, and B's
+     remap gets harder with each new stored list. A costs one sync step
+     and a migration that assigns UUIDs to existing documents on load.
+
+3. **Public API surface.**
+   - Each API class gets a `PUBLIC` frozenset of method names. Everything
+     else is renamed with a leading `_` (with a warning alias for one
+     release). A test fails when code under `libraries/` or
+     `library/fittings/` calls a non-public method, and when a public
+     method is removed without a major version.
+   - The contexts are frozen as documented key sets, one per call kind:
+     geometry, connection lengths, loss, friction, feature. A test checks
+     the code that builds each context only emits its documented keys.
+   - `API_VERSION` becomes a (major, minor) pair; a library may declare
+     `"requires_api": {"geometry": 3, "loss": 2}` in `library.json` and
+     is refused with a clear message when the running major differs.
+
+4. **Data structures to settle before the freeze:**
+   - `GeometryResult`: layers only; `features`, `connection_lengths`,
+     `computed_properties` as they are.
+   - `LossPath` / `LossEvaluation`: as they are.
+   - `NetworkModel` and friends: carry the stable edge id (2).
+   - `HVACTypeMatchRequest`: as is, documented.
+   - Property defs: `per_port`, `editor_mode`, `validation` documented as
+     part of the type-def schema.
+   - Construction layer and feature defs: as is, plus `FeatureContext`
+     with `result` / `host_layer_id` (6.2).
+
+5. **Gap list, proposed triage** (from Stage 11 item 5; "before" means
+   before the freeze because it changes a frozen structure):
+   - Before: terminal function (supply, return, exhaust, outdoor air) as
+     a classifier and network concept, since type constraints and losses
+     would read it; multi-node equipment (an AHU with supply and return),
+     since it changes what a node is.
+   - After: looped networks, fan curves and operating point, leakage,
+     thermal and acoustic calculations, more inline devices (silencer,
+     filter, coil, fire damper, access door, flex connector), bill of
+     quantities, imperial units in analysis.
+   - Done or partly done since the list was written: a geometry regression
+     harness (`tools/geometry_smoke.py`), a flexible duct type, oval
+     transitions read as rectangles (approximation).
+
+6. **Freeze procedure:** migrate the shipped libraries to schema 2, land
+   (2) and (3), write `CHANGELOG.md` with the compatibility policy, tag
+   the commit.
+
+**Owner input needed:**
+- (a) Stable identity: A (persisted ids) or B (derived keys plus remap)?
+- (b) Schema version 1 libraries after the freeze: load with a warning
+  (recommended) or refuse?
+- (c) Are there libraries outside this repository that must keep working
+  unchanged?
+- (d) The "before the freeze" gaps: agree that terminal function and
+  multi-node equipment are designed first, or freeze without them?
