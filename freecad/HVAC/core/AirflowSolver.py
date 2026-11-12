@@ -146,6 +146,15 @@ class AirflowSolver:
             result.components.append(
                 self._map_component_result(tree, segment_map, junction_map, component_map)
             )
+
+        # Equipment joining this network to others collects its port flows
+        # and this network's worst path (ROADMAP 6.5).
+        try:
+            from . import Equipment
+
+            Equipment.update_from_airflow(self.net_obj, result)
+        except Exception as e:
+            result.warnings.append("Could not update the connected equipment: {}".format(e))
         return result
 
     # ------------------------------------------------------------------

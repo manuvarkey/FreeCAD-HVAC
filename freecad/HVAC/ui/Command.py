@@ -1464,6 +1464,121 @@ class CommandAddCustomPort:
         doc.recompute()
 
 
+class CommandCreateEquipment:
+    """Make an HVAC equipment object (AHU, fan) from a modelled unit with port markers (ROADMAP 6.5)."""
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("CreateDuctsIcon.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_CreateEquipment', 'Create Equipment'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_CreateEquipment',
+                'Make an HVAC equipment object from the selected App::Part: a modelled unit with one HVAC port '
+                'marker per connection (Add HVAC Port). Set each marker\'s EquipmentPortFunction, then use '
+                'Connect to Equipment',
+            ),
+            'CmdType': 'ForEdit',
+        }
+
+    @staticmethod
+    def _selected_part():
+        for obj in Gui.Selection.getSelection() or []:
+            if obj.TypeId == "App::Part":
+                return obj
+        return None
+
+    def IsActive(self):
+        return Gui.ActiveDocument is not None and self._selected_part() is not None
+
+    def Activated(self):
+        from ..core import Equipment, _custom_fitting
+
+        model = self._selected_part()
+        doc = model.Document
+        doc.openTransaction("Create Equipment")
+        try:
+            equipment = Equipment.create_equipment(doc, model)
+            for marker in _custom_fitting.container_ports(model):
+                Equipment.ensure_equipment_port(marker)
+        finally:
+            doc.commitTransaction()
+        doc.recompute()
+        FreeCAD.Console.PrintMessage(
+            "HVAC - Created equipment '{}' from '{}'; set each port's EquipmentPortFunction\n".format(
+                equipment.Label, model.Label
+            )
+        )
+
+
+class CommandConnectEquipment:
+    """Connect an equipment port marker to a network terminal (ROADMAP 6.5)."""
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("ModifyDuctsIcon.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_ConnectEquipment', 'Connect to Equipment'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_ConnectEquipment',
+                'Select an equipment port marker and a duct end (its terminal node or fitting): the duct end '
+                'becomes its network\'s source, fed by (or feeding) that port',
+            ),
+            'CmdType': 'ForEdit',
+        }
+
+    @staticmethod
+    def _pieces():
+        from ..core import Equipment, _custom_fitting
+
+        marker = junction = None
+        for obj in Gui.Selection.getSelection() or []:
+            if _custom_fitting.is_port(obj) or obj.TypeId == "Part::LocalCoordinateSystem":
+                marker = obj
+            elif hvaclib.isDuctJunction(obj):
+                junction = obj
+            elif hvaclib.isDuctComponent(obj):
+                parent = obj.Document.getObject(getattr(obj, "ParentJunctionName", "") or "")
+                junction = parent or junction
+        equipment = None
+        if marker is not None:
+            for obj in marker.Document.Objects:
+                model = getattr(obj, "Model", None)
+                if Equipment.is_equipment(obj) and model is not None and marker in _custom_fitting.container_ports(model):
+                    equipment = obj
+                    break
+        return equipment, marker, junction
+
+    def IsActive(self):
+        if Gui.ActiveDocument is None:
+            return False
+        _equipment, marker, junction = self._pieces()
+        return marker is not None and junction is not None
+
+    def Activated(self):
+        from ..core import Equipment
+
+        equipment, marker, junction = self._pieces()
+        if equipment is None:
+            FreeCAD.Console.PrintWarning(
+                "HVAC - Connect to Equipment: '{}' belongs to no equipment; use Create Equipment on its model "
+                "first\n".format(marker.Label)
+            )
+            return
+        doc = junction.Document
+        doc.openTransaction("Connect to Equipment")
+        try:
+            warnings = Equipment.connect(equipment, marker, junction)
+        except ValueError as e:
+            doc.abortTransaction()
+            FreeCAD.Console.PrintWarning("HVAC - Connect to Equipment: {}\n".format(e))
+            return
+        doc.commitTransaction()
+        for warning in warnings:
+            FreeCAD.Console.PrintWarning("HVAC - Connect to Equipment: {}\n".format(warning))
+        FreeCAD.Console.PrintMessage(
+            "HVAC - Connected '{}' to {} port '{}'\n".format(junction.Label, equipment.Label, marker.Label)
+        )
+
+
 #=================================================
 # Register Commands
 #=================================================
@@ -1492,4 +1607,6 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_SelectAllSegments', CommandSelectAllSegments())
     FreeCAD.Gui.addCommand('HVAC_SelectAllComponents', CommandSelectAllComponents())
     FreeCAD.Gui.addCommand('HVAC_AddCustomPort', CommandAddCustomPort())
+    FreeCAD.Gui.addCommand('HVAC_CreateEquipment', CommandCreateEquipment())
+    FreeCAD.Gui.addCommand('HVAC_ConnectEquipment', CommandConnectEquipment())
     FreeCAD.Gui.addCommand('HVAC_ReloadLibraries', CommandReloadHVACLibraries())  # Debug method

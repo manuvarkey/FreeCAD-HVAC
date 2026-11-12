@@ -977,7 +977,8 @@ def test_bundled_smacna_branch_tee_prefers_specific_tee_model():
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular"))
     selection = reg.select_type("smacna", request, strict=True)
-    assert selection.type_def.id == "branch_tee_generic"
+    # The ported builtin_basic tee types outrank the old star-shaped fallback.
+    assert selection.type_def.id == "branch_tee_radius_center"
 
 
 def test_bundled_smacna_rectangular_elbow_prefers_dedicated_rectangular_model():
@@ -1109,7 +1110,9 @@ def test_bundled_smacna_circular_to_rectangular_transition_reaches_dedicated_mod
     request = _junction_request("through", "through.transition", "Mixed", ports)
     selection = reg.select_type("smacna", request, strict=True)
     assert selection.status == "exact"
-    assert selection.type_def.id == "through_transition_generic"
+    # through_transition_generic was retired for the three alignment-specific
+    # transitions (as in builtin_basic); concentric is the default.
+    assert selection.type_def.id == "through_transition_concentric"
 
 
 def test_bundled_builtin_basic_circular_to_rectangular_transition_reaches_dedicated_model():
@@ -1177,20 +1180,22 @@ def test_bundled_generic_fallback_still_used_when_no_concrete_type_covers_profil
         assert selection.type_def.id == "through_generic"
 
 
-def test_bundled_smacna_mixed_profile_branch_uses_generic_model_not_marker():
+def test_bundled_smacna_mixed_profile_branch_uses_a_model_not_marker():
+    # Since the Stage 4-6 types were ported to smacna (as in builtin_basic),
+    # a mixed-profile wye matches the mitered wye exactly, port by port.
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.wye", "Mixed", _mixed_ports(3))
     selection = reg.select_type("smacna", request, strict=True)
-    assert selection.status == "generic_profile"
-    assert selection.type_def.id == "branch_wye_generic"
+    assert selection.status == "exact"
+    assert selection.type_def.id == "branch_wye_mitered"
 
 
-def test_bundled_smacna_mixed_profile_cross_uses_generic_model_not_marker():
+def test_bundled_smacna_mixed_profile_cross_uses_a_model_not_marker():
     reg = _load_bundled_registry()
     request = _junction_request("cross", "cross.cross", "Mixed", _mixed_ports(4))
     selection = reg.select_type("smacna", request, strict=True)
-    assert selection.status == "generic_profile"
-    assert selection.type_def.id == "cross_generic"
+    assert selection.status == "exact"
+    assert selection.type_def.id == "cross_tee_straight"
 
 
 def test_bundled_smacna_mixed_profile_multiport_uses_generic_model_not_marker():
@@ -1206,7 +1211,7 @@ def test_bundled_mixed_profile_fix_does_not_disturb_exact_profile_ranking():
     # capable broad model for a real, single-profile Circular tee.
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular"))
-    for lib_id, expected in (("builtin_basic", "branch_tee_radius_center"), ("smacna", "branch_tee_generic")):
+    for lib_id, expected in (("builtin_basic", "branch_tee_radius_center"), ("smacna", "branch_tee_radius_center")):
         selection = reg.select_type(lib_id, request, strict=True)
         assert selection.status == "exact"
         assert selection.type_def.id == expected
@@ -1414,7 +1419,7 @@ def test_list_types_offers_every_transition_when_the_alignment_was_not_worked_ou
 
 _ENTRIES = {"end_entry_plain", "end_entry_bellmouth", "end_entry_conical", "end_hood_intake", "end_hood_tapered"}
 _EXITS = {"end_exit_plain", "end_exit_conical", "end_hood_exhaust"}
-_EITHER_WAY = {"end_diffuser_generic", "end_diffuser_square", "end_grille_generic", "end_ahu_generic"}
+_EITHER_WAY = {"end_diffuser_generic", "end_diffuser_square", "end_grille_generic", "end_equipment_connection"}
 
 
 def test_list_types_offers_entries_only_where_air_comes_in():

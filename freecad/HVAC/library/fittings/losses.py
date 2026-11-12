@@ -85,6 +85,25 @@ def loss_tee_45_entry(context):
     return context["loss_api"].branch_loss(_with_properties(context, BranchStyle="45_entry"))
 
 
+def loss_tee_damper(context):
+    # A rectangular tee with a damper in the branch: SMACNA 14-14 R
+    # (diverging). The damper is loss-only, it is not drawn. There is no
+    # converging table; the plain one is used.
+    return context["loss_api"].branch_loss(_with_properties(context, BranchStyle="damper"))
+
+
+def loss_tee_45_entry_damper(context):
+    # A rectangular 45 degree entry (shoe) tap with a damper: SMACNA 14-14 P
+    # (diverging). No converging table; the plain one is used.
+    return context["loss_api"].branch_loss(_with_properties(context, BranchStyle="45_entry_damper"))
+
+
+def loss_tee_extractor(context):
+    # A rectangular tee with an extractor (turning blades) at the branch:
+    # SMACNA 14-14 S (diverging). Loss-only, not drawn. No converging table.
+    return context["loss_api"].branch_loss(_with_properties(context, BranchStyle="extractor"))
+
+
 def loss_wye_generic(context):
     # A true Wye has no Tee-style common/straight leg, so this routes to
     # the Wye-specific API rather than branch_loss() (see HVACLossAPI.
@@ -172,6 +191,17 @@ def loss_ahu(context):
     unit = loss_diffuser_generic(context)
     fan = api.fan_connection_loss(context)
     return api.sum_losses(unit, fan)
+
+
+def loss_equipment_connection(context):
+    # Where a network meets its equipment (an AHU, a fan; ROADMAP 6.5): only
+    # the fan connection's system effect (SMACNA 14-11 F to J, 14-16 I). The
+    # equipment's own internal pressure drop belongs to the HVACEquipment
+    # object, which adds it to each network's worst path.
+    api = context["loss_api"]
+    collar = api.terminal_component_loss(_with_properties(context, LossCoefficient=0.0))
+    fan = api.fan_connection_loss(context)
+    return api.sum_losses(collar, fan)
 
 
 def loss_register_generic(context):

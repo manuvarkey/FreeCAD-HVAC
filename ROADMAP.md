@@ -1166,6 +1166,28 @@ function. Not done: per-system colours (one network is one system, so the
 existing network totals are the system totals). Tests:
 `tests/test_terminal_function.py`.
 
+**Status, equipment: done, not tried in the GUI.** `core/Equipment.py`:
+`HVACEquipment` (`Model` = App::Part with port markers, each with an
+`EquipmentPortFunction`: `SupplyOutlet`, `ReturnInlet`, `OutdoorAirInlet`,
+`ExhaustOutlet`; `InternalPressureDrop`; `Connections`). Commands "Create
+Equipment" (from a selected App::Part) and "Connect to Equipment" (a port
+marker plus a duct end): the terminal becomes its network's Source and gets
+`end_equipment_connection` (both libraries: a collar with the
+fan-connection loss, `loss_equipment_connection`); a duct end more than
+1 mm off the port, or a network whose `SystemType` does not match the port,
+is reported, not changed. After each network's Calculate Airflow the
+equipment stores that network's port flows and worst path and refreshes
+`SupplyAirflow`, `ReturnAirflow`, `OutdoorAirflow` (outdoor-air ports, or
+supply minus return), `SupplyFanStatic` (internal drop + worst supply +
+worst outdoor-air path), `ReturnFanStatic` and `Report`.
+`end_ahu_generic` is retired (its builder `boxes.build_ahu` and
+`loss_ahu` stay in the API). Deviation: no `NodeModel.equipment_port`; the
+equipment reads results after the solve instead. Known limit: a duct
+leaving an AHU's exhaust outlet to outside is a network whose Source
+pushes air in, which `expected_flow_class` only knows for Supply systems;
+set that network's SystemType to Supply until it gets its own system type.
+Tests: `tests/test_equipment.py`.
+
 **Questions as asked:**
 - (e) One system per network (supply and return as separate networks
   joined by equipment), or one network spanning both through the AHU?
