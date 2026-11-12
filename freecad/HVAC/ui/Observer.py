@@ -1291,6 +1291,10 @@ class AirflowResultObserver:
     # Result tooltip (Stage 9 item 1): shown once the mouse has rested this long.
     HOVER_DELAY_MS = 350
     HOVER_PICK_RADIUS = 4
+    # The tooltip stays while the cursor is within this many pixels of where
+    # it opened (and at most HOVER_SHOW_MS); moving further re-picks.
+    HOVER_HOLD_PX = 10
+    HOVER_SHOW_MS = 60000
 
     JUNCTION_COLOR_FIELDS = ("flow_rate", "static_pressure")
     JUNCTION_COLOR_LABELS = {
@@ -1326,6 +1330,7 @@ class AirflowResultObserver:
         self._hover_targets = []  # [(SoNode, callable returning the tooltip text), ...]
         self._hover_pos = None
         self._hover_timer = None
+        self._hover_shown_at = None  # (x, y) viewport position the current tooltip opened at
 
     def start(self):
         vobj = getattr(self.network_obj, "ViewObject", None)
@@ -1788,12 +1793,20 @@ class AirflowResultObserver:
                 pass
         self._hover_root = None
         self._hover_targets = []
+        self._hover_shown_at = None
         QtWidgets.QToolTip.hideText()
 
     def _onMouseMove(self, user_data, event_callback):
         # Never handled here: the move still reaches FreeCAD (preselection, navigation).
         event = event_callback.getEvent()
-        self._hover_pos = event.getPosition()
+        pos = event.getPosition()
+        self._hover_pos = pos
+        x, y = pos.getValue()
+        if self._hover_shown_at is not None:
+            sx, sy = self._hover_shown_at
+            if abs(x - sx) <= self.HOVER_HOLD_PX and abs(y - sy) <= self.HOVER_HOLD_PX:
+                return  # still on what the open tooltip describes: leave it alone
+            self._hover_shown_at = None
         if self._hover_timer is not None:
             self._hover_timer.start(self.HOVER_DELAY_MS)
 
@@ -1803,10 +1816,28 @@ class AirflowResultObserver:
         except Exception as e:
             FreeCAD.Console.PrintLog("HVAC - result tooltip: {}\n".format(e))
             text = ""
-        if text:
-            QtWidgets.QToolTip.showText(QtGui.QCursor.pos(), text)
-        else:
+        if not text:
             QtWidgets.QToolTip.hideText()
+            return
+        cursor = QtGui.QCursor.pos()
+        widget = QtWidgets.QApplication.widgetAt(cursor)
+        try:
+            if widget is not None:
+                # Held open while the cursor stays inside this small area of the view widget.
+                local = widget.mapFromGlobal(cursor)
+                hold = QtCore.QRect(
+                    local.x() - self.HOVER_HOLD_PX,
+                    local.y() - self.HOVER_HOLD_PX,
+                    2 * self.HOVER_HOLD_PX + 1,
+                    2 * self.HOVER_HOLD_PX + 1,
+                )
+                QtWidgets.QToolTip.showText(cursor, text, widget, hold, self.HOVER_SHOW_MS)
+            else:
+                QtWidgets.QToolTip.showText(cursor, text)
+        except TypeError:
+            QtWidgets.QToolTip.showText(cursor, text, widget)
+        if self._hover_pos is not None:
+            self._hover_shown_at = tuple(self._hover_pos.getValue())
 
     def _hoverText(self):
         """Tooltip for what is under the cursor: an overlay plane or box first, else a duct or fitting of this network."""
@@ -1814,14 +1845,18 @@ class AirflowResultObserver:
         if view is None:
             return ""
         if self._hover_targets and self._hover_pos is not None and self._root is not None:
-            region = view.getViewer().getSoRenderManager().getViewportRegion()
-            pick = coin.SoRayPickAction(region)
+            # Pick through the whole scene (the ray needs the camera), keeping
+            # every hit: the nearest overlay plane or box wins, even when a
+            # duct or the overlay's own text is in front of it.
+            render_manager = view.getViewer().getSoRenderManager()
+            pick = coin.SoRayPickAction(render_manager.getViewportRegion())
             pick.setPoint(self._hover_pos)
             pick.setRadius(self.HOVER_PICK_RADIUS)
-            pick.apply(self._root)
-            picked = pick.getPickedPoint()
-            if picked is not None:
-                path = picked.getPath()
+            pick.setPickAll(True)
+            pick.apply(render_manager.getSceneGraph())
+            picked_points = pick.getPickedPointList()
+            for i in range(picked_points.getLength()):
+                path = picked_points[i].getPath()
                 for node, describe in self._hover_targets:
                     if path.containsNode(node):
                         return describe()

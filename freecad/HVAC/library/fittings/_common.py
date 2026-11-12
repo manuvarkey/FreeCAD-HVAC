@@ -153,6 +153,23 @@ def _profile_extent(profile):
     return max(bb.DiagonalLength, bb.XLength, bb.YLength, bb.ZLength, 1.0)
 
 
+def _outward(solid):
+    """
+    `solid` with its faces facing out. Extruding or lofting a profile wire
+    that winds against the sweep direction gives an inside-out solid
+    (negative volume), which breaks every later boolean -- which way the
+    wire winds depends on the profile frame, so it can happen on either
+    side of a fitting.
+    """
+    try:
+        if solid is not None and not solid.isNull() and solid.Volume < 0.0:
+            solid = solid.copy()
+            solid.reverse()
+    except Exception:
+        pass
+    return solid
+
+
 def _mitered_bend(api, port0, port1, radius, cuts, profile0=None, profile1=None, offset=0.0):
     """Build a faceted bend between two arbitrary ports.
 
@@ -235,7 +252,7 @@ def _mitered_bend(api, port0, port1, radius, cuts, profile0=None, profile1=None,
     # toward a target mitre plane.
     def extrude_to_plane(section, axis_origin, direction, target_plane):
         reach = reach_to_plane(axis_origin, direction, target_plane, section)
-        solid = api.extrude(section, direction * reach, solid=True)
+        solid = _outward(api.extrude(section, direction * reach, solid=True))
         solid = clip_keep_point(solid, target_plane, axis_origin)
         if solid is None or solid.isNull():
             raise RuntimeError("Mitered bend gore became null after clipping")
@@ -279,7 +296,7 @@ def _mitered_bend(api, port0, port1, radius, cuts, profile0=None, profile1=None,
     transition = api.loft([left_section, right_section], solid=True, ruled=True)
     if transition is None or transition.isNull():
         raise RuntimeError("Mitered bend transition gore loft failed")
-    pieces.append(transition)
+    pieces.append(_outward(transition))
     pieces.extend(right_pieces)
     shape = api.fuse(*pieces)
     return shape, [route["trim_lengths"][0], route["trim_lengths"][1]]
@@ -328,8 +345,32 @@ def _lean_port_from_profile_frame(api, run_a, run_b, branch):
     return run_a if key_a > key_b else run_b
 
 
+def _flow_paired_run(run_a, run_b, branch):
+    """
+    The run leg the branch exchanges air with, by flow direction, or None
+    when flow is unknown or ambiguous (a bullhead, no flow direction yet):
+    diverging (air leaves through the branch) -> the run inlet, the
+    upstream side; converging (air enters through the branch) -> the run
+    outlet, the downstream side. A shoe's toe and a branch bend point at
+    this leg, so the air turns along them rather than against them.
+    """
+    branch_in = branch.get("flow_into_junction")
+    a_in, b_in = run_a.get("flow_into_junction"), run_b.get("flow_into_junction")
+    if branch_in is None or a_in is None or b_in is None or bool(a_in) == bool(b_in):
+        return None
+    want_into_junction = not bool(branch_in)
+    return run_a if bool(a_in) == want_into_junction else run_b
+
+
 def _lean_port(api, run_a, run_b, branch, reverse=False):
-    """Pick the run leg toward which an asymmetric branch bend is formed."""
+    """
+    Pick the run leg toward which an asymmetric branch bend (or a shoe's
+    toe) is formed. An inclined branch decides it by geometry: it leans
+    toward the run leg it points away from. A square branch has no
+    geometric lean, so the flow decides it (_flow_paired_run), and only
+    without a flow direction a deterministic profile-frame choice.
+    `reverse` (ReverseBranchBend) flips the result.
+    """
     incoming = api.unit(api.port_direction(branch) * -1.0)
     dir_a = api.unit(api.port_direction(run_a))
     dir_b = api.unit(api.port_direction(run_b))
@@ -340,7 +381,7 @@ def _lean_port(api, run_a, run_b, branch, reverse=False):
     if abs(score_a - score_b) > _EPS:
         selected = run_a if score_a > score_b else run_b
     else:
-        selected = _lean_port_from_profile_frame(api, run_a, run_b, branch)
+        selected = _flow_paired_run(run_a, run_b, branch) or _lean_port_from_profile_frame(api, run_a, run_b, branch)
 
     if reverse:
         return run_b if selected is run_a else run_a
