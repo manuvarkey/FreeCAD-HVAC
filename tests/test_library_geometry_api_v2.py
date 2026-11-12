@@ -90,3 +90,30 @@ def test_old_split_geometry_api_module_is_removed():
 
 def test_legacy_duplicate_geometry_helpers_are_removed_from_public_api():
     assert not (FORBIDDEN_LEGACY_CALLS & set(dir(HVACLibraryAPI)))
+
+
+def test_public_lists_match_the_api_classes():
+    from freecad.HVAC.library.loss_api import HVACLossAPI
+
+    for api in (HVACLibraryAPI, HVACLossAPI):
+        public = {name for name in dir(api) if not name.startswith("_")}
+        assert public == set(api.PUBLIC), (
+            "{}.PUBLIC is out of date: added {}, removed {}".format(
+                api.__name__, sorted(public - set(api.PUBLIC)), sorted(set(api.PUBLIC) - public)
+            )
+        )
+
+
+def test_library_code_uses_only_public_api_names():
+    from freecad.HVAC.library.loss_api import HVACLossAPI
+
+    api_names = {"api", "HVACLibraryAPI", "loss_api", "HVACLossAPI", 'context["hvac_api"]', 'context["loss_api"]'}
+    allowed = set(HVACLibraryAPI.PUBLIC) | set(HVACLossAPI.PUBLIC)
+    offenders = []
+    for path in list(LIBRARIES.rglob("*.py")) + list((ROOT / "freecad" / "HVAC" / "library" / "fittings").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and ast.unparse(node.value) in api_names:
+                if node.attr.startswith("_") or node.attr not in allowed:
+                    offenders.append("{}:{}:{}".format(path.relative_to(ROOT), node.lineno, node.attr))
+    assert not offenders, "Library code uses non-public API names:\n" + "\n".join(offenders)

@@ -1,3 +1,4 @@
+import pytest
 import json
 import sys
 import types
@@ -907,3 +908,14 @@ def test_load_type_def_file_enumeration_without_choices_raises(tmp_path):
         assert "validation.enum" in str(exc)
     else:
         raise AssertionError("Expected an enumeration with no choices to raise")
+
+
+def test_library_written_for_another_api_version_is_refused():
+    from freecad.HVAC.library.library_api import HVACLibraryAPI
+
+    HVACLibraryRegistry._check_required_api("lib", {"requires_api": {"geometry": HVACLibraryAPI.API_VERSION}})
+    HVACLibraryRegistry._check_required_api("lib", {})
+    with pytest.raises(ValueError, match="written for the geometry API version"):
+        HVACLibraryRegistry._check_required_api("lib", {"requires_api": {"geometry": HVACLibraryAPI.API_VERSION - 1}})
+    with pytest.raises(ValueError, match="unknown requires_api"):
+        HVACLibraryRegistry._check_required_api("lib", {"requires_api": {"colour": 1}})

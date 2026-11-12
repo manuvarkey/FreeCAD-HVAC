@@ -45,6 +45,7 @@ reason to diverge.
 {
   "id": "smacna",
   "label": "SMACNA",
+  "requires_api": {"geometry": 3, "loss": 1},
   "generators_package": "freecad.HVAC.libraries.smacna.generators",
   "default_construction": {
     "layers": [{
@@ -60,6 +61,12 @@ reason to diverge.
 - `id`: stable identifier, used in `context["library_id"]` and everywhere a
   type is addressed as `(library_id, type_id)`.
 - `label`: display name.
+- `requires_api` (optional): the `HVACLibraryAPI.API_VERSION` ("geometry")
+  and `HVACLossAPI.API_VERSION` ("loss") the library was written for; a
+  library written for another version is refused with a message saying so.
+  What a library may use is fixed: the names in `HVACLibraryAPI.PUBLIC` /
+  `HVACLossAPI.PUBLIC`, and the context keys in
+  `freecad/HVAC/library/contexts.py` (both checked by tests).
 - `generators_package`: the Python package `import_generator(library_id, module)`
   imports `<generators_package>.<module>` from, for the `"generator"` geometry backend.
 - `default_construction`: optional construction layers inherited by every

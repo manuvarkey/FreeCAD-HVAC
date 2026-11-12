@@ -1044,6 +1044,17 @@ software is alpha. That settles (b) and (c) and simplifies the design:
   next sync of a document, and old stored per-port lists may be reset.
 - (3) No warning aliases: private methods are renamed outright.
 
+**Status, public surface and contexts (3 of 6.4): done 13 November 2026.**
+`HVACLibraryAPI.PUBLIC` / `HVACLossAPI.PUBLIC` list every public name
+(private ones already carried a leading underscore, so nothing was
+renamed); tests fail when a list drifts from its class or when library
+code uses a non-public name. `library/contexts.py` documents the geometry,
+loss and friction context keys; tests check every context core builds and
+every key library code reads against it. `HVACLibraryAPI.API_VERSION` is
+3 (the context and result contract changed); `library.json` may declare
+`requires_api`, and a library written for another version is refused.
+Deviation: API_VERSION stays one integer, not a (major, minor) pair.
+
 **Status, single-form schema (1 of 6.4): done 13 November 2026.**
 - Type-defs: `"geometry"` with a required `backend` (`generator` with
   `module` / `function`, `partscript` with `file`, `static` with

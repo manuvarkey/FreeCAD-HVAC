@@ -1141,6 +1141,25 @@ class HVACLibraryRegistry:
         self._loaded = False
         self.ensure_loaded()
 
+    @staticmethod
+    def _check_required_api(lib_id, manifest):
+        """
+        Refuse a library written for another API version: library.json may
+        say `"requires_api": {"geometry": N, "loss": M}`, the
+        HVACLibraryAPI / HVACLossAPI API_VERSION it was written against.
+        """
+        required = dict(manifest.get("requires_api") or {})
+        running = {"geometry": HVACLibraryAPI.API_VERSION, "loss": HVACLossAPI.API_VERSION}
+        for key, version in required.items():
+            if key not in running:
+                raise ValueError("Library '{}': unknown requires_api key '{}'".format(lib_id, key))
+            if int(version) != int(running[key]):
+                raise ValueError(
+                    "Library '{}' was written for the {} API version {}, this addon provides version {}".format(
+                        lib_id, key, version, running[key]
+                    )
+                )
+
     def load_library_from_folder(self, lib_dir):
         """Load one library from a folder: its library.json manifest, then every type-def under type_roots."""
         manifest_path = os.path.join(lib_dir, "library.json")
@@ -1152,6 +1171,7 @@ class HVACLibraryRegistry:
 
         lib_id = manifest["id"]
         label = manifest.get("label", lib_id)
+        self._check_required_api(lib_id, manifest)
         generators_package = manifest.get("generators_package", "")
         type_roots = manifest.get("type_roots", ["types"])
         default_construction = self._parse_construction_layers(

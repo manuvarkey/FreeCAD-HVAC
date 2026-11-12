@@ -52,8 +52,35 @@ class HVACLibraryAPI(_PortsMixin, _ProfilesMixin, _SolidsMixin, _BooleansMixin, 
     sees HVACLibraryAPI.
     """
 
-    API_VERSION = 2
+    API_VERSION = 3
     EPS = 1.0e-9
+
+    # The public surface library code may use (ROADMAP 6.4, item 3): every
+    # name here, nothing with a leading underscore. tests/
+    # test_library_geometry_api_v2.py fails when this list and the class
+    # disagree, so adding or removing a public method is a deliberate change.
+    PUBLIC = frozenset(
+        {
+            "API_VERSION", "EPS", "PUBLIC", "STANDARD_FITTINGS", "angle_between",
+            "arc_center_from_points_tangents_radius", "arc_wire", "average_point", "boundary",
+            "bridge_boundaries", "build_envelopes", "build_fitting", "build_layered_fitting",
+            "build_layered_geometry", "build_trim_rec_from_context_uniform", "build_trim_rec_from_port_lengths",
+            "center_from_context", "clip_plane", "closest_points_on_lines", "collinear_port_index_pairs",
+            "common", "compound", "connected_ports", "copy_port", "cut", "distance_between_lines",
+            "envelopes_to_layers", "extrude", "fuse", "grow_port_section", "is_zero", "loft",
+            "make_circular_wire", "make_elbow_path", "make_flange", "make_line", "make_oval_wire",
+            "make_profile", "make_profile_frame", "make_radiussed_path", "make_rectangular_wire",
+            "make_section_face", "make_section_face_from_port", "make_section_wire",
+            "make_section_wire_from_port", "make_sphere", "make_split_circular_wire", "measure_fitting",
+            "offset_profile", "offset_transition_axis", "offset_wire", "port_area", "port_diameter",
+            "port_direction", "port_height", "port_param", "port_position", "port_profile",
+            "port_profile_x_axis", "port_roles", "port_section_params", "port_width", "profile_from_port",
+            "profile_projection_bounds", "refine", "resolve_library_file", "reverse", "revolve",
+            "rotate_vector", "run_branch_ports", "section_face", "sew", "shape_from_fcstd", "single_layer",
+            "solidify", "split_profile_face_by_extent", "stretch_profile_one_sided", "sweep", "transform",
+            "trim", "unit", "validate", "vec", "virtual_corner_for_lines", "xyz"
+        }
+    )
 
 
 for _module in (_api_ports, _api_profiles, _api_solids, _api_booleans, _api_recipes):

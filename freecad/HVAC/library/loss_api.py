@@ -53,6 +53,17 @@ class HVACLossAPI:
 
     API_VERSION = 1
 
+    # The public surface (see HVACLibraryAPI.PUBLIC).
+    PUBLIC = frozenset(
+        {
+            "API_VERSION", "APPROXIMATION", "CUSTOM", "EXACT", "FALLBACK", "PUBLIC", "UNSUPPORTED",
+            "branch_loss", "branch_loss_bullhead", "damper_loss", "elbow_loss", "entry_loss", "exit_loss",
+            "fan_connection_loss", "fixed_pressure_drop_loss", "inline_device_loss", "manifold_loss",
+            "obstruction_loss", "offset_loss", "plenum_loss", "screen_loss", "sum_losses",
+            "terminal_component_loss", "transition_loss", "uniform_fallback_loss", "wye_loss"
+        }
+    )
+
     # Aliases so generator code (which only ever sees context["loss_api"],
     # never imports analysis.loss directly) can compare a result's status
     # without a new import path.
