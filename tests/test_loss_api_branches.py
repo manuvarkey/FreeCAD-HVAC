@@ -312,3 +312,60 @@ def test_loss_tee_conical_and_45_entry_force_their_branch_style():
     shoe = _tee(RECT_MAIN, RECT_BRANCH, v=(5.0, 4.0, 6.0))
     shoe["loss_api"] = api
     assert _source(losses.loss_tee_45_entry(shoe)) == "smacna_tee_rect_rect_branch_45_entry"
+
+
+# ----------------------------------------------------------------------------
+# Round branch tables used by the manifold and no-straight-leg breakdowns
+# (moved from the old smacna_loss tests)
+# ----------------------------------------------------------------------------
+
+
+def test_diverging_branch_tee90_exact_grid_point():
+    # Table 14-14 A (90 deg) is keyed by Ab/Ac and the FLOW ratio Qb/Qc.
+    # Ab/Ac = 0.5 with Vb/Vc = 1.0 gives Qb/Qc = 0.5 -> printed C = 1.4.
+    zeta_branch, _ = api._round_branch_zetas(True, angle_deg=90.0, ab_on_ac=0.5, vb_on_vc=1.0, vs_on_vc=0.4)
+    assert zeta_branch == pytest.approx(1.40 / (1.0**2))
+
+
+def test_diverging_branch_lookup_uses_flow_ratio_not_velocity_ratio():
+    # Ab/Ac = 0.5, Vb/Vc = 0.4 -> Qb/Qc = 0.2 -> printed C = 1.0 (not the
+    # 1.2 printed under 0.4, which is what a velocity-ratio lookup would hit).
+    zeta_branch, _ = api._round_branch_zetas(True, angle_deg=90.0, ab_on_ac=0.5, vb_on_vc=0.4, vs_on_vc=0.4)
+    assert zeta_branch == pytest.approx(1.0 / (0.4**2))
+
+
+def test_diverging_branch_tee90_straight_leg_exact_grid_point():
+    # vs_on_vc=0.4 (index4 of [0,0.1,...,1.0]) -> raw zeta_c=0.13
+    _, zeta_straight = api._round_branch_zetas(True, angle_deg=90.0, ab_on_ac=0.5, vb_on_vc=0.5, vs_on_vc=0.4)
+    assert zeta_straight == pytest.approx(0.13 / (0.4**2))
+
+
+def test_diverging_branch_selects_wye_vs_tee_table():
+    wye_branch, _ = api._round_branch_zetas(True, angle_deg=45.0, ab_on_ac=0.5, vb_on_vc=0.5, vs_on_vc=0.4)
+    tee_branch, _ = api._round_branch_zetas(True, angle_deg=90.0, ab_on_ac=0.5, vb_on_vc=0.5, vs_on_vc=0.4)
+    assert wye_branch != tee_branch
+
+
+def test_converging_branch_tee90_exact_grid_point():
+    # Table 14-13 B is keyed by Ab/Ac and the FLOW ratio Qb/Qc.
+    # Ab/Ac = 0.4 with Vb/Vc = 1.0 gives Qb/Qc = 0.4 -> printed branch C = 0.94.
+    zeta_branch, _ = api._round_branch_zetas(False, angle_deg=90.0, ab_on_ac=0.4, vb_on_vc=1.0, vs_on_vc=0.6)
+    assert zeta_branch == pytest.approx(0.94 / (1.0**2))
+
+
+def test_converging_branch_tee90_main_uses_flow_ratio():
+    # Main coefficient is printed against Qb/Qc: 0.4 -> 0.46.
+    _, zeta_straight = api._round_branch_zetas(False, angle_deg=90.0, ab_on_ac=0.4, vb_on_vc=1.0, vs_on_vc=0.5)
+    assert zeta_straight == pytest.approx(0.46 / (0.5**2))
+
+
+def test_converging_branch_wye45_stays_velocity_keyed():
+    # Table 14-13 A really is keyed by Vb/Vc: Ab/Ac = 0.4, Vb/Vc = 0.5 -> -0.21.
+    zeta_branch, _ = api._round_branch_zetas(False, angle_deg=45.0, ab_on_ac=0.4, vb_on_vc=0.5, vs_on_vc=0.5)
+    assert zeta_branch == pytest.approx(-0.21 / (0.5**2))
+
+
+def test_converging_branch_wye_vs_tee_differ():
+    wye_branch, _ = api._round_branch_zetas(False, angle_deg=45.0, ab_on_ac=0.4, vb_on_vc=0.7, vs_on_vc=0.6)
+    tee_branch, _ = api._round_branch_zetas(False, angle_deg=90.0, ab_on_ac=0.4, vb_on_vc=0.7, vs_on_vc=0.6)
+    assert wye_branch != tee_branch

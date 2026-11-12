@@ -22,7 +22,7 @@ themselves -- that's the solver's job.
 
 Elbow/transition/tee losses come from SMACNA/ASHRAE duct fitting tables via
 HVACLossAPI.elbow_loss/transition_loss/branch_loss (see
-library/smacna_loss.py for the table data and its accuracy caveats). A true
+library/loss_tables/ for the table data and the misprints kept as printed). A true
 Wye has no Tee-style common/straight leg, so it uses HVACLossAPI.wye_loss
 instead. Cross and multiport fittings use HVACLossAPI.manifold_loss, which
 breaks the junction into a sequence of the same tee/wye lookups (no

@@ -36,7 +36,6 @@ import math
 
 from ..analysis import physics as airflow
 from ..analysis.loss import LossEvaluation, LossPath, LossStatus
-from . import smacna_loss
 from .fittings import taps as tap_fittings
 from .library_api import HVACLibraryAPI
 from .loss_tables import elbows as elbow_tables
@@ -413,13 +412,13 @@ class HVACLossAPI:
 
             profile = HVACLibraryAPI.port_profile(outlet)
             if profile == "Circular":
-                corner_zeta = smacna_loss.elbow_zeta_round_mitered(theta_deg)
+                corner_zeta = elbow_tables.MITERED_ROUND(theta_deg)
             elif profile == "Rectangular":
                 width = HVACLibraryAPI.port_width(outlet)
                 height = HVACLibraryAPI.port_height(outlet)
                 if width <= 0.0 or height <= 0.0:
                     return HVACLossAPI._unsupported("invalid width/height")
-                corner_zeta = smacna_loss.elbow_zeta_rect_mitered(height / width, theta_deg)
+                corner_zeta = elbow_tables.MITERED_RECT(theta_deg, height / width)
             else:
                 return HVACLossAPI._unsupported("no offset table for profile '{}'".format(profile))
 
@@ -788,14 +787,14 @@ class HVACLossAPI:
         if HVACLibraryAPI.port_profile(branch) == "Circular":
             size = float(HVACLibraryAPI.port_diameter(branch))
             radius = max(float(properties.get("ElbowRadius", 0.0) or 0.0) or size, 0.5 * size)
-            zeta_elbow = smacna_loss.elbow_zeta_round(radius / size)
+            zeta_elbow = elbow_tables.SMOOTH_ROUND(radius / size)
         else:
             width, height = float(HVACLibraryAPI.port_width(branch)), float(HVACLibraryAPI.port_height(branch))
             size = max(width, height)
             radius = max(float(properties.get("ElbowRadius", 0.0) or 0.0) or size, 0.5 * size)
             # With no Reynolds number for the branch, skip the correction (it is 1.0 from Re = 2e5 up).
             reynolds = float(branch.get("reynolds", 0.0) or 0.0) or 1.0e6
-            zeta_elbow = smacna_loss.elbow_zeta_rect(height / width, radius / width, reynolds)
+            zeta_elbow = elbow_tables.smooth_rect(height / width, radius / width, reynolds).value
         paths = [
             HVACLossAPI._leg_path(branch, common["edge_key"], zeta_branch + zeta_elbow, source=source),
             HVACLossAPI._leg_path(straight, common["edge_key"], zeta_straight, source=source),
@@ -803,6 +802,41 @@ class HVACLossAPI:
         return HVACLossAPI._approximation(
             paths, "{}: no table for this face-mounted branch; plain tee loss plus the branch elbow".format(source)
         )
+
+    @staticmethod
+    def _round_branch_zetas(diverging, angle_deg, ab_on_ac, vb_on_vc, vs_on_vc):
+        """
+        (zeta_branch, zeta_straight) from the round branch tables, each
+        referenced to that leg's OWN velocity: diverging 14-14 A (30 to 90
+        deg, interpolated), converging 14-13 A (45 deg wye) up to 67.5 deg
+        and 14-13 B (90 deg tee) above. The angle is the branch's, measured
+        from the common leg (0 = in line, 90 = square).
+
+        The 90 deg converging tee and every diverging branch table are keyed
+        by the branch flow ratio Qb/Qc = (Vb/Vc) * (Ab/Ac); the 45 deg
+        converging wye by the velocity ratio. Used where a fitting is broken
+        down into tee-like steps (a manifold, a leg with no straight-through
+        partner); branch_loss itself goes through _tee_zetas.
+        """
+        qb_on_qc = vb_on_vc * ab_on_ac
+        if diverging:
+            branch, main = diverging_tables.round_tee_or_wye(angle_deg, ab_on_ac, qb_on_qc, vs_on_vc)
+        elif angle_deg <= 67.5:
+            branch, main = converging_tables.wye_45_round(ab_on_ac, vb_on_vc, vs_on_vc)
+        else:
+            branch, main = converging_tables.tee_90_round(ab_on_ac, qb_on_qc)
+        zeta_branch = branch.value / (vb_on_vc**2) if vb_on_vc > 0 else branch.value
+        zeta_straight = main.value / (vs_on_vc**2) if vs_on_vc > 0 else main.value
+        return zeta_branch, zeta_straight
+
+    @staticmethod
+    def _round_branch_zetas_fn(diverging):
+        """_round_branch_zetas with the direction fixed: f(angle, ab_on_ac, vb_on_vc, vs_on_vc)."""
+
+        def zetas(angle_deg, ab_on_ac, vb_on_vc, vs_on_vc):
+            return HVACLossAPI._round_branch_zetas(diverging, angle_deg, ab_on_ac, vb_on_vc, vs_on_vc)
+
+        return zetas
 
     @staticmethod
     def _no_straight_leg_branch_zetas(common, legs, diverging):
@@ -839,7 +873,7 @@ class HVACLossAPI:
             return None
 
         common_dir = HVACLibraryAPI.vec(common["direction"])
-        zeta_fn = smacna_loss.diverging_branch_zetas if diverging else smacna_loss.converging_branch_zetas
+        zeta_fn = HVACLossAPI._round_branch_zetas_fn(diverging)
 
         paths = []
         for leg in legs:
@@ -1061,7 +1095,7 @@ class HVACLossAPI:
             # Every branch angle is measured from the primary (common) leg,
             # as in branch_loss: 0 = in line with it, 90 = square to it.
 
-            zeta_fn = smacna_loss.diverging_branch_zetas if diverging else smacna_loss.converging_branch_zetas
+            zeta_fn = HVACLossAPI._round_branch_zetas_fn(diverging)
             result = {}
             m = len(ordered)
 

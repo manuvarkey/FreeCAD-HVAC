@@ -4,9 +4,9 @@ import pytest
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs (incl. FakeVector)
 from freecad.HVAC.analysis import physics as airflow
-from freecad.HVAC.library import smacna_loss
 from freecad.HVAC.library.library_api import HVACLibraryAPI as geometry_api
 from freecad.HVAC.library.loss_api import HVACLossAPI as api
+from freecad.HVAC.library.loss_tables import elbows, transitions
 
 
 def _port(
@@ -87,7 +87,7 @@ def test_elbow_loss_round():
     }
     result = api.elbow_loss(context)
     assert result.status == api.EXACT
-    assert _paths_by_edge(result) == pytest.approx({"OUT": smacna_loss.elbow_zeta_round(1.0)})
+    assert _paths_by_edge(result) == pytest.approx({"OUT": elbows.SMOOTH_ROUND(1.0)})
     path = _path_for(result, "OUT")
     assert path.from_edge_key == "IN"
     assert path.to_edge_key == "OUT"
@@ -100,7 +100,7 @@ def test_elbow_loss_scales_with_turn_angle():
     context = {"connected_ports": [inlet, outlet], "properties": {"CenterlineRadius": 200.0}}
     result = api.elbow_loss(context)
     assert result.status == api.EXACT
-    expected = smacna_loss.elbow_zeta_round(1.0) * smacna_loss.elbow_angle_factor(45.0)
+    expected = elbows.SMOOTH_ROUND(1.0) * elbows.ANGLE_FACTOR(45.0)
     assert _paths_by_edge(result) == pytest.approx({"OUT": expected})
     assert expected == pytest.approx(0.22 * 0.60)
 
@@ -113,7 +113,7 @@ def test_elbow_loss_rectangular():
         "properties": {"CenterlineRadius": 200.0},  # r_on_w = h_on_w = 1.0
     }
     result = api.elbow_loss(context)
-    expected = smacna_loss.elbow_zeta_rect(h_on_w=1.0, r_on_w=1.0, reynolds=1e6)
+    expected = elbows.smooth_rect(1.0, 1.0, 1e6).value
     assert result.status == api.EXACT
     assert _paths_by_edge(result) == pytest.approx({"OUT": expected})
 
@@ -148,7 +148,7 @@ def test_transition_loss_expansion_round():
     result = api.transition_loss(context)
 
     theta_deg = math.degrees(2.0 * math.atan(100.0 / 500.0))
-    expected = smacna_loss.expansion_zeta_round(theta_deg, 4.0, 3e5)
+    expected = transitions.expansion_round(theta_deg, 4.0, 3e5).value * 4.0**2
 
     assert result.status == api.EXACT
     assert _paths_by_edge(result) == pytest.approx({"OUT": expected})
@@ -186,7 +186,7 @@ def test_transition_loss_contraction_uses_outlet_reference():
     d_eq_in = 2.0 * math.sqrt(area_in / math.pi)
     d_eq_out = 2.0 * math.sqrt(area_out / math.pi)
     theta_deg = math.degrees(2.0 * math.atan(abs(d_eq_out - d_eq_in) / (2.0 * 1.0)))
-    expected = smacna_loss.contraction_zeta(theta_deg, area_ratio)
+    expected = transitions.contraction(theta_deg, area_ratio).value
 
     assert result.status == api.EXACT
     assert _paths_by_edge(result) == pytest.approx({"OUT": expected})
@@ -208,7 +208,9 @@ def test_transition_loss_expansion_rectangular_pyramidal():
     result = api.transition_loss({"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 400.0}})
     theta = math.degrees(2.0 * math.atan(100.0 / 400.0))
     assert result.status == api.EXACT
-    assert _paths_by_edge(result) == pytest.approx({"OUT": smacna_loss.expansion_zeta_rect(theta, 4.0)})
+    assert _paths_by_edge(result) == pytest.approx(
+        {"OUT": transitions.expansion_rect_pyramidal(theta, 4.0).value * 4.0**2}
+    )
     assert _path_for(result, "OUT").source == "smacna_transition_pyramidal"
 
 
@@ -231,7 +233,9 @@ def test_transition_loss_rectangular_angle_is_the_major_one():
     outlet = _port("OUT", (1, 0, 0), False, profile="Rectangular", width=600.0, height=300.0)
     result = api.transition_loss({"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 400.0}})
     theta = math.degrees(2.0 * math.atan(200.0 / 400.0))
-    assert _paths_by_edge(result) == pytest.approx({"OUT": smacna_loss.expansion_zeta_rect(theta, 4.5)})
+    assert _paths_by_edge(result) == pytest.approx(
+        {"OUT": transitions.expansion_rect_pyramidal(theta, 4.5).value * 4.5**2}
+    )
 
 
 def test_transition_loss_round_to_rectangular_expansion_uses_the_14_11c_angle():
@@ -242,7 +246,7 @@ def test_transition_loss_round_to_rectangular_expansion_uses_the_14_11c_angle():
     result = api.transition_loss({"connected_ports": [inlet, outlet], "properties": {"TransitionLength": 400.0}})
     area_ratio = (0.5 * 0.3) / (math.pi * 0.1**2)
     theta = transitions.round_rect_equivalent_angle(200.0, 500.0, 300.0, 400.0)
-    expected = smacna_loss.expansion_zeta_rect(theta, area_ratio)
+    expected = transitions.expansion_rect_pyramidal(theta, area_ratio).value * area_ratio**2
     assert result.status == api.EXACT
     assert _paths_by_edge(result) == pytest.approx({"OUT": expected})
 
@@ -283,7 +287,7 @@ def test_branch_loss_diverging_tee90_identifies_branch_and_straight():
     ab_on_ac = (150.0 / 300.0) ** 2
     vb_on_vc = 3.0 / 5.0
     vs_on_vc = 4.0 / 5.0
-    zeta_branch, zeta_straight = smacna_loss.diverging_branch_zetas(90.0, ab_on_ac, vb_on_vc, vs_on_vc)
+    zeta_branch, zeta_straight = api._round_branch_zetas(True, 90.0, ab_on_ac, vb_on_vc, vs_on_vc)
 
     assert result.status == api.EXACT
     assert _paths_by_edge(result) == pytest.approx({"BRANCH": zeta_branch, "STRAIGHT": zeta_straight})
@@ -313,7 +317,7 @@ def test_branch_loss_converging_wye45():
     vs_on_vc = 4.0 / 5.0
     # The branch enters at 45 deg to the main flow: its leg is 45 deg away
     # from lining up with the common outlet leg, so the 45 deg wye table applies.
-    zeta_branch, zeta_straight = smacna_loss.converging_branch_zetas(45.0, ab_on_ac, vb_on_vc, vs_on_vc)
+    zeta_branch, zeta_straight = api._round_branch_zetas(False, 45.0, ab_on_ac, vb_on_vc, vs_on_vc)
 
     assert result.status == api.EXACT
     assert _paths_by_edge(result) == pytest.approx({"BRANCH": zeta_branch, "STRAIGHT": zeta_straight})
@@ -375,7 +379,7 @@ def test_branch_loss_bullhead_diverging_covers_both_run_legs():
         a_on_ac = (diameter / 300.0) ** 2
         v_on_vc = velocity_ms / 5.0
         # common points -x, leg points +-y -> perpendicular either way.
-        zeta, _ = smacna_loss.diverging_branch_zetas(90.0, a_on_ac, v_on_vc, v_on_vc)
+        zeta, _ = api._round_branch_zetas(True, 90.0, a_on_ac, v_on_vc, v_on_vc)
         return zeta
 
     assert result.status == api.APPROXIMATION
@@ -397,7 +401,7 @@ def test_branch_loss_bullhead_converging_covers_both_run_legs():
     def _expected(velocity_ms, diameter):
         a_on_ac = (diameter / 300.0) ** 2
         v_on_vc = velocity_ms / 5.0
-        zeta, _ = smacna_loss.converging_branch_zetas(90.0, a_on_ac, v_on_vc, v_on_vc)
+        zeta, _ = api._round_branch_zetas(False, 90.0, a_on_ac, v_on_vc, v_on_vc)
         return zeta
 
     assert result.status == api.APPROXIMATION
@@ -465,7 +469,7 @@ def test_wye_loss_diverging_treats_symmetric_legs_symmetrically():
     v_on_vc = 3.0 / 5.0
     dot = (-1.0) * cos30
     angle_deg = 180.0 - math.degrees(math.acos(max(-1.0, min(1.0, dot))))
-    zeta_leg, _ = smacna_loss.diverging_branch_zetas(angle_deg, a_on_ac, v_on_vc, v_on_vc)
+    zeta_leg, _ = api._round_branch_zetas(True, angle_deg, a_on_ac, v_on_vc, v_on_vc)
 
     assert result.status == api.APPROXIMATION
     assert _paths_by_edge(result) == pytest.approx({"LEG_A": zeta_leg, "LEG_B": zeta_leg})
@@ -485,7 +489,7 @@ def test_wye_loss_converging_treats_symmetric_legs_symmetrically():
     v_on_vc = 3.0 / 5.0
     dot = (1.0) * (-cos30)
     angle_deg = 180.0 - math.degrees(math.acos(max(-1.0, min(1.0, dot))))
-    zeta_leg, _ = smacna_loss.converging_branch_zetas(angle_deg, a_on_ac, v_on_vc, v_on_vc)
+    zeta_leg, _ = api._round_branch_zetas(False, angle_deg, a_on_ac, v_on_vc, v_on_vc)
 
     assert result.status == api.APPROXIMATION
     assert _paths_by_edge(result) == pytest.approx({"LEG_A": zeta_leg, "LEG_B": zeta_leg})
