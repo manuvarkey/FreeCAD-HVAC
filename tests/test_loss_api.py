@@ -809,3 +809,81 @@ def test_grow_port_section_does_not_mutate_original_port():
     port = _port("A", (1, 0, 0), False, profile="Circular", diameter=200.0)
     geometry_api.grow_port_section(port, 25.0)
     assert port["section_params"]["Diameter"] == 200.0
+
+
+# ----------------------------------------------------------------------------
+# branch_loss -- face-mounted branch (passes over or under the run)
+# ----------------------------------------------------------------------------
+
+
+def _tee_over_context(branch_height, properties, profile="Circular", diverging=True):
+    """A 90 deg tee whose branch axis is lifted `branch_height` above the run axis."""
+    if profile == "Circular":
+        run, br = dict(diameter=300.0), dict(diameter=200.0)
+    else:
+        run, br = dict(width=400.0, height=300.0), dict(width=200.0, height=200.0)
+    primary = _port("IN", (-1, 0, 0), diverging, profile=profile, velocity_ms=5.0, **run)
+    straight = _port("STRAIGHT", (1, 0, 0), not diverging, profile=profile, velocity_ms=4.0, **run)
+    branch = _port("BRANCH", (0, 1, 0), not diverging, profile=profile, velocity_ms=6.0, reynolds=2e5, **br)
+    primary["position"] = [0.0, 0.0, 0.0]
+    straight["position"] = [0.0, 0.0, 0.0]
+    branch["position"] = [0.0, 0.0, branch_height]
+    if not diverging:
+        # Converging: the two inlets are the straight leg and the branch; "IN" becomes the common outlet.
+        primary["flow_into_junction"] = False
+        straight["flow_into_junction"] = True
+        branch["flow_into_junction"] = True
+    return {"connected_ports": [primary, straight, branch], "properties": properties}
+
+
+def test_face_mounted_round_diverging_tee_uses_the_tee_with_elbow_table():
+    # 14-14 E at Vb/Vc = 6/5 = 1.2 -> 1.86; main (14-14 A) at Vs/Vc = 0.8 -> 0.02.
+    result = api.branch_loss(_tee_over_context(400.0, {"Attachment": "Auto"}))
+    assert result.status == api.EXACT
+    assert _paths_by_edge(result) == pytest.approx({"BRANCH": 1.86 / 1.2**2, "STRAIGHT": 0.02 / 0.8**2})
+    assert _path_for(result, "BRANCH").source == "smacna_branch_face_mounted"
+
+
+def test_side_mounted_tee_is_unchanged_by_the_attachment_property():
+    with_property = api.branch_loss(_tee_over_context(0.0, {"Attachment": "Auto"}))
+    without = api.branch_loss(_tee_over_context(0.0, {}))
+    assert _paths_by_edge(with_property) == pytest.approx(_paths_by_edge(without))
+    assert _path_for(with_property, "BRANCH").source == "smacna_branch_diverging"
+
+
+def test_a_type_without_attachment_is_never_face_mounted():
+    result = api.branch_loss(_tee_over_context(400.0, {}))
+    assert _path_for(result, "BRANCH").source == "smacna_branch_diverging"
+
+
+def test_face_mounted_tee_with_no_table_adds_the_branch_elbow_as_an_approximation():
+    # Converging: no "tee with elbow" table, so plain tee + a round elbow at R/D = 1 (0.22) on the branch.
+    context = _tee_over_context(400.0, {"Attachment": "Auto", "ElbowRadius": 0.0}, diverging=False)
+    plain = api.branch_loss(_tee_over_context(400.0, {}, diverging=False))
+    result = api.branch_loss(context)
+    assert result.status == api.APPROXIMATION
+    assert "no table" in result.warning
+    expected = dict(_paths_by_edge(plain))
+    expected["BRANCH"] += 0.22
+    assert _paths_by_edge(result) == pytest.approx(expected)
+
+
+def test_face_mounted_rectangular_tee_uses_the_rectangular_elbow():
+    # Branch 200 x 200, R defaults to its size: R/W = 1, H/W = 1 -> 0.21 (no Reynolds correction at 2e5).
+    context = _tee_over_context(400.0, {"Attachment": "Auto"}, profile="Rectangular")
+    plain = api.branch_loss(_tee_over_context(400.0, {}, profile="Rectangular"))
+    result = api.branch_loss(context)
+    assert result.status == api.APPROXIMATION
+    assert _paths_by_edge(result)["BRANCH"] == pytest.approx(_paths_by_edge(plain)["BRANCH"] + 0.21)
+
+
+def test_face_mounted_decision_measures_a_rectangular_run_along_the_offset():
+    # Run 400 wide x 300 high, branch lifted along Z. With the run's width
+    # along Z its half-size there is 200, so a 200 x 200 branch at 250 still
+    # crosses the edge (side/plain loss); at 300 it is clear (face-mounted).
+    for height, face in ((250.0, False), (300.0, True)):
+        context = _tee_over_context(height, {"Attachment": "Auto"}, profile="Rectangular")
+        for port in context["connected_ports"][:2]:
+            port["profile_x_axis"] = [0.0, 0.0, 1.0]
+        source = _path_for(api.branch_loss(context), "BRANCH").source
+        assert (source == "smacna_branch_face_mounted") is face

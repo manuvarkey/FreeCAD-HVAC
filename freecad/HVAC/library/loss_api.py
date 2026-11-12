@@ -37,8 +37,10 @@ import math
 from ..analysis import physics as airflow
 from ..analysis.loss import LossEvaluation, LossPath, LossStatus
 from . import smacna_loss
+from .fittings import taps as tap_fittings
 from .library_api import HVACLibraryAPI
 from .loss_tables import entries_exits as entry_exit_tables
+from .loss_tables import junctions_diverging as diverging_tables
 from .loss_tables import obstructions as obstruction_tables
 from .loss_tables import table as loss_table
 
@@ -375,6 +377,13 @@ class HVACLossAPI:
             vb_on_vc = float(branch.get("velocity_ms", 0.0) or 0.0) / v_common
             vs_on_vc = float(straight.get("velocity_ms", 0.0) or 0.0) / v_common
 
+            # A branch that passes over or under the run is face-mounted: it
+            # leaves through a collar and a 90 deg elbow, which has its own loss.
+            if HVACLossAPI._branch_is_face_mounted(context, primary, straight, branch):
+                return HVACLossAPI._face_mounted_branch_loss(
+                    context, primary, straight, branch, diverging, angle_deg, ab_on_ac, vb_on_vc, vs_on_vc
+                )
+
             if diverging:
                 zeta_branch, zeta_straight = smacna_loss.diverging_branch_zetas(angle_deg, ab_on_ac, vb_on_vc, vs_on_vc)
             else:
@@ -391,6 +400,125 @@ class HVACLossAPI:
             )
         except Exception as exc:
             return HVACLossAPI._unsupported("unexpected error computing branch loss: {}".format(exc))
+
+    @staticmethod
+    def _port_half_extent_mm(port, direction):
+        """
+        Half the size of a port's section measured along `direction` (a unit
+        vector across the duct). Exact for round and rectangular sections;
+        an oval is measured as the rectangle around it.
+        """
+        if HVACLibraryAPI.port_profile(port) == "Circular":
+            return float(HVACLibraryAPI.port_diameter(port)) / 2.0
+        width, height = float(HVACLibraryAPI.port_width(port)), float(HVACLibraryAPI.port_height(port))
+        axis = HVACLibraryAPI.unit(HVACLibraryAPI.port_direction(port))
+        # The section's own x axis: the port's stored one, or the same
+        # default rule make_profile_frame() uses when there is none.
+        preferred = HVACLibraryAPI.port_profile_x_axis(port)
+        x_axis = None
+        if preferred is not None:
+            candidate = HVACLibraryAPI.vec(preferred)
+            candidate = candidate - axis * candidate.dot(axis)
+            if candidate.Length > HVACLibraryAPI.EPS:
+                x_axis = HVACLibraryAPI.unit(candidate)
+        if x_axis is None:
+            reference = HVACLibraryAPI.vec((0, 0, 1))
+            if abs(axis.dot(reference)) > 0.99:
+                reference = HVACLibraryAPI.vec((1, 0, 0))
+            x_axis = HVACLibraryAPI.unit(reference.cross(axis))
+        y_axis = HVACLibraryAPI.unit(axis.cross(x_axis))
+        return abs(direction.dot(x_axis)) * width / 2.0 + abs(direction.dot(y_axis)) * height / 2.0
+
+    @staticmethod
+    def _branch_is_face_mounted(context, common, straight, branch):
+        """
+        Whether a tee's branch is face-mounted (passes over or under the
+        run) rather than a side tap: the same decision the geometry makes
+        (fittings/taps.attachment_mode), from the type's own Attachment
+        property and how far the branch axis is from the run axis. Always
+        False for a type with no Attachment property.
+        """
+        properties = context.get("properties") or {}
+        if "Attachment" not in properties:
+            return False
+        try:
+            run_dir = HVACLibraryAPI.unit(HVACLibraryAPI.port_direction(common))
+            branch_dir = HVACLibraryAPI.unit(HVACLibraryAPI.port_direction(branch))
+            q_run, q_branch = HVACLibraryAPI.closest_points_on_lines(
+                HVACLibraryAPI.port_position(common), run_dir, HVACLibraryAPI.port_position(branch), branch_dir
+            )
+            offsets = None
+            if q_run is not None and (q_branch - q_run).Length > 1.0e-6:
+                up = HVACLibraryAPI.unit(q_branch - q_run)
+                offsets = {
+                    "offset": (q_branch - q_run).Length,
+                    "run_half": max(
+                        HVACLossAPI._port_half_extent_mm(common, up), HVACLossAPI._port_half_extent_mm(straight, up)
+                    ),
+                    "branch_half": HVACLossAPI._port_half_extent_mm(branch, up),
+                }
+            return tap_fittings.attachment_mode(str(properties.get("Attachment") or ""), offsets) == "Face"
+        except Exception:
+            # Geometry the fitting itself would refuse to build: leave it to the plain tee loss.
+            return False
+
+    @staticmethod
+    def _face_mounted_branch_loss(
+        context, common, straight, branch, diverging, angle_deg, ab_on_ac, vb_on_vc, vs_on_vc
+    ):
+        """
+        Loss of a tee whose branch is face-mounted (collar plus 90 deg elbow).
+
+        A round diverging tee has its own table for exactly this fitting
+        (SMACNA 14-14 E, "90 deg tee, round, with 90 deg elbow"). Every
+        other case has none, so the plain tee loss is used with the loss of
+        the branch elbow added to the branch leg, as an approximation.
+        """
+        source = "smacna_branch_face_mounted"
+        round_ducts = all(HVACLibraryAPI.port_profile(p) == "Circular" for p in (common, straight, branch))
+
+        if diverging and round_ducts:
+            lookup_branch, lookup_main = diverging_tables.round_variant("tee_90_elbow_90", vb_on_vc, vs_on_vc)
+            # Both are printed against the common duct's velocity; each path is referenced to its own leg's.
+            zeta_branch = lookup_branch.value / (vb_on_vc**2) if vb_on_vc > 0 else lookup_branch.value
+            zeta_straight = lookup_main.value / (vs_on_vc**2) if vs_on_vc > 0 else lookup_main.value
+            paths = [
+                HVACLossAPI._leg_path(branch, common["edge_key"], zeta_branch, source=source),
+                HVACLossAPI._leg_path(straight, common["edge_key"], zeta_straight, source=source),
+            ]
+            reasons = []
+            if not (lookup_branch.exact and lookup_main.exact):
+                reasons.append("outside the printed range of the table")
+            # The table is printed for a run of constant size (Ac = As).
+            a_common, a_straight = HVACLibraryAPI.port_area(common), HVACLibraryAPI.port_area(straight)
+            if a_common > 0.0 and abs(a_straight - a_common) > 0.02 * a_common:
+                reasons.append("the table assumes the run keeps its size through the tee")
+            if reasons:
+                return HVACLossAPI._approximation(paths, "{}: {}".format(source, "; ".join(reasons)))
+            return HVACLossAPI._exact(paths)
+
+        # No table: plain tee, plus the branch elbow at the branch's own velocity.
+        zeta_fn = smacna_loss.diverging_branch_zetas if diverging else smacna_loss.converging_branch_zetas
+        zeta_branch, zeta_straight = zeta_fn(angle_deg, ab_on_ac, vb_on_vc, vs_on_vc)
+        properties = context.get("properties") or {}
+        if HVACLibraryAPI.port_profile(branch) == "Circular":
+            size = float(HVACLibraryAPI.port_diameter(branch))
+            radius = max(float(properties.get("ElbowRadius", 0.0) or 0.0) or size, 0.5 * size)
+            zeta_elbow = smacna_loss.elbow_zeta_round(radius / size)
+        else:
+            width, height = float(HVACLibraryAPI.port_width(branch)), float(HVACLibraryAPI.port_height(branch))
+            size = max(width, height)
+            radius = max(float(properties.get("ElbowRadius", 0.0) or 0.0) or size, 0.5 * size)
+            # With no Reynolds number for the branch, skip the correction (it is 1.0 from Re = 2e5 up).
+            reynolds = float(branch.get("reynolds", 0.0) or 0.0) or 1.0e6
+            zeta_elbow = smacna_loss.elbow_zeta_rect(height / width, radius / width, reynolds)
+        paths = [
+            HVACLossAPI._leg_path(branch, common["edge_key"], zeta_branch + zeta_elbow, source=source),
+            HVACLossAPI._leg_path(straight, common["edge_key"], zeta_straight, source=source),
+        ]
+        return HVACLossAPI._approximation(
+            paths, "{}: no table for this face-mounted branch; plain tee loss plus the branch elbow".format(source)
+        )
 
     @staticmethod
     def _no_straight_leg_branch_zetas(common, legs, diverging):
