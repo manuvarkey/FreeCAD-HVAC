@@ -316,7 +316,8 @@ Property def (`HVACPropertyDef`):
 ```
 
 `prop_type` is any FreeCAD property type string (`App::PropertyLength`,
-`App::PropertyBool`, ...). `group` is the FreeCAD property-editor group; the
+`App::PropertyBool`, ...). An `App::PropertyEnumeration` (a drop-down) takes
+its choices from `validation.enum`, which is then required. `group` is the FreeCAD property-editor group; the
 established groups are `"Dimensions"` (sizes/thicknesses), `"Options"`
 (booleans/toggles like `ShowFlange1`) and `"Parameters"` (values used for
 calculation rather than geometry, like `LossCoefficient` or `NeckSize`).

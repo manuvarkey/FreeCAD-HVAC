@@ -32,6 +32,37 @@ from ..library import validation
 from ..utils import hvaclib
 
 
+def _sync_enumeration_choices(obj, pdef):
+    """
+    Give an enumeration property the choices its type-def declares
+    (`validation.enum`), keeping the current choice when it is still one of
+    them and falling back to the default otherwise. Returns True if the
+    choices had to be (re)set.
+    """
+    choices = [str(choice) for choice in (getattr(pdef, "validation", {}) or {}).get("enum", [])]
+    if not choices:
+        return False
+    try:
+        existing = list(obj.getEnumerationsOfProperty(pdef.name) or [])
+    except Exception:
+        existing = []
+    if existing == choices:
+        return False
+
+    try:
+        previous = str(getattr(obj, pdef.name))
+    except Exception:
+        previous = ""
+    # Assigning a list sets the choices; assigning a string then picks one.
+    setattr(obj, pdef.name, choices)
+    default = str(getattr(pdef, "default", "") or "")
+    for candidate in (previous, default, choices[0]):
+        if candidate in choices:
+            setattr(obj, pdef.name, candidate)
+            break
+    return True
+
+
 def _add_per_port_property(obj, pdef):
     """Add a per-port property's value list and hidden key list to `obj`. Returns True if either was added."""
     added = False
@@ -119,6 +150,11 @@ def apply_type_schema(obj, library_id, type_id, *, protected_names=()):
             obj.addProperty(pdef.prop_type, pdef.name, pdef.group, pdef.description)
             changed = True
             prop_added = True
+
+        if pdef.prop_type == "App::PropertyEnumeration":
+            # A drop-down: its choices are the type-def's own "enum" rule.
+            if _sync_enumeration_choices(obj, pdef):
+                changed = True
 
         try:
             current = getattr(obj, pdef.name)

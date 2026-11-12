@@ -56,6 +56,22 @@
       "group": "Dimensions",
       "description": "Trim length for the tap's own branch duct",
       "default": 80.0
+    },
+    {
+      "name": "Attachment",
+      "prop_type": "App::PropertyEnumeration",
+      "group": "Options",
+      "description": "How the branch joins the run. Side: through the side of the run. Face: the branch passes over or under the run, and joins it with a collar and a 90 degree elbow. Auto picks one from where the branch is drawn",
+      "default": "Auto",
+      "validation": {"enum": ["Auto", "Side", "Face"]}
+    },
+    {
+      "name": "ElbowRadius",
+      "prop_type": "App::PropertyLength",
+      "group": "Dimensions",
+      "description": "Centreline radius of the elbow of a face-mounted branch. 0 uses the branch size",
+      "default": 0.0,
+      "validation": {"minimum": 0.0}
     }
   ],
   "generator": {

@@ -97,6 +97,11 @@ def _node(family, profile, section):
             _port(1, _dir(0), profile, section, position=(0.0, 150.0, 0.0)),
         ]
         return ports, [(0, 1)]
+    if family == "branch.tee over":
+        # A tee whose branch passes over the run: its axis is lifted clear of the run's top face.
+        ports, pairs = _node("branch.tee", profile, section)
+        ports[2]["position"] = [0.0, 0.0, 450.0]
+        return ports, pairs
     if family not in layouts:
         return None, None
     specs, pairs = layouts[family]
@@ -112,6 +117,9 @@ def _families_for(type_def):
         base = ".".join(parts[:2]) if parts[0] != "end" else "end.terminal"
         if base not in seen and not family.endswith(".3d"):
             seen.append(base)
+    # A type with an Attachment property is also tried with the branch passing over the run.
+    if "branch.tee" in seen and any(prop.name == "Attachment" for prop in type_def.properties):
+        seen.append("branch.tee over")
     return seen
 
 
@@ -130,7 +138,7 @@ def _build_one(reg, library_id, type_def, family, profile, section):
         "center_point": (0.0, 0.0, 0.0),
         "connected_ports": ports,
         "analysis": {"collinear_pairs": [{"a": a, "b": b} for a, b in pairs]},
-        "family": family.split(".", 1)[1],
+        "family": family.split(".", 1)[1].split(" ")[0],
         "topology": type_def.topology,
         "type_id": type_def.id,
         "library_id": library_id,

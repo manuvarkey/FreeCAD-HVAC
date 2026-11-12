@@ -24,6 +24,7 @@ from ._common import (
     _trimmed,
 )
 from .stars import _star_body
+from .taps import build_face_tap, face_tap_layout, measure_face_tap
 
 
 def _star_tee_layout(context, run_factor, branch_factor):
@@ -316,26 +317,50 @@ def _radius_tee_center(context, run_factor, branch_factor):
 
 
 def measure_tee_radius_edge(context):
+    # A branch passing over or under the run is face-mounted instead (see taps.face_tap_layout).
+    face = face_tap_layout(context)
+    if face is not None:
+        return measure_face_tap(context, face)
     return measure_radius_tee_edge(context, 0.4, 0.6)
 
 
 def build_tee_radius_edge(context):
+    # A branch passing over or under the run is face-mounted instead (see taps.face_tap_layout).
+    face = face_tap_layout(context)
+    if face is not None:
+        return build_face_tap(context, face)
     return _radius_tee_edge(context, 0.4, 0.6)
 
 
 def measure_tee_radius_center(context):
+    # A branch passing over or under the run is face-mounted instead (see taps.face_tap_layout).
+    face = face_tap_layout(context)
+    if face is not None:
+        return measure_face_tap(context, face)
     return measure_radius_tee_center(context, 0.4, 0.6)
 
 
 def build_tee_radius_center(context):
+    # A branch passing over or under the run is face-mounted instead (see taps.face_tap_layout).
+    face = face_tap_layout(context)
+    if face is not None:
+        return build_face_tap(context, face)
     return _radius_tee_center(context, 0.4, 0.6)
 
 
 def measure_tee_straight(context):
+    # A branch passing over or under the run is face-mounted instead (see taps.face_tap_layout).
+    face = face_tap_layout(context)
+    if face is not None:
+        return measure_face_tap(context, face)
     return measure_star_tee(context, 0.60, 0.60)
 
 
 def build_tee_straight(context):
+    # A branch passing over or under the run is face-mounted instead (see taps.face_tap_layout).
+    face = face_tap_layout(context)
+    if face is not None:
+        return build_face_tap(context, face)
     api = context["hvac_api"]
     run_a, run_b, branch, center, _, trims = _star_tee_layout(context, 0.60, 0.60)
 
@@ -412,6 +437,10 @@ def _tee_mitered_shoe_layout(context):
 
 
 def measure_tee_mitered_shoe(context):
+    # A branch passing over or under the run is face-mounted instead (see taps.face_tap_layout).
+    face = face_tap_layout(context)
+    if face is not None:
+        return measure_face_tap(context, face)
     api = context["hvac_api"]
     layout = _tee_mitered_shoe_layout(context)
 
@@ -425,6 +454,10 @@ def measure_tee_mitered_shoe(context):
 
 
 def build_tee_mitered_shoe(context):
+    # A branch passing over or under the run is face-mounted instead (see taps.face_tap_layout).
+    face = face_tap_layout(context)
+    if face is not None:
+        return build_face_tap(context, face)
     api = context["hvac_api"]
     layout = _tee_mitered_shoe_layout(context)
 

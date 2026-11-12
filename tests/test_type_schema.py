@@ -7,7 +7,6 @@ ever being removed.
 """
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
-
 from freecad.HVAC.core import _type_schema
 from freecad.HVAC.library.Library import HVACPropertyDef
 
@@ -51,21 +50,22 @@ class _FakeRegistry:
 
 def _patch_registry(monkeypatch, registry):
     monkeypatch.setattr(
-        _type_schema.hvaclib.HVACLibraryService,
-        "get_hvac_library_registry",
-        staticmethod(lambda: registry),
+        _type_schema.hvaclib.HVACLibraryService, "get_hvac_library_registry", staticmethod(lambda: registry)
     )
 
 
 def test_apply_type_schema_honors_editor_mode(monkeypatch):
     properties = [
         HVACPropertyDef(
-            name="w_side_1", prop_type="App::PropertyLength", group="Side 1",
-            description="", default=0.0, editor_mode=1,
+            name="w_side_1", prop_type="App::PropertyLength", group="Side 1", description="", default=0.0, editor_mode=1
         ),
         HVACPropertyDef(
-            name="r_axis", prop_type="App::PropertyLength", group="Bend geometry",
-            description="", default=300.0, editor_mode=0,
+            name="r_axis",
+            prop_type="App::PropertyLength",
+            group="Bend geometry",
+            description="",
+            default=300.0,
+            editor_mode=0,
         ),
     ]
     obj = FakeDuctObj()
@@ -82,19 +82,16 @@ def test_apply_type_schema_honors_editor_mode(monkeypatch):
 def test_apply_type_schema_removes_properties_from_a_previous_type(monkeypatch):
     old_properties = [
         HVACPropertyDef(
-            name="r_axis", prop_type="App::PropertyLength", group="Bend geometry",
-            description="", default=300.0,
+            name="r_axis", prop_type="App::PropertyLength", group="Bend geometry", description="", default=300.0
         ),
         HVACPropertyDef(
-            name="flange_height", prop_type="App::PropertyLength", group="Flanges",
-            description="", default=25.0,
+            name="flange_height", prop_type="App::PropertyLength", group="Flanges", description="", default=25.0
         ),
     ]
     new_properties = [
         HVACPropertyDef(
-            name="NeckSize", prop_type="App::PropertyLength", group="Dimensions",
-            description="", default=150.0,
-        ),
+            name="NeckSize", prop_type="App::PropertyLength", group="Dimensions", description="", default=150.0
+        )
     ]
     obj = FakeDuctObj()
     registry = _FakeRegistry(_FakeTypeDef(old_properties))
@@ -117,9 +114,8 @@ def test_apply_type_schema_removes_properties_from_a_previous_type(monkeypatch):
 def test_apply_type_schema_does_not_clobber_user_edited_value(monkeypatch):
     properties = [
         HVACPropertyDef(
-            name="r_axis", prop_type="App::PropertyLength", group="Bend geometry",
-            description="", default=300.0,
-        ),
+            name="r_axis", prop_type="App::PropertyLength", group="Bend geometry", description="", default=300.0
+        )
     ]
     obj = FakeDuctObj()
     _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef(properties)))
@@ -147,20 +143,15 @@ def test_protected_names_are_never_removed_but_editor_mode_still_tracks_relevanc
     obj.Diameter = 200.0
 
     rectangular_properties = [
-        HVACPropertyDef(
-            name="Width", prop_type="App::PropertyLength", group="HVAC",
-            description="", default=100.0,
-        ),
+        HVACPropertyDef(name="Width", prop_type="App::PropertyLength", group="HVAC", description="", default=100.0)
     ]
     registry = _FakeRegistry(_FakeTypeDef(rectangular_properties))
     monkeypatch.setattr(
-        _type_schema.hvaclib.HVACLibraryService,
-        "get_hvac_library_registry",
-        staticmethod(lambda: registry),
+        _type_schema.hvaclib.HVACLibraryService, "get_hvac_library_registry", staticmethod(lambda: registry)
     )
 
     _type_schema.apply_type_schema(
-        obj, "smacna", "rectangular_straight", protected_names=("Diameter", "Width", "Height"),
+        obj, "smacna", "rectangular_straight", protected_names=("Diameter", "Width", "Height")
     )
 
     # Diameter isn't declared by this type -- hidden, but not removed, and
@@ -170,3 +161,80 @@ def test_protected_names_are_never_removed_but_editor_mode_still_tracks_relevanc
     assert obj._editor_modes["Diameter"] == 1
     # Width IS declared -- visible.
     assert obj._editor_modes["Width"] == 0
+
+
+# ----------------------------------------------------------------------------
+# Enumeration properties: choices come from the type-def's validation.enum
+# ----------------------------------------------------------------------------
+
+
+class FakeEnumObj(FakeDuctObj):
+    """Adds FreeCAD's enumeration behaviour: assigning a list sets the choices, a string picks one."""
+
+    def __init__(self):
+        super().__init__()
+        object.__setattr__(self, "_choices", {})
+
+    def __setattr__(self, name, value):
+        if isinstance(value, list) and name in getattr(self, "_enum_names", ()):
+            self._choices[name] = list(value)
+            object.__setattr__(self, name, value[0])
+            return
+        object.__setattr__(self, name, value)
+
+    def addProperty(self, prop_type, name, group, description, attr=0):
+        if prop_type == "App::PropertyEnumeration":
+            object.__setattr__(self, "_enum_names", set(getattr(self, "_enum_names", set())) | {name})
+        return super().addProperty(prop_type, name, group, description, attr)
+
+    def getEnumerationsOfProperty(self, name):
+        return self._choices.get(name, [])
+
+
+def _attachment_def(choices, default="Auto"):
+    return HVACPropertyDef(
+        name="Attachment",
+        prop_type="App::PropertyEnumeration",
+        group="Options",
+        description="",
+        default=default,
+        validation={"enum": choices},
+    )
+
+
+def test_enumeration_gets_its_choices_and_default(monkeypatch):
+    obj = FakeEnumObj()
+    _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([_attachment_def(["Auto", "Side", "Face"])])))
+    assert _type_schema.apply_type_schema(obj, "lib", "type") is True
+    assert obj.getEnumerationsOfProperty("Attachment") == ["Auto", "Side", "Face"]
+    assert obj.Attachment == "Auto"
+
+
+def test_enumeration_keeps_the_users_choice_when_choices_change(monkeypatch):
+    obj = FakeEnumObj()
+    _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([_attachment_def(["Auto", "Side", "Face"])])))
+    _type_schema.apply_type_schema(obj, "lib", "type")
+    obj.Attachment = "Face"
+    _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([_attachment_def(["Auto", "Face"])])))
+    _type_schema.apply_type_schema(obj, "lib", "type")
+    assert obj.getEnumerationsOfProperty("Attachment") == ["Auto", "Face"]
+    assert obj.Attachment == "Face"
+
+
+def test_enumeration_falls_back_to_default_when_the_choice_is_gone(monkeypatch):
+    obj = FakeEnumObj()
+    _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([_attachment_def(["Auto", "Side", "Face"])])))
+    _type_schema.apply_type_schema(obj, "lib", "type")
+    obj.Attachment = "Side"
+    _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([_attachment_def(["Auto", "Face"])])))
+    _type_schema.apply_type_schema(obj, "lib", "type")
+    assert obj.Attachment == "Auto"
+
+
+def test_enumeration_choices_are_not_reset_when_unchanged(monkeypatch):
+    obj = FakeEnumObj()
+    _patch_registry(monkeypatch, _FakeRegistry(_FakeTypeDef([_attachment_def(["Auto", "Side"])])))
+    _type_schema.apply_type_schema(obj, "lib", "type")
+    obj.Attachment = "Side"
+    assert _type_schema.apply_type_schema(obj, "lib", "type") is False
+    assert obj.Attachment == "Side"

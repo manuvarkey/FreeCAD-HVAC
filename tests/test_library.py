@@ -892,3 +892,16 @@ def test_load_type_def_file_known_property_keys_load(tmp_path):
     type_def = HVACLibraryRegistry()._load_type_def_file(str(type_file))
 
     assert type_def.properties[0].validation == {"minimum": 1.0}
+
+
+def test_load_type_def_file_enumeration_without_choices_raises(tmp_path):
+    type_file = tmp_path / "type.json"
+    raw = _junction_type_json()
+    raw["properties"] = [{"name": "Attachment", "prop_type": "App::PropertyEnumeration", "default": "Auto"}]
+    type_file.write_text(json.dumps(raw))
+    try:
+        HVACLibraryRegistry()._load_type_def_file(str(type_file))
+    except ValueError as exc:
+        assert "validation.enum" in str(exc)
+    else:
+        raise AssertionError("Expected an enumeration with no choices to raise")

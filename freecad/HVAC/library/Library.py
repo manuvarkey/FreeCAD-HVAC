@@ -1197,6 +1197,12 @@ class HVACLibraryRegistry:
                     per_port=bool(p.get("per_port", False)),
                 )
             )
+            if props[-1].prop_type == "App::PropertyEnumeration" and not props[-1].validation.get("enum"):
+                raise ValueError(
+                    "Type-def '{}': enumeration property '{}' needs its choices in validation.enum".format(
+                        filepath, props[-1].name
+                    )
+                )
             if props[-1].per_port and props[-1].prop_type not in validation.PER_PORT_LIST_TYPES:
                 raise ValueError(
                     "Type-def '{}': property '{}' is per_port, which is not supported for {} (only {})".format(
