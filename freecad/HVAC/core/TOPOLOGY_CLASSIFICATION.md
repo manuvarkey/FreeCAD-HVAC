@@ -107,8 +107,13 @@ solver.
 - `flow_class`: for a `through.transition`-eligible pair (collinear, degree
   2), one of `expansion`/`contraction`/`constant`/`unknown` (by outlet vs.
   inlet cross-section area); for a degree-3 branch, one of
-  `diverging`/`converging`/`unknown` (by inlet/outlet port count); `unknown`
-  everywhere else (bends, wye, cross, multiport, ...). A degree-2 pair whose
+  `diverging`/`converging`/`unknown` (by inlet/outlet port count); for a
+  cross or multiport node the same `diverging` (one inlet, the rest outlets)
+  / `converging` (one outlet, the rest inlets) / `unknown` (anything else,
+  including several inlets and several outlets at once); for an end node,
+  `entry` (air comes into the duct system there), `exit` (air leaves it) or
+  `unknown`; `unknown` everywhere else (bends, ...). End, cross and
+  multiport nodes get a `flow_class` only, no qualifiers or derived values. A degree-2 pair whose
   two ports don't resolve to exactly one inlet and one outlet (see
   `_resolve_inlet_outlet()`) is also `unknown` -- direction always comes
   from base-segment orientation, never an arbitrary port order, so an

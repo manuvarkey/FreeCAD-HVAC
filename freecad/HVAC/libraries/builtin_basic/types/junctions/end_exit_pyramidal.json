@@ -14,7 +14,13 @@
     "priority": 40
   },
   "constraints": {
-    "degree": 1
+    "degree": 1,
+    "flow_class": {
+      "enum": [
+        "exit",
+        "unknown"
+      ]
+    }
   },
   "properties": [
     {

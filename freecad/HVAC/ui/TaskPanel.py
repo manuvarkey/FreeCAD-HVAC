@@ -775,19 +775,30 @@ class TaskPanelTypeEditor:
                 if not family:
                     family = getattr(parent, "Family", "") if parent is not None else ""
 
+            # The junction's flow classification goes along too, so the list
+            # only offers types that fit how air passes this node: the
+            # transition that matches how the two ducts line up, entries
+            # where air comes in and exits where it leaves, and so on.
             connected_ports = None
+            classification = None
             if parent is not None:
                 try:
                     analysis = json.loads(getattr(parent, "AnalysisJson", "") or "{}")
                 except Exception:
                     analysis = {}
                 connected_ports = list(analysis.get("connected_ports", []) or [])
+                classification = {
+                    "flow_class": analysis.get("flow_class", ""),
+                    "qualifiers": dict(analysis.get("qualifiers", {}) or {}),
+                    "derived_values": dict(analysis.get("derived_values", {}) or {}),
+                }
 
             type_defs = lib.list_types(
                 category="junction",
                 family=family if family else None,
                 connected_ports=connected_ports,
                 include_placeholders=False,
+                classification=classification,
             )
 
         for tdef in type_defs:

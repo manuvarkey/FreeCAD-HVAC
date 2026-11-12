@@ -1580,11 +1580,18 @@ class DuctNetworkParser:
         """
         Return (flow_class, qualifiers, derived_values) for one node.
 
-        Only "through" (degree-2, collinear) and "branch" (degree-3) nodes
-        produce anything beyond the "unknown"/empty defaults today -- see
-        TOPOLOGY_CLASSIFICATION.md.
+        "through" (degree-2, collinear) and "branch" (degree-3) nodes get
+        qualifiers and derived values as well. An "end" node only gets
+        entry/exit, and a "cross"/"multiport" node only diverging/converging
+        -- see TOPOLOGY_CLASSIFICATION.md.
         """
         ports = node_analysis.connected_ports
+
+        if topology == "end" and len(ports) == 1:
+            return self._classify_end_flow(ports[0]), {}, {}
+
+        if topology in ("cross", "multiport"):
+            return self._classify_manifold_flow(ports), {}, {}
 
         if topology == "through" and len(ports) == 2 and len(node_analysis.collinear_pairs) == 1:
             return self._classify_through_flow(ports[0], ports[1])
@@ -1593,6 +1600,38 @@ class DuctNetworkParser:
             return self._classify_branch_flow(ports, node_analysis)
 
         return "unknown", {}, {}
+
+    def _classify_end_flow(self, port):
+        """
+        Which way air passes the open end of a duct: "entry" (air comes into
+        the duct system here, e.g. an intake or a return grille), "exit"
+        (air leaves it here) or "unknown".
+        """
+        role = str(port.flow_role or "unknown")
+        # A port's role is seen from the node: an "inlet" brings air to the
+        # node, and at an open end that air has nowhere to go but out.
+        if role == "inlet":
+            return "exit"
+        if role == "outlet":
+            return "entry"
+        return "unknown"
+
+    def _classify_manifold_flow(self, ports):
+        """
+        "diverging" (one inlet, the rest outlets), "converging" (one outlet,
+        the rest inlets) or "unknown" (anything else, including several
+        inlets and several outlets at once) for a node of four or more ports.
+        """
+        roles = [str(p.flow_role or "unknown") for p in ports]
+        n_in = roles.count("inlet")
+        n_out = roles.count("outlet")
+        if n_in + n_out != len(ports):
+            return "unknown"
+        if n_in == 1 and n_out >= 2:
+            return "diverging"
+        if n_out == 1 and n_in >= 2:
+            return "converging"
+        return "unknown"
 
     def _resolve_inlet_outlet(self, port_a, port_b):
         """

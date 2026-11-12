@@ -621,3 +621,42 @@ def test_geom_tol_scales_with_characteristic_size():
     size = 1000.0
     rel_tol = 1e-3
     assert parser._geom_tol(size, rel_tol=rel_tol) == pytest.approx(size * rel_tol)
+
+
+# ----------------------------------------------------------------------------
+# classify_flow (end, degree 1): entry / exit
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("flow_role, expected", [("outlet", "entry"), ("inlet", "exit"), ("unknown", "unknown")])
+def test_end_flow_class_follows_the_way_air_passes_the_open_end(flow_role, expected):
+    # A port that brings air to an open end ("inlet", seen from the node) is where air leaves the system.
+    parser = _parser()
+    port = _port("Circular", d=200.0, flow_role=flow_role)
+    assert parser._classify_end_flow(port) == expected
+    flow_class, qualifiers, derived = parser.classify_flow(_NodeAnalysis([port]), "end")
+    assert (flow_class, qualifiers, derived) == (expected, {}, {})
+
+
+# ----------------------------------------------------------------------------
+# classify_flow (cross / multiport): diverging / converging
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "roles, expected",
+    [
+        (["inlet", "outlet", "outlet", "outlet"], "diverging"),
+        (["inlet", "inlet", "inlet", "outlet"], "converging"),
+        (["inlet", "inlet", "outlet", "outlet"], "unknown"),
+        (["inlet", "outlet", "outlet", "unknown"], "unknown"),
+        (["inlet", "outlet", "outlet", "outlet", "outlet"], "diverging"),
+        (["outlet", "inlet", "inlet", "inlet", "inlet", "inlet"], "converging"),
+    ],
+)
+def test_manifold_flow_class_counts_inlets_and_outlets(roles, expected):
+    parser = _parser()
+    ports = [_port("Circular", d=200.0, flow_role=role, edge_key="E{}".format(i)) for i, role in enumerate(roles)]
+    assert parser._classify_manifold_flow(ports) == expected
+    topology = "cross" if len(ports) == 4 else "multiport"
+    assert parser.classify_flow(_NodeAnalysis(ports), topology) == (expected, {}, {})

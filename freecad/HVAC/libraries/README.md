@@ -196,6 +196,22 @@ automatic-selection lookup, and this extra data (like actual per-port
 profile compatibility) only filters candidates *after* that lookup, exactly
 like the existing `degree`/topology checks.
 
+The manual Change Type list applies the same constraints: it passes the
+node's own `flow_class`/`qualifiers`/`derived_values` to `list_types()`, so
+it only offers types that fit how air passes that node. Use this to keep a
+type out of the list where it does not belong:
+
+- a transition for one way the two ducts line up:
+  `"qualifiers": {"alignment": {"enum": ["eccentric", "double_eccentric"]}}`;
+- an end fitting for one direction of flow:
+  `"flow_class": {"enum": ["entry", "unknown"]}` (or `"exit"`);
+- a branch, cross or multiport fitting for one direction of flow:
+  `"flow_class": {"enum": ["diverging", "unknown"]}` (or `"converging"`).
+
+List `"unknown"` as well unless the type should disappear whenever the flow
+direction is not known: the classifier reports `"unknown"` as a value of
+its own, so a constraint that leaves it out does not match it.
+
 Every `qualifiers.<key>` and every other top-level key (an implied
 `derived_values` entry) is checked against a fixed, known vocabulary at
 load time -- see `validation.KNOWN_QUALIFIER_KEYS`/

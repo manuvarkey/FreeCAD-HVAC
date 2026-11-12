@@ -314,7 +314,14 @@ class HVACLibrary:
         return child == parent or child.startswith(parent + ".")
 
     def list_types(
-        self, category=None, topology=None, family=None, profile=None, connected_ports=None, include_placeholders=True
+        self,
+        category=None,
+        topology=None,
+        family=None,
+        profile=None,
+        connected_ports=None,
+        include_placeholders=True,
+        classification=None,
     ):
         """Types matching the given filters, best-suited first.
 
@@ -336,9 +343,21 @@ class HVACLibrary:
         either. `profile` alone (no `connected_ports`) still works exactly
         as before, for callers with only one real profile to filter by
         (segments, or a homogeneous-profile junction).
+
+        `classification` (only used together with `connected_ports`) is the
+        node's own flow classification: a dict with any of "flow_class",
+        "qualifiers" and "derived_values". With it, a type whose constraints
+        rule out this node's flow (an entry fitting where air leaves, an
+        eccentric transition between concentric ducts, ...) is left out,
+        exactly as automatic selection would leave it out. A value the
+        classifier could not work out never rules a type out.
         """
         use_ports = connected_ports is not None
         ctx = {"connected_ports": list(connected_ports or []), "topology": topology or ""} if use_ports else None
+        if use_ports and classification:
+            ctx["flow_class"] = classification.get("flow_class") or None
+            ctx["qualifiers"] = dict(classification.get("qualifiers") or {})
+            ctx["derived_values"] = dict(classification.get("derived_values") or {})
 
         out = []
         for t in self.types_by_id.values():

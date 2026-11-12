@@ -9,6 +9,8 @@ freecad/HVAC/library/Library.py and freecad/HVAC/libraries/README.md.
 import json
 import os
 
+import pytest
+
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/PySide stubs
 from freecad.HVAC.library.Library import (
     HVACLibrary,
@@ -1365,3 +1367,98 @@ def test_bundled_reclassifying_dampers_to_inline_does_not_disturb_other_selectio
     # (a real section change), so a plain equal-size straight run falls to
     # the broad through_generic catch-all model instead.
     assert selection.type_def.id == "through_generic"
+
+
+# ----------------------------------------------------------------------
+# list_types() filtered by the node's flow classification (the manual
+# Change Type list)
+# ----------------------------------------------------------------------
+
+
+def _listed(topology, family, ports, classification=None):
+    lib = _load_bundled_registry().get_library("builtin_basic")
+    type_defs = lib.list_types(
+        category="junction",
+        family=family,
+        connected_ports=ports,
+        include_placeholders=False,
+        classification=classification,
+    )
+    return {t.id for t in type_defs if t.topology == topology}
+
+
+_TRANSITIONS = {"through_transition_concentric", "through_transition_eccentric", "through_transition_offset"}
+
+
+@pytest.mark.parametrize(
+    "alignment, expected",
+    [
+        ("concentric", "through_transition_concentric"),
+        ("eccentric", "through_transition_eccentric"),
+        ("double_eccentric", "through_transition_eccentric"),
+        ("offset", "through_transition_offset"),
+        ("unknown", "through_transition_concentric"),
+    ],
+)
+def test_list_types_offers_only_the_transition_that_fits_the_alignment(alignment, expected):
+    classification = {"flow_class": "expansion", "qualifiers": {"alignment": alignment}}
+    listed = _listed("through", "through.transition", _ports(2, "Rectangular"), classification)
+    assert listed & _TRANSITIONS == {expected}
+
+
+def test_list_types_offers_every_transition_when_the_alignment_was_not_worked_out():
+    # No flow direction on the base geometry: the classifier gives no qualifiers at all.
+    classification = {"flow_class": "unknown", "qualifiers": {}}
+    assert _TRANSITIONS <= _listed("through", "through.transition", _ports(2, "Rectangular"), classification)
+    assert _TRANSITIONS <= _listed("through", "through.transition", _ports(2, "Rectangular"))
+
+
+_ENTRIES = {"end_entry_plain", "end_entry_bellmouth", "end_entry_conical", "end_hood_intake", "end_hood_tapered"}
+_EXITS = {"end_exit_plain", "end_exit_conical", "end_hood_exhaust"}
+_EITHER_WAY = {"end_diffuser_generic", "end_diffuser_square", "end_grille_generic", "end_ahu_generic"}
+
+
+def test_list_types_offers_entries_only_where_air_comes_in():
+    listed = _listed("end", "end.terminal", _ports(1), {"flow_class": "entry"})
+    assert _ENTRIES <= listed
+    assert not (_EXITS & listed)
+    assert _EITHER_WAY <= listed
+
+
+def test_list_types_offers_exits_only_where_air_leaves():
+    listed = _listed("end", "end.terminal", _ports(1), {"flow_class": "exit"})
+    assert _EXITS <= listed
+    assert not (_ENTRIES & listed)
+    assert _EITHER_WAY <= listed
+
+
+def test_list_types_offers_entries_and_exits_when_the_direction_is_unknown():
+    assert _ENTRIES | _EXITS <= _listed("end", "end.terminal", _ports(1), {"flow_class": "unknown"})
+    assert _ENTRIES | _EXITS <= _listed("end", "end.terminal", _ports(1))
+
+
+def test_list_types_honours_a_diverging_or_converging_constraint():
+    def _one_way(type_id, flow_class):
+        return HVACTypeDef(
+            id=type_id,
+            label=type_id,
+            category="junction",
+            topology="branch",
+            family=["branch.tee"],
+            profiles=["Circular"],
+            constraints={"degree": 3, "flow_class": {"enum": [flow_class]}},
+        )
+
+    lib = HVACLibrary(id="t", label="t", root_path="")
+    lib.add_type(_one_way("diverging_only", "diverging"))
+    lib.add_type(_one_way("converging_only", "converging"))
+
+    def listed(flow_class):
+        classification = {"flow_class": flow_class}
+        found = lib.list_types(category="junction", connected_ports=_ports(3), classification=classification)
+        return {t.id for t in found}
+
+    assert listed("diverging") == {"diverging_only"}
+    assert listed("converging") == {"converging_only"}
+    # A flow class the classifier reports as "unknown" is a real value, so neither type claims it.
+    assert listed("unknown") == set()
