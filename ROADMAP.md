@@ -60,8 +60,10 @@ parameter limit: 20 builds).
 
 ## 0a. Start here (handover)
 
-**Next task:** Stage 9 (result tooltips, layer visibility). Stage 7 (c)
-and (d) wait for a naming review by the owner, (g) needs a design first.
+**Next task:** Stage 9 (result tooltips, layer visibility). Designs for
+Stage 5 item 2, Stage 7 (g) and Stage 10 are in section 6 and wait for the
+owner's review before any code. Stage 7 (c) and (d) wait for a naming
+review.
 
 **Branch:** all roadmap work is on `roadmap-stage-0`. Work done in a
 worktree is committed there and `roadmap-stage-0` is then fast-forwarded to
@@ -697,3 +699,137 @@ Answers received (12 November 2026): **10 to 13 accepted as recommended.**
 Stage 0, then Stage 1 and Stage 2 in parallel, then 3, 4, 5, 6, 7.
 Stages 8 and 9 fit anywhere after Stage 0. Stage 10 after 3. Stage 11
 last, with its gap list updated as each stage closes.
+
+## 6. Designs for the "design first" items
+
+Written 12 November 2026. **All three await the owner's review; none is
+implemented.** Each design ends with the questions it raises.
+
+### 6.1 Fitting-derived values (Stage 5 item 2)
+
+**Problem.** Some values a loss table needs come from the fitting the user
+chose, not from the network: a transition's included angle depends on
+`TransitionLength`; a radiussed offset's real radius can be smaller than
+`OffsetRadius` (it is capped to what fits). Today the loss code recomputes
+these with its own copy of the geometry's defaults, and the user never
+sees them.
+
+**Design.**
+
+1. One pure helper per fitting kind computes these values from the ports
+   and the resolved properties, with no shapes involved. Example:
+   `fittings/transitions.py: transition_dimensions(api, ports, params)`
+   returns `{"body_length", "included_angle", ...}`. The generator and the
+   loss function both call it, so the two can never disagree.
+2. The generator reports them as `computed_properties` in its result (the
+   mechanism exists: `geometry_result.computed_properties`, applied by
+   `_geometry_apply.apply_computed_properties`). The type-def declares them
+   as ordinary properties with `"editor_mode": 1` (read-only) in a group
+   named `Derived`. Names: `IncludedAngle`, `BodyLength` (transitions);
+   `OffsetAngle`, `BodyLength`, `ActualRadius` (offsets).
+3. The loss never reads these properties back. They are written at
+   recompute time and go stale when a duct moves until the next recompute;
+   the loss calls the helper instead. They are for display and reports.
+4. Vocabulary: `derived_values` stays the classifier's (network-only
+   facts, used for matching). The new values are "fitting-derived" and
+   only exist on the object, after a build. `TOPOLOGY_CLASSIFICATION.md`
+   gets one paragraph on the difference.
+
+**Owner input:** review only; no open question.
+
+### 6.2 Flanges as construction features (Stage 7 g)
+
+**Problem.** The shared finisher (`fittings/_common._add_flanges`) fuses
+flange collars into the structural layer. A flange is then not a thing of
+its own: it cannot be hidden, counted or given its own material, and it
+makes the layer's wall-volume check meaningless. The `smacna` segments and
+the PartScript elbow already use the other route, a
+`construction.features` entry with its own generator, which stores each
+feature as a separate shape (`Feature_<id>_Shape`).
+
+**Design (the feature contract).**
+
+1. `FeatureContext` gains `result`: the backend's normalized
+   `GeometryResult` (layers and `connection_lengths`), so a feature
+   generator can find a fitting's real end faces. Nothing else changes in
+   the contract; features still return one shape or None.
+2. A shared feature module, `library/fittings/features.py`
+   (`"module": "shared:features"`), with `transverse_flange(api, ctx)`:
+   - end faces: each connected port pushed out by its own connection
+     length; a segment, which has no connected ports, uses its start and
+     end points;
+   - the collar sits on the outer face of the host layer: the port section
+     grown by the thickness of every layer up to and including the host;
+   - per-port switch: `ShowFlange<Role>` (role from `api.port_roles`,
+     CamelCase, e.g. `ShowFlangeBranch`), then `ShowFlange<N>`, then
+     `ShowFlange`, as `_flange_enabled` does today, per-port lists
+     included.
+3. `_finish` no longer adds flanges. `_add_flanges` is deleted.
+   `_fuse_into_structure` stays for parts that really are one piece with
+   the wall (an obstruction rod).
+4. Every type-def that declares `FlangeThickness` gets the feature entry
+   (host layer: its structural layer). `smacna/generators/features.py`'s
+   own `generate_transverse_flange` is replaced by the shared one, so there
+   is one flange builder. A test fails when a type declares
+   `FlangeThickness` without a flange feature.
+5. Visibility: the feature's `visible_parameter` (`FlangeVisible` where a
+   type has it), and later Stage 9's network-wide `ShowFeatures`.
+
+**Owner input:** review only; no open question. Implementation needs a smoke run.
+
+### 6.3 Custom geometry per fitting (Stage 10)
+
+**Problem.** Decision 4: the user selects a FreeCAD object and defines
+ports on it to describe a fitting, with any number of ports.
+
+**Design.**
+
+1. **Where it lives.** `GeometrySource` (`Library`, `Custom`) on
+   `DuctComponent`, like `LossCoefficientSource`. `Custom` adds
+   `CustomShapeSource` (`App::PropertyLink` to any object with a
+   `Shape`), and per-port lists: `CustomPortPosition`,
+   `CustomPortDirection` (outward), `CustomPortProfile`,
+   `CustomPortSize` (diameter, or width and height), all in the source
+   object's local coordinates.
+2. **Defining ports.** A task panel: pick a planar face of the source and
+   it fills one port (centre of the face, its outward normal, and a
+   profile and size read from the face's outer wire: a circle gives a
+   diameter; a rectangle width and height; anything else falls back to
+   the area-equivalent circle, with a warning). Ports can be added,
+   edited and removed by hand too.
+3. **Placement.** The network decides where a node is, so the custom
+   shape is moved onto the node: the rigid transform that best maps the
+   custom ports onto the node's connected ports. Mapping is by direction
+   (each custom port to the connected port whose outward direction is
+   closest), with a manual override list `CustomPortEdgeKeys`. The
+   transform: Kabsch fit of port positions and directions, as
+   `static_shapes._build_transform` does for two ports, generalised to n.
+   A port more than a tolerance away from its duct after the fit is an
+   error on the component that says which port and by how much.
+4. **Trims.** Each duct is trimmed to its custom port's face: the trim is
+   the distance along the duct axis from the node to the placed port
+   plane. These become the result's `connection_lengths`, so segments
+   trim exactly as they do for library fittings.
+5. **Walls and layers.** The source is taken as the outside of the
+   fitting and goes into the structural layer as it is. Option
+   `CustomShapeIsAirSpace`: the source is the air space, and the
+   finisher's `envelope(offset)` is
+   `source.makeOffsetShape(offset)`, so the type's construction layers are
+   built around it like any shared fitting (this can fail for awkward
+   shapes; the error says so).
+6. **Loss.** The node's library type still provides the loss (its
+   topology and family do not change). A custom fitting that matches no
+   table uses `LossCoefficientSource = Custom` (per-port K, exists).
+7. **Port count.** Any number of ports, through the Stage 3 per-port
+   mechanism; the node's degree must equal the custom port count.
+8. **Save as library type** (later): write the placed shape as BREP plus a
+   static descriptor into a user library, ports from the definition.
+
+**Owner input needed:**
+- (a) Is moving the custom shape onto the node (3) right, or should the
+  shape stay where the user drew it and the ducts follow it?
+- (b) Is the source the outside of the fitting by default, with
+  "air space" as the option (5), or the other way round?
+- (c) Junctions only, or segments too (a custom straight piece)?
+
+Until answered, Stage 10 is not started.
