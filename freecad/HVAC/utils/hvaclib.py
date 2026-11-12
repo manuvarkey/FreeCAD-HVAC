@@ -488,18 +488,26 @@ def get_obj_by_name(name, doc=None):
     return obj
     
 def makeLineKey(obj_name, source_index):
-    """Make a unique line key from an object name and source index."""
+    """
+    The stable key of one base-geometry edge, the same before and after a
+    save and reload (ROADMAP 6.4 a):
+
+    - a sketch edge: "<sketch Name>:g<geometry id>". The sketch's own
+      geometry id is saved with the document and stays with its geometry
+      when other geometry is deleted and the indices shift; new geometry
+      gets a new id. (A geometry Tag would not do: tags are regenerated on
+      every reload.)
+    - any other edge (a Draft wire, a Part shape): "<object Name>:e<index>".
+      Its points are saved, so the index only changes when the shape does.
+    """
     source_index = int(source_index)
-    obj = FreeCAD.ActiveDocument.getObject(obj_name)
-    if (obj and len(getattr(obj, "Geometry", [])) > source_index and \
-                hasattr(obj.Geometry[source_index], "Tag") and 
-                obj.Geometry[source_index].Tag):
-        if isSketch(obj):
-            return obj.Geometry[source_index].Tag
-        elif isWire(obj):
-            return "{}_{}".format(getattr(obj, "Name", ""), 
-                                getattr(obj.Geometry[source_index], "Tag", ""))
-    return '{}_{}'.format(obj_name, source_index)
+    obj = FreeCAD.ActiveDocument.getObject(obj_name) if FreeCAD.ActiveDocument else None
+    if obj is not None and isSketch(obj) and hasattr(obj, "getGeometryId"):
+        try:
+            return "{}:g{}".format(obj_name, int(obj.getGeometryId(source_index)))
+        except Exception:
+            pass
+    return "{}:e{}".format(obj_name, source_index)
 
 
 #------------------------------------------------------------------------------

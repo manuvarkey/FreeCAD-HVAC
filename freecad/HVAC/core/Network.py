@@ -29,7 +29,7 @@ from dataclasses import asdict
 
 import FreeCAD
 
-from ..core import _construction_schema, _custom_loss, _port_properties
+from ..core import _construction_schema
 from ..core.Component import DuctComponent
 from ..core.Junction import DuctJunction, DuctJunctionVirtual
 from ..core.NetworkParser import DuctNetworkParser
@@ -101,7 +101,6 @@ class DuctNetwork:
         self._sync_scheduled = False
         self._sync_suspended = False
         self._hidden_source_names = set()
-        self._edge_key_remap = {}
         self._parser = None
         self.setProperties(obj)
 
@@ -123,7 +122,6 @@ class DuctNetwork:
         self._sync_scheduled = False
         self._sync_suspended = False
         self._hidden_source_names = set()
-        self._edge_key_remap = {}
         self._parser = None
         self.setProperties(obj)
         self.requestSync(initial_sync=True)
@@ -1213,12 +1211,6 @@ class DuctNetwork:
         trim_map = self.collectSegmentTrimMap()
         live_objs = set()
 
-        if initial_sync:
-            # Reset once per initial-sync pass (this method also runs a
-            # second time per pass with initial_sync=False, in Stage 3 --
-            # that call must not wipe what Stage 1 just recorded).
-            self._edge_key_remap = {}
-
         for edge_ref in parser.edges():
             key = edge_ref.tag
 
@@ -1226,28 +1218,9 @@ class DuctNetwork:
             if source_obj is None:
                 continue
 
-            # If initial sync, the tags are regenerated hence find element based on SourceObjectName and SourceIndex
-            # Also update the existing segment's key in the dictionary with the modified key (Object.Tag)
-            if initial_sync:
-                segment_obj = None
-                matched_old_key = None
-                for old_key, seg in existing_segments.items():
-                    if seg.SourceObjectName == source_obj.Name and seg.SourceIndex == edge_ref.local_index:
-                        segment_obj = seg
-                        matched_old_key = old_key
-                        break
-
-                if matched_old_key is not None and matched_old_key != key:
-                    existing_segments.pop(matched_old_key, None)
-                    existing_segments[key] = segment_obj
-                    # Record old_key -> key so syncJunctionComponents can
-                    # carry forward any DuctComponent.AttachedEdgeKey that
-                    # was snapshotted under the old (pre-reload) tag --
-                    # see that method for why this is needed.
-                    self._edge_key_remap[matched_old_key] = key
-            # Else find element based on key
-            else:
-                segment_obj = existing_segments.get(key)
+            # Edge keys are stable across a reload (hvaclib.makeLineKey), so an
+            # existing segment is always found by its key.
+            segment_obj = existing_segments.get(key)
 
             # If segment does not exist, create a new one
             if segment_obj is None:
@@ -1551,20 +1524,9 @@ class DuctNetwork:
         drops Inline components on its own -- each edge's chain is
         independent of the junction's overall topology.
 
-        Before that check, AttachedEdgeKey is carried forward through
-        self._edge_key_remap (built by syncSegments(initial_sync=True),
-        which always runs first in a sync pass -- see _runDeferredSync):
-        base-geometry Tags regenerate on every document reload, so without
-        this an Inline component's AttachedEdgeKey (snapshotted under the
-        old tag) would never match the new tag and would be wrongly
-        dropped on the very first sync after every file reopen.
-
-        The Primary and every Inline component's own CustomLossCoefficientEdgeKeys
-        (LossCoefficientSource == "Custom" storage -- see core/_custom_loss.py)
-        gets the exact same old-tag -> new-tag carry forward, for the same
-        reason: without it, a reload would make every stored custom K look
-        unmatched and get silently reset to 0.0 by Component.py's own
-        _syncCustomLossCoefficients.
+        Edge keys are stable across a document reload (hvaclib.makeLineKey),
+        so AttachedEdgeKey, CustomLossCoefficientEdgeKeys, CustomPortEdgeKeys
+        and the per-port property key lists stay valid as stored.
         """
         net = self.Object
         doc = net.Document
@@ -1593,53 +1555,6 @@ class DuctNetwork:
 
         real_edge_keys = {p.get("edge_key") for p in connected_ports}
         inline_components = [c for c in existing_components if getattr(c, "ComponentRole", "") == "Inline"]
-
-        # A document reload regenerates every base-geometry Tag, so a real
-        # edge_key an Inline component was attached to under the old tag
-        # would otherwise never match again -- carry AttachedEdgeKey
-        # forward through the same old-tag -> new-tag map syncSegments just
-        # built (Stage 1 always runs before this), exactly like SegmentKey
-        # itself gets carried forward.
-        edge_key_remap = getattr(self, "_edge_key_remap", None) or {}
-        for comp in inline_components:
-            old_key = getattr(comp, "AttachedEdgeKey", "")
-            new_key = edge_key_remap.get(old_key)
-            if new_key is not None and new_key != old_key:
-                comp.AttachedEdgeKey = new_key
-                changed = True
-
-        # CustomLossCoefficientEdgeKeys is persisted by edge_key too, so it
-        # needs the exact same old-tag -> new-tag carry forward as
-        # AttachedEdgeKey above -- otherwise Component.py's own
-        # _syncCustomLossCoefficients would see every stored key as
-        # "unmatched" on the very first sync after a document reload and
-        # silently reset every custom K back to 0.0. Applies to both the
-        # Primary (if it already exists) and every Inline component.
-        for comp in ([primary] if primary is not None else []) + inline_components:
-            if "CustomLossCoefficientEdgeKeys" not in comp.PropertiesList:
-                continue
-            stored_keys = list(getattr(comp, "CustomLossCoefficientEdgeKeys", None) or [])
-            new_keys, keys_changed = _custom_loss.remap_persisted_edge_keys(stored_keys, edge_key_remap)
-            if keys_changed:
-                comp.CustomLossCoefficientEdgeKeys = new_keys
-                changed = True
-
-        # A custom fitting's manual port overrides (6.3) are edge keys too.
-        if primary is not None and "CustomPortEdgeKeys" in primary.PropertiesList:
-            stored_keys = list(getattr(primary, "CustomPortEdgeKeys", None) or [])
-            new_keys, keys_changed = _custom_loss.remap_persisted_edge_keys(stored_keys, edge_key_remap)
-            if keys_changed:
-                primary.CustomPortEdgeKeys = new_keys
-                changed = True
-
-        # Per-port type properties (a plenum's own trim per port, ...) are
-        # stored by edge_key as well, so they need the same carry forward.
-        if edge_key_remap:
-            reg = hvaclib.HVACLibraryService.get_hvac_library_registry()
-            for comp in ([primary] if primary is not None else []) + inline_components:
-                type_def = reg.resolve_type(getattr(comp, "LibraryId", ""), getattr(comp, "TypeId", ""))
-                if type_def is not None and _port_properties.remap_port_property_keys(comp, type_def, edge_key_remap):
-                    changed = True
 
         keep, drop = [], []
         for comp in inline_components:

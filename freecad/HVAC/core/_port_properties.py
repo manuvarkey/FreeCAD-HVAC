@@ -9,8 +9,9 @@ can have any number of ports (a plenum, a manifold, an AHU).
 On the object such a property is two lists: the values themselves, and a
 hidden companion (`<Name>EdgeKeys`) naming the port each value belongs to.
 Matching is always by edge_key, never by position. This module keeps the
-two lists in step with the object's current ports and carries the keys
-across a document reload, when every edge_key is regenerated.
+two lists in step with the object's current ports. Edge keys are stable
+across a document reload (hvaclib.makeLineKey), so the stored keys stay
+valid as they are.
 """
 
 from ..library import validation
@@ -44,29 +45,6 @@ def sync_port_property_lists(obj, type_def, edge_keys):
         setattr(obj, pdef.name, [stored.get(key, default) for key in edge_keys])
         setattr(obj, keys_name, list(edge_keys))
         changed = True
-    return changed
-
-
-def remap_port_property_keys(obj, type_def, edge_key_remap):
-    """
-    Translate the stored edge keys of every per-port property through
-    `edge_key_remap` (old key -> new key). Needed once after a document
-    reload, when base geometry gets new tags and with them new edge keys;
-    without it every stored value would look like it belongs to a port
-    that no longer exists. Returns True if anything changed.
-    """
-    if not edge_key_remap:
-        return False
-    changed = False
-    for pdef in per_port_property_defs(type_def):
-        keys_name = validation.per_port_keys_name(pdef.name)
-        if keys_name not in obj.PropertiesList:
-            continue
-        keys = list(getattr(obj, keys_name, None) or [])
-        new_keys = [edge_key_remap.get(key, key) for key in keys]
-        if new_keys != keys:
-            setattr(obj, keys_name, new_keys)
-            changed = True
     return changed
 
 

@@ -1072,6 +1072,14 @@ really replaced (deleted and redrawn, or a wire point inserted), which is
 the honest answer. Node keys are built from edge keys and become stable
 with them. Cheaper than A (no id store) and sturdier than B.
 
+**Owner answer (13 November 2026): C approved. Done.** `hvaclib.makeLineKey`
+returns `<sketch>:g<geometry id>` / `<object>:e<index>`; the reload re-match
+in `syncSegments`, `_edge_key_remap`, `remap_persisted_edge_keys` and
+`remap_port_property_keys` are deleted (no backward compatibility: a
+document saved before this gets fresh segments and components on its first
+sync). Checked in FreeCAD: keys unchanged after deleting other geometry
+and after a save and reload. `tests/test_edge_keys.py`.
+
 ### 6.5 Terminal function and multi-node equipment (Stage 11, before the freeze)
 
 Written 13 November 2026 at the owner's request ((d) of 6.4: design both
@@ -1138,7 +1146,13 @@ sides cannot both be modelled.
 5. Data model: `NodeModel.equipment_port` (equipment name, port name);
    results gain an `EquipmentResult` per equipment.
 
-**Owner input needed:**
+**Owner answers (13 November 2026):** (e) separate networks per system,
+joined by equipment; (f) terminal function defaults from the system
+(`Auto`), settable per terminal; (g) equipment geometry only as user models
+with port markers (the custom-model route exists for corner cases the
+library cannot model; no equipment library types).
+
+**Questions as asked:**
 - (e) One system per network (supply and return as separate networks
   joined by equipment), or one network spanning both through the AHU?
   Recommended: separate networks. One network through the AHU would

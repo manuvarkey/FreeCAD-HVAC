@@ -29,12 +29,8 @@ analysis/loss.py's LossPath/LossEvaluation). Kept separate from
 _analysis_adapter.py (which stays a thin "read the real FreeCAD object"
 layer) per the repo's own "small, cohesive modules" convention.
 
-Also owns remap_persisted_edge_keys(), the shared old-key -> new-key
-translation core/Network.py applies to CustomLossCoefficientEdgeKeys on
-every sync -- the same carry-forward mechanism already used for
-DuctComponent.AttachedEdgeKey, extended here to custom-K storage so it
-survives a document reload instead of being silently reset to 0.0 by this
-module's own "fail clearly on a real mismatch" validation below.
+Stored edge keys stay valid across a document reload (edge keys are
+stable: see hvaclib.makeLineKey), so no carry-forward is needed.
 """
 
 import json
@@ -169,14 +165,3 @@ def build_custom_loss_evaluator(comp_obj):
         return LossEvaluation(paths=list(paths), status=LossStatus.CUSTOM)
 
     return evaluate
-
-
-def remap_persisted_edge_keys(stored_keys, edge_key_remap):
-    """
-    old-key -> new-key translation for a list of persisted edge_key
-    references (mirrors how AttachedEdgeKey/SegmentKey are already carried
-    forward across a document reload -- see core/Network.py's own
-    _edge_key_remap). Returns (new_keys, changed).
-    """
-    new_keys = [edge_key_remap.get(k, k) for k in stored_keys]
-    return new_keys, new_keys != list(stored_keys)

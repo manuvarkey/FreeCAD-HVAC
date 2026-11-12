@@ -187,22 +187,6 @@ def test_sync_works_for_five_or_more_ports():
     assert len(obj.TrimLength) == 7
 
 
-def test_remap_carries_stored_values_across_new_edge_keys():
-    obj = _obj_with([110.0, 120.0], ["old-A", "old-B"])
-    type_def = _type_def(_trim_def())
-    assert _port_properties.remap_port_property_keys(obj, type_def, {"old-A": "new-A"}) is True
-    assert obj.TrimLengthEdgeKeys == ["new-A", "old-B"]
-    # The value still belongs to the same physical port.
-    _port_properties.sync_port_property_lists(obj, type_def, ["new-A"])
-    assert obj.TrimLength == [110.0]
-    assert _port_properties.remap_port_property_keys(obj, type_def, {}) is False
-
-
-# ----------------------------------------------------------------------------
-# Schema: the two lists on the FreeCAD object
-# ----------------------------------------------------------------------------
-
-
 def _apply(monkeypatch, obj, *properties):
     registry = SimpleNamespace(resolve_type=lambda lib_id, type_id: _type_def(*properties))
     monkeypatch.setattr(
