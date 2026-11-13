@@ -129,9 +129,17 @@ asked, done the same day:
    outside view updates, since one set inside `updateData` left the old
    mesh on screen.
 
-**Next task:** the owner's GUI check of corrections 1 to 9 (the panels and
-the billboard labels were only driven from a script), the steps for the
-locked spreadsheets, then tag the freeze (Stage 11). Known open defects: the radius wye fails on
+**For review (owner, 13 November 2026): corrections 3 and 7 need updating.**
+- Correction 3, result labels facing the viewer (`Observer.buildFlowRateLabelCoinNode`,
+  `SoVRMLBillboard`): the current implementation is not what the owner wants; revisit.
+- Correction 7, the equipment and custom fitting panels (`TaskPanel.TaskPanelPortContainer`,
+  `PortOffsetDialog`, commands `HVAC_CreateEquipment` / `HVAC_CreateCustomFitting` /
+  `HVAC_AddCustomPort`): the current implementation needs updating; revisit with the owner.
+Ask the owner what to change in each before starting; both were only driven from a script.
+
+**Next task:** the review of corrections 3 and 7 above; the owner's GUI
+check of the other corrections; the steps for the locked spreadsheets
+(correction 5); then tag the freeze (Stage 11). Known open defects: the radius wye fails on
 hollow round and rectangular ducts (and hangs in OpenCascade with the SMACNA
 wall, so it is not in `smacna`); plenum defaults reject ducts crossing a
 box corner.
