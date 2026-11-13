@@ -2397,7 +2397,7 @@ def selected_planar_faces():
     """
     [(body, face_name), ...] for every face picked in the 3D view, with the
     selection resolved through any App::Part / link to the body that owns
-    the face. Used by "Add HVAC Port" and the port panel.
+    the face. Used by the port panel (TaskPanelPortContainer).
     """
     faces = []
     for sel in Gui.Selection.getSelectionEx("", 0) or []:
@@ -2412,42 +2412,6 @@ def selected_planar_faces():
                 body = resolved if resolved is not None else owner
             faces.append((body, face_name))
     return faces
-
-
-class PortOffsetDialog(QtWidgets.QDialog):
-    """
-    Asked before a port is made: where on the face the port goes, as an X/Y
-    offset from the centre of the opening (X along the opening's width, Y
-    across it, both in the face plane), and an optional name.
-    """
-
-    def __init__(self, face_text, parent=None):
-        super().__init__(parent or Gui.getMainWindow())
-        self.setWindowTitle(translate("HVAC_AddCustomPort", "Add HVAC Port"))
-        layout = QtWidgets.QFormLayout(self)
-        layout.addRow(QtWidgets.QLabel(face_text))
-        self.offset_x = _length_spin_box()
-        self.offset_y = _length_spin_box()
-        self.name = QtWidgets.QLineEdit()
-        layout.addRow(translate("HVAC_AddCustomPort", "Offset X from face centre:"), self.offset_x)
-        layout.addRow(translate("HVAC_AddCustomPort", "Offset Y from face centre:"), self.offset_y)
-        layout.addRow(translate("HVAC_AddCustomPort", "Name (optional):"), self.name)
-        hint = QtWidgets.QLabel(
-            translate(
-                "HVAC_AddCustomPort",
-                "X runs along the width of the opening, Y across it, both in the plane of the face. "
-                "0, 0 puts the port on the centre of the opening.",
-            )
-        )
-        hint.setWordWrap(True)
-        layout.addRow(hint)
-        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addRow(buttons)
-
-    def values(self):
-        return self.offset_x.value(), self.offset_y.value(), self.name.text().strip()
 
 
 def _length_spin_box(value=0.0):
@@ -2472,8 +2436,14 @@ class TaskPanelPortContainer:
     - "Add port" makes a port on the face picked in the 3D view, at the
       given X/Y offset from the centre of the opening; for equipment, of
       the kind picked in the tree or in the Function list.
-    - Equipment: its internal pressure drop. Custom fitting: use it at a
-      junction (that junction's fitting then takes this geometry).
+    - Equipment: its internal pressure drop. Custom fitting: optionally
+      put it on an existing junction (that junction's fitting then takes
+      this geometry, moved onto the node).
+
+    Ducts drawn to end on the ports attach without any further step: an
+    equipment port is connected to its duct end, and the ends on a custom
+    fitting's ports become one junction using the fitting where it is
+    (DuctNetwork.autoAttach).
     """
 
     def __init__(self, container, kind="equipment"):
@@ -2559,15 +2529,25 @@ class TaskPanelPortContainer:
             hint = QtWidgets.QLabel(
                 translate(
                     "HVAC_PortContainer",
-                    "Then select a port marker and a duct end and use Connect to Equipment.",
+                    "Draw the duct base geometry so a duct ends on a port: the network connects it to the port "
+                    "automatically.",
                 )
             )
             hint.setWordWrap(True)
             options_form.addRow(hint)
             layout.addWidget(options)
         else:
-            options = QtWidgets.QGroupBox(translate("HVAC_PortContainer", "Use at a junction"))
+            options = QtWidgets.QGroupBox(translate("HVAC_PortContainer", "Use in a network"))
             options_form = QtWidgets.QFormLayout(options)
+            hint = QtWidgets.QLabel(
+                translate(
+                    "HVAC_PortContainer",
+                    "Draw the duct base geometry so the ducts end on the ports: their ends become one junction "
+                    "that uses this fitting where it is. Or move it onto an existing junction:",
+                )
+            )
+            hint.setWordWrap(True)
+            options_form.addRow(hint)
             self.junction_combo = QtWidgets.QComboBox()
             options_form.addRow(translate("HVAC_PortContainer", "Junction:"), self.junction_combo)
             self.use_button = QtWidgets.QPushButton(translate("HVAC_PortContainer", "Use This Fitting There"))
@@ -2787,6 +2767,8 @@ class TaskPanelPortContainer:
         self.doc.openTransaction("Use Custom Fitting")
         try:
             primary.CustomFitting = self.container
+            if "CustomPlacement" in primary.PropertiesList:
+                primary.CustomPlacement = self._custom_fitting.PLACEMENT_FIT
             primary.GeometrySource = "Custom"
         finally:
             self.doc.commitTransaction()

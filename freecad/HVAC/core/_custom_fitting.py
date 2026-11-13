@@ -15,23 +15,79 @@ same kind of App::Part, are an HVAC equipment's ports (core/Equipment.py),
 so every helper here works on either container.
 
 A Primary `DuctComponent` with `GeometrySource = Custom` and
-`CustomFitting` set to that container owns an `App::Link` to it. Every
-execute fits the container onto the node (library/custom_fitting.py), moves
-the link there, and reports each duct's trim as the distance from the node
-to its port, so the ducts end exactly at the port faces.
+`CustomFitting` set to that container takes its geometry from it, in one of
+two ways (`CustomPlacement`):
+
+- "Fit to node": the component owns an `App::Link` to the container. Every
+  execute fits the container onto the node (library/custom_fitting.py),
+  moves the link there, and reports each duct's trim as the distance from
+  the node to its port, so the ducts end exactly at the port faces.
+- "In place": the container stays where it was modelled and is itself the
+  geometry (no link). The ducts were drawn to end on its ports, so each
+  trim is only the distance from a duct's end to its port (normally 0).
+
+A container made with make_custom_fitting() is attached "In place"
+automatically when a network's ducts end on its ports (core/_auto_attach.py,
+DuctNetwork.autoAttach): the ends on one container become one junction.
 """
 
 import json
 
-import Part
-
 import FreeCAD
+import Part
 
 from ..library import custom_fitting as fit_math
 from ..library.library_api import HVACLibraryAPI
 
 PORT_GROUP = "HVAC Port"
 PORT_PROFILES = ["Circular", "Rectangular", "Oval"]
+CUSTOM_FITTING_TYPE = "HVACCustomFitting"
+PLACEMENT_FIT = "Fit to node"
+PLACEMENT_IN_PLACE = "In place"
+PLACEMENTS = [PLACEMENT_FIT, PLACEMENT_IN_PLACE]
+
+
+# ----------------------------------------------------------------------------
+# Custom fitting containers
+# ----------------------------------------------------------------------------
+
+
+def make_custom_fitting(part):
+    """
+    Mark an App::Part as a custom fitting, so ducts drawn to its ports
+    attach to it automatically. Safe to call again. Returns the part.
+    """
+    if "CustomFittingType" not in part.PropertiesList:
+        part.addProperty("App::PropertyString", "CustomFittingType", "HVAC", "Internal: marks an HVAC custom fitting")
+        try:
+            part.setEditorMode("CustomFittingType", 2)
+        except Exception:
+            pass
+    if part.CustomFittingType != CUSTOM_FITTING_TYPE:
+        part.CustomFittingType = CUSTOM_FITTING_TYPE
+    return part
+
+
+def is_custom_fitting(obj):
+    return getattr(obj, "CustomFittingType", "") == CUSTOM_FITTING_TYPE
+
+
+def attach_in_place(comp_obj, container):
+    """
+    Give a junction's Primary component `container`'s geometry, in place
+    (the automatic attachment of ducts drawn to its ports). Done once per
+    container: a later change the user makes to the component is kept.
+    Returns True when something changed.
+    """
+    if comp_obj is None or "GeometrySource" not in comp_obj.PropertiesList:
+        return False
+    if getattr(comp_obj, "AutoAttachedTo", "") == container.Name:
+        return False
+    comp_obj.AutoAttachedTo = container.Name
+    comp_obj.CustomFitting = container
+    comp_obj.CustomPlacement = PLACEMENT_IN_PLACE
+    comp_obj.GeometrySource = "Custom"
+    return True
 
 
 # ----------------------------------------------------------------------------
@@ -125,9 +181,9 @@ def _section(lcs):
     return profile, {"Width": float(lcs.PortWidth), "Height": float(lcs.PortHeight)}
 
 
-def read_ports(container):
-    """The container's ports as fit_math.CustomPort, in the container's own coordinates."""
-    to_local = container.getGlobalPlacement().inverse()
+def read_ports(container, world=False):
+    """The container's ports as fit_math.CustomPort, in the container's own coordinates (or world ones)."""
+    to_local = FreeCAD.Placement() if world else container.getGlobalPlacement().inverse()
     ports = []
     for lcs in container_ports(container):
         placement = to_local.multiply(lcs.getGlobalPlacement())
@@ -261,6 +317,10 @@ def is_custom(comp_obj):
     return str(getattr(comp_obj, "GeometrySource", "Library") or "Library") == "Custom"
 
 
+def is_in_place(comp_obj):
+    return str(getattr(comp_obj, "CustomPlacement", PLACEMENT_FIT) or PLACEMENT_FIT) == PLACEMENT_IN_PLACE
+
+
 def _duct_ends(local_ports):
     ends = []
     for port in local_ports:
@@ -272,6 +332,7 @@ def _duct_ends(local_ports):
                 x=tuple(HVACLibraryAPI.xyz(HVACLibraryAPI.vec(x_axis))) if x_axis is not None else None,
                 profile=str(port.get("profile", "") or ""),
                 section=dict(port.get("section_params", {}) or {}),
+                position=tuple(HVACLibraryAPI.xyz(HVACLibraryAPI.vec(port["position"]))),
             )
         )
     return ends
@@ -288,9 +349,14 @@ def fit_component(comp_obj, local_ports):
     container = getattr(comp_obj, "CustomFitting", None)
     if container is None:
         raise ValueError("GeometrySource is Custom but CustomFitting is not set")
-    ports = read_ports(container)
     if not local_ports:
         raise ValueError("The component has no ports yet")
+    # In place, the container stays put: compare its ports with the duct ends in world coordinates.
+    if is_in_place(comp_obj):
+        ports = read_ports(container, world=True)
+        result = fit_math.fit_in_place(ports, _duct_ends(local_ports), _overrides(comp_obj, ports))
+        return container, ports, result
+    ports = read_ports(container)
     node = HVACLibraryAPI.xyz(HVACLibraryAPI.vec(local_ports[0]["position"]))
     result = fit_math.fit(ports, _duct_ends(local_ports), node, _overrides(comp_obj, ports))
     return container, ports, result
@@ -360,15 +426,19 @@ def remove_link(comp_obj):
 
 def apply(comp_obj, local_ports):
     """
-    Fit, move the link, and write the component's ConnectionLengthsJson,
+    Fit, move the link (none in place: the container itself is the
+    geometry), and write the component's ConnectionLengthsJson,
     CustomPortMapJson and CustomFitWarnings. Returns the FitResult; raises
     on a fit problem (the caller reports it as GeometryError).
     """
     container, ports, result = fit_component(comp_obj, local_ports)
-    link = ensure_link(comp_obj, container)
-    placement = placement_of(result)
-    if not link.Placement.isSame(placement, 1e-9):
-        link.Placement = placement
+    if is_in_place(comp_obj):
+        remove_link(comp_obj)
+    else:
+        link = ensure_link(comp_obj, container)
+        placement = placement_of(result)
+        if not link.Placement.isSame(placement, 1e-9):
+            link.Placement = placement
 
     lengths_json = json.dumps(trim_records(local_ports, result))
     if getattr(comp_obj, "ConnectionLengthsJson", "") != lengths_json:

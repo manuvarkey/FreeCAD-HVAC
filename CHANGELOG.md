@@ -28,7 +28,13 @@ API versions: geometry 3, loss 1, PartScript 3.
 - Networks have a `SystemType`; terminals a `TerminalFunction`.
 - HVAC equipment joins networks: an App::Part (the modelled unit) made equipment, its port markers inside it.
 - Custom fittings: a user-modelled fitting linked at a node, ducts trimmed to its port markers.
-- Equipment and custom fittings are set up in one panel (ports by kind, X/Y offset from a face's centre).
+- Equipment and custom fittings are set up in one panel (ports by kind, X/Y offset from a face's centre);
+  the separate "Add HVAC Port" command is gone.
+- Ducts drawn to end on equipment or custom fitting ports attach automatically: an equipment port is connected
+  to its duct end, and the ends on a custom fitting become one junction using the fitting where it is modelled
+  (`CustomPlacement` "In place").
+- Result labels lie flat on their planes again; they flip or turn a quarter turn only when seen from behind or
+  below.
 - Sizing changes duct size only at straight-through junctions by default (`SizeChangePolicy`
   `AtStraightJunctions`, `AtInlineNodesOnly`, `EverySegment`); pluggable friction models.
 - Automatic fitting selection prefers mitered and straight types; bend radii clamp to half the duct plus the wall.

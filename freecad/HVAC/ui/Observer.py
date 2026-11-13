@@ -898,6 +898,7 @@ class TerminalFlowRateObserver:
         self._arrows = []  # [(SoSeparator, junction_obj), ...] -- pickable
         self._planes = []  # [(SoSeparator, junction_obj), ...] -- pickable
         self._labels = []  # [SoSeparator, ...] -- decorative only
+        self._label_orienter = LabelOrienter()
         self._attached = False
 
     def start(self):
@@ -912,6 +913,7 @@ class TerminalFlowRateObserver:
         self._root.addChild(self._event_callback_node)
         vobj.RootNode.addChild(self._root)
         self._attached = True
+        self._label_orienter.start()
         self.refresh()
 
     def stop(self):
@@ -927,6 +929,7 @@ class TerminalFlowRateObserver:
         self._arrows = []
         self._planes = []
         self._labels = []
+        self._label_orienter.stop()
         self._attached = False
 
     def setVisible(self, visible):
@@ -959,6 +962,7 @@ class TerminalFlowRateObserver:
         self._arrows = []
         self._planes = []
         self._labels = []
+        self._label_orienter.clear()
 
         for junction in self._terminalJunctions():
             self._buildOverlayForJunction(junction)
@@ -1024,7 +1028,9 @@ class TerminalFlowRateObserver:
             label_text = "Closed"
         else:
             label_text = "Auto"
-        label_node = buildFlowRateLabelCoinNode(plane_port, label_text, self.COLOR_TEXT)
+        label_node = buildFlowRateLabelCoinNode(
+            plane_port, label_text, self.COLOR_TEXT, orienter=self._label_orienter
+        )
         if label_node is not None:
             self._root.addChild(label_node)
             self._labels.append(label_node)
@@ -1315,6 +1321,7 @@ class AirflowResultObserver:
         self._root = None
         self._legend_root = None
         self._appearance_snapshot = {}  # {obj_name: [App.Material, ...] or None}
+        self._label_orienter = LabelOrienter()
 
         self.junction_enabled = False
         self.junction_color_by = self.JUNCTION_COLOR_FIELDS[0]
@@ -1340,12 +1347,14 @@ class AirflowResultObserver:
             return
         self._root = coin.SoSeparator()
         vobj.RootNode.addChild(self._root)
+        self._label_orienter.start()
         self._attachHover(vobj)
         self._attachLegend()
         self.refresh()
 
     def stop(self):
         self._detachHover()
+        self._label_orienter.stop()
         self._restoreAppearance()
         if self._root is not None:
             try:
@@ -1385,6 +1394,7 @@ class AirflowResultObserver:
             return
         self._root.removeAllChildren()
         self._hover_targets = []
+        self._label_orienter.clear()
 
         active = self.junction_enabled or self.segment_enabled
         if active:
@@ -1595,7 +1605,7 @@ class AirflowResultObserver:
         # clear for the arrow above -- text starts at row 1.
         flow_label = buildFlowRateLabelCoinNode(
             display_port, "{:.1f} L/s".format(port_flow_lps), self.COLOR_TEXT,
-            row_index=1, top_extend=self.JUNCTION_TOP_EXTEND,
+            row_index=1, top_extend=self.JUNCTION_TOP_EXTEND, orienter=self._label_orienter,
         )
         if flow_label is not None:
             self._root.addChild(flow_label)
@@ -1606,7 +1616,7 @@ class AirflowResultObserver:
         port_static_pressure_pa = self._junctionPortStaticPressure(port, junc_res, port_row_by_edge)
         pressure_label = buildFlowRateLabelCoinNode(
             display_port, "{:.1f} Pa".format(port_static_pressure_pa), self.COLOR_TEXT,
-            row_index=2, top_extend=self.JUNCTION_TOP_EXTEND,
+            row_index=2, top_extend=self.JUNCTION_TOP_EXTEND, orienter=self._label_orienter,
         )
         if pressure_label is not None:
             self._root.addChild(pressure_label)
@@ -1749,21 +1759,21 @@ class AirflowResultObserver:
 
             velocity_label = buildFlowRateLabelCoinNode(
                 top_face_port, "{:.2f} m/s".format(seg_res.velocity_ms), self.COLOR_TEXT,
-                row_index=0, scale=1.0,
+                row_index=0, scale=1.0, orienter=self._label_orienter,
             )
             if velocity_label is not None:
                 self._root.addChild(velocity_label)
 
             friction_label = buildFlowRateLabelCoinNode(
                 top_face_port, "{:.1f} Pa".format(seg_res.friction_loss_pa), self.COLOR_TEXT,
-                row_index=1, scale=1.0,
+                row_index=1, scale=1.0, orienter=self._label_orienter,
             )
             if friction_label is not None:
                 self._root.addChild(friction_label)
 
             loss_label = buildFlowRateLabelCoinNode(
                 top_face_port, "{:.1f} Pa".format(seg_res.total_loss_pa), self.COLOR_TEXT,
-                row_index=2, scale=1.0,
+                row_index=2, scale=1.0, orienter=self._label_orienter,
             )
             if loss_label is not None:
                 self._root.addChild(loss_label)
@@ -2278,19 +2288,145 @@ def buildSegmentOverlayCoinNode(position, direction, profile_x_axis, width, heig
 # long strings from visibly overflowing the plane.
 MONOSPACE_CHAR_WIDTH_RATIO = 0.6
 
-def buildFlowRateLabelCoinNode(port, text, color, row_index=0, scale=2.0, top_extend=0.0):
+def _labelVariantAxes(x_dir, y_dir, variant):
     """
-    Build one Coin node: a world-space text label at the port's own
-    highlight plane (see buildPortHighlightCoinNode -- same port dict, same
-    scale/top_extend, so the two line up exactly), sized to 15% of that
-    plane's own height (shrunk further if needed so it can't overflow past
-    the plane's own edges) and anchored just inside its top-right corner,
-    as seen by a viewer facing the terminal. The text itself always turns
-    to face the camera, upright on screen (SoVRMLBillboard), so it stays
-    readable from any view direction. Used by
+    The text axes (tx, ty) of one of a flat label's 8 orientations in its
+    plane: variant // 4 picks the side it reads from (0 front, 1 back, i.e.
+    mirrored so it reads right from behind), variant % 4 the number of
+    quarter turns about the plane normal. Variant 0 is the original layout.
+    """
+    tx = FreeCAD.Vector(x_dir) * (-1.0 if variant // 4 else 1.0)
+    ty = FreeCAD.Vector(y_dir)
+    for _turn in range(variant % 4):
+        # A quarter turn (counter-clockwise seen from the reading side): x -> y, y -> -x.
+        tx, ty = ty, tx * -1.0
+    return tx, ty
+
+
+def chooseLabelVariant(x_dir, y_dir, view_dir, view_up, current=0, hold=0.3):
+    """
+    Which of a flat label's 8 orientations (see _labelVariantAxes) to show
+    for a camera looking along `view_dir` with `view_up` up on screen.
+
+    The label stays as originally laid out unless the camera sees it from
+    behind (then it flips in its plane, so it is not mirrored) or the text
+    would read upside down or sideways (then it turns by quarter turns, e.g.
+    when the camera looks from below). `current` is the variant shown now;
+    another quarter turn only wins when its up is better by more than
+    `hold`, so labels don't flicker near 45 degrees.
+    """
+    normal = FreeCAD.Vector(x_dir).cross(FreeCAD.Vector(y_dir))
+    # SoText3 reads from the side its local +Z points to, i.e. a camera looking along -normal.
+    back = 1 if FreeCAD.Vector(view_dir).dot(normal) > 0.0 else 0
+    up = FreeCAD.Vector(view_up)
+    scores = [_labelVariantAxes(x_dir, y_dir, back * 4 + turn)[1].dot(up) for turn in range(4)]
+    best = max(range(4), key=lambda turn: scores[turn])
+    # Keep the turn already shown (or the original one after a flip) unless another is clearly better.
+    keep = current % 4 if current // 4 == back else 0
+    turn = best if scores[best] > scores[keep] + hold else keep
+    return back * 4 + turn
+
+
+class LabelOrienter:
+    """
+    Keeps the flat result labels readable as the camera moves. Each label
+    is built with all 8 of its orientations under one SoSwitch
+    (buildFlowRateLabelCoinNode); this watches the active 3D view's camera
+    and sets every switch to chooseLabelVariant()'s pick. One per overlay
+    observer: start() with the overlay, clear() before rebuilding its
+    labels, stop() with it.
+    """
+
+    def __init__(self):
+        self._labels = []  # [(SoSwitch, x_dir, y_dir), ...]
+        self._camera = None
+        self._sensor = None
+
+    def start(self):
+        self._attach()
+
+    def stop(self):
+        self._detach()
+        self._labels = []
+
+    def clear(self):
+        self._labels = []
+
+    def add(self, switch, x_dir, y_dir):
+        self._labels.append((switch, FreeCAD.Vector(x_dir), FreeCAD.Vector(y_dir)))
+        view = self._viewAxes()
+        if view is not None:
+            switch.whichChild = chooseLabelVariant(x_dir, y_dir, view[0], view[1], current=0)
+
+    @staticmethod
+    def _activeCamera():
+        try:
+            view = Gui.ActiveDocument.ActiveView
+            return view.getCameraNode()
+        except Exception:
+            return None
+
+    def _attach(self):
+        self._detach()
+        camera = self._activeCamera()
+        if camera is None:
+            return
+        self._camera = camera
+        self._sensor = coin.SoFieldSensor(self._onCameraMoved, None)
+        self._sensor.attach(camera.orientation)
+
+    def _detach(self):
+        if self._sensor is not None:
+            try:
+                self._sensor.detach()
+            except Exception:
+                pass
+        self._sensor = None
+        self._camera = None
+
+    def _viewAxes(self):
+        """(view direction, up direction) of the watched camera, or None."""
+        camera = self._camera
+        if camera is None:
+            return None
+        rotation = camera.orientation.getValue()
+        view_dir = rotation.multVec(coin.SbVec3f(0.0, 0.0, -1.0))
+        up = rotation.multVec(coin.SbVec3f(0.0, 1.0, 0.0))
+        return FreeCAD.Vector(*view_dir.getValue()), FreeCAD.Vector(*up.getValue())
+
+    def _onCameraMoved(self, *_args):
+        # Switching between perspective and orthographic replaces the camera
+        # node; follow the new one so the labels keep turning.
+        camera = self._activeCamera()
+        if camera is not None and camera is not self._camera:
+            self._attach()
+        view = self._viewAxes()
+        if view is None:
+            return
+        for switch, x_dir, y_dir in self._labels:
+            variant = chooseLabelVariant(x_dir, y_dir, view[0], view[1], current=switch.whichChild.getValue())
+            if variant != switch.whichChild.getValue():
+                switch.whichChild = variant
+
+
+def buildFlowRateLabelCoinNode(port, text, color, row_index=0, scale=2.0, top_extend=0.0, orienter=None):
+    """
+    Build one Coin node: a world-space text label lying flat on the port's
+    own highlight plane (see buildPortHighlightCoinNode -- same port dict,
+    same scale/top_extend, so the two line up exactly), sized to 15% of
+    that plane's own height (shrunk further if needed so it can't overflow
+    past the plane's own edges) and anchored just inside its top-right
+    corner, as seen by a viewer facing the terminal. Used by
     TerminalFlowRateObserver/AirflowResultObserver to print result values
     right on a port's own plane, so the value itself is readable at a
     glance instead of only being implied by the plane/arrow color.
+
+    The label is built in all 8 of its in-plane orientations under one
+    SoSwitch (front or back, times four quarter turns -- see
+    _labelVariantAxes). Variant 0 is the original layout; `orienter` (a
+    LabelOrienter) switches a label to another one only when the camera
+    sees it from behind or from below, so it never reads mirrored or upside
+    down. Without an orienter the label keeps variant 0.
 
     port: a connected_ports-style dict (position, direction, profile_x_axis,
     section_params -- see NetworkParser.JunctionPort). `position` must
@@ -2312,67 +2448,60 @@ def buildFlowRateLabelCoinNode(port, text, color, row_index=0, scale=2.0, top_ex
     frame = _viewerFacingPlaneFrame(port, scale=scale, top_extend=top_extend)
     if frame is None:
         return None
-    origin, x_dir, y_dir, placement, half_w, half_h_bottom, half_h_top = frame
-    plane_width = 2.0 * half_w
+    origin, x_dir, y_dir, _placement, half_w, half_h_bottom, half_h_top = frame
     plane_height = 2.0 * half_h_bottom  # rows are sized/spaced off the un-extended plane
     row_height = plane_height * 0.15  # fixed row pitch, independent of any row's own shrink-to-fit
-    text_height = row_height
-
-    # Shrink the text, if needed, so a long string can't overflow past the
-    # plane's own left edge -- SoText3 has no auto-fit, so estimate the
-    # rendered width from an approximate glyph width.
     margin = plane_height * 0.05  # inward padding from the plane's own edges
-    available_width = plane_width - 2.0 * margin
     text_str = str(text)
-    estimated_width = len(text_str) * text_height * MONOSPACE_CHAR_WIDTH_RATIO
-    if available_width > 0.0 and estimated_width > available_width:
-        text_height *= available_width / estimated_width
 
-    # Anchor row 0 just inside the plane's own top-right corner (from the
-    # viewer's own point of view); further rows stack below it.
-    anchor = origin + x_dir * (half_w - margin) + y_dir * (half_h_top - margin - row_height)
+    # How far the plane reaches from its origin along each in-plane axis
+    # direction (it is taller above its centre when top_extend is set).
+    def reach(axis):
+        if abs(axis.dot(x_dir)) > 0.5:
+            return half_w
+        return half_h_top if axis.dot(y_dir) > 0.0 else half_h_bottom
 
     root = coin.SoSeparator()
-
     mat = coin.SoMaterial()
     mat.diffuseColor.setValue(*color)
     root.addChild(mat)
+    switch = coin.SoSwitch()
+    root.addChild(switch)
 
-    billboard_type = getattr(coin, "SoVRMLBillboard", None)
-    if billboard_type is not None:
-        # The text turns to face the camera, upright on screen, whatever the
-        # view direction (a billboard with no rotation axis aligns its local Y
-        # with the viewer's up). It keeps its size in mm, so it still scales
-        # with the plane it labels. Rows stack downward on screen, so they
-        # never fold onto each other when the plane is seen edge-on.
-        translation = coin.SoTranslation()
-        translation.translation.setValue(anchor.x, anchor.y, anchor.z)
-        root.addChild(translation)
-        billboard = billboard_type()
-        billboard.axisOfRotation.setValue(0.0, 0.0, 0.0)
-        root.addChild(billboard)
-        parent = billboard
-        row_offset = coin.SoTranslation()
-        row_offset.translation.setValue(0.0, -row_height * row_index, 0.0)
-        parent.addChild(row_offset)
-    else:
-        # Fallback without billboard support: lie flat in the plane, as before.
-        flat_anchor = anchor - y_dir * (row_height * row_index)
+    for variant in range(8):
+        tx, ty = _labelVariantAxes(x_dir, y_dir, variant)
+
+        # Step 1: shrink the text, if needed, so a long string can't
+        # overflow the plane -- SoText3 has no auto-fit, so estimate the
+        # rendered width from an approximate glyph width.
+        text_height = row_height
+        available_width = reach(tx) + reach(tx * -1.0) - 2.0 * margin
+        estimated_width = len(text_str) * text_height * MONOSPACE_CHAR_WIDTH_RATIO
+        if available_width > 0.0 and estimated_width > available_width:
+            text_height *= available_width / estimated_width
+
+        # Step 2: anchor just inside the plane's top-right corner (as this
+        # orientation reads), each further row one row_height lower.
+        anchor = origin + tx * (reach(tx) - margin) + ty * (reach(ty) - margin - row_height * (row_index + 1))
+
+        # Step 3: the text, lying in the plane with this orientation's axes.
+        child = coin.SoSeparator()
         transform = coin.SoTransform()
-        transform.translation.setValue(flat_anchor.x, flat_anchor.y, flat_anchor.z)
-        transform.rotation.setValue(*placement.Rotation.Q)
-        root.addChild(transform)
-        parent = root
+        transform.translation.setValue(anchor.x, anchor.y, anchor.z)
+        transform.rotation.setValue(*FreeCAD.Rotation(tx, ty, tx.cross(ty), "ZXY").Q)
+        child.addChild(transform)
+        font = coin.SoFont()
+        font.size.setValue(text_height)
+        child.addChild(font)
+        text_node = coin.SoText3()
+        text_node.string.setValue(text_str)
+        text_node.justification = coin.SoText3.RIGHT
+        child.addChild(text_node)
+        switch.addChild(child)
 
-    font = coin.SoFont()
-    font.size.setValue(text_height)
-    parent.addChild(font)
-
-    text_node = coin.SoText3()
-    text_node.string.setValue(text_str)
-    text_node.justification = coin.SoText3.RIGHT
-    parent.addChild(text_node)
-
+    switch.whichChild = 0
+    if orienter is not None:
+        orienter.add(switch, x_dir, y_dir)
     return root
 
 def buildTerminalFlowArrowCoinNode(

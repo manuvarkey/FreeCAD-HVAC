@@ -985,7 +985,13 @@ class DuctNetwork:
         return topology_objs
 
     def getNodeGroups(self, parser):
-        """Compile node groups from virtual junction objects and the parser's node ID map."""
+        """
+        Compile node groups from virtual junction objects and the parser's
+        node ID map, plus one group per custom fitting whose ports two or more
+        duct ends sit on (those ends become one junction: see autoAttach).
+        """
+        from . import _auto_attach
+
         node_groups = []
 
         node_id_by_key = {parser.geometric_node_key(nid): nid for nid in parser.geometric_nodes()}
@@ -1004,7 +1010,112 @@ class DuctNetwork:
             if len(ids) >= 2:
                 node_groups.append(ids)
 
+        for ids in _auto_attach.fitting_groups(self._portMatches(parser)).values():
+            if len(ids) >= 2:
+                node_groups.append(list(ids))
+
         return node_groups
+
+    def _portSpots(self):
+        """Every equipment and custom fitting port marker in the document, as _auto_attach.PortSpot."""
+        from . import Equipment, _auto_attach, _custom_fitting
+
+        doc = self.Object.Document
+        spots = []
+        for obj in doc.Objects:
+            if Equipment.is_equipment(obj):
+                kind, markers = _auto_attach.KIND_EQUIPMENT, Equipment.equipment_ports(obj)
+            elif _custom_fitting.is_custom_fitting(obj):
+                kind, markers = _auto_attach.KIND_FITTING, _custom_fitting.container_ports(obj)
+            else:
+                continue
+            for marker in markers:
+                try:
+                    position = hvaclib.vec_to_xyz(marker.getGlobalPlacement().Base)
+                except Exception:
+                    continue
+                spots.append(_auto_attach.PortSpot(obj.Name, kind, marker.Name, position))
+        return spots
+
+    def _portMatches(self, parser):
+        """[(geometric node id, PortSpot), ...]: the open duct ends (one duct only) that sit on a port marker."""
+        from . import _auto_attach
+
+        spots = self._portSpots()
+        if not spots or parser.graph is None:
+            return []
+        open_ends = {
+            node_id: point
+            for node_id, point in parser.geometric_node_point_map().items()
+            if parser.graph.degree(node_id) == 1
+        }
+        return _auto_attach.match_open_ends(open_ends, spots)
+
+    def autoAttach(self, parser):
+        """
+        Attach the equipment and custom fittings whose ports this network's
+        duct ends sit on (run after syncJunctions, so the junctions exist):
+
+        - the junction made of the ends on one custom fitting's ports takes
+          that fitting's geometry in place (once; later edits are kept);
+        - an end on an equipment port is connected to it (Equipment.connect),
+          and connections to nodes that no longer exist are dropped.
+
+        Returns True when anything changed.
+        """
+        from . import Equipment, _auto_attach, _custom_fitting
+
+        net = self.Object
+        doc = net.Document
+        matches = self._portMatches(parser)
+        junctions = self.collectJunctionObjects()
+        changed = False
+
+        def junction_at(geom_node_id):
+            analysis_node_id = parser.analysis_node_by_geom_node.get(geom_node_id)
+            if analysis_node_id is None:
+                return None
+            return junctions.get(parser.node_key(analysis_node_id))
+
+        # Step 1: custom fittings -- the junction holding their ends takes their geometry.
+        for owner, node_ids in _auto_attach.fitting_groups(matches).items():
+            container = doc.getObject(owner)
+            junction = junction_at(node_ids[0])
+            if container is None or junction is None:
+                continue
+            if _custom_fitting.attach_in_place(junction.Proxy.getPrimaryComponent(), container):
+                changed = True
+                FreeCAD.Console.PrintMessage(
+                    "HVAC - '{}' attached to custom fitting '{}'\n".format(junction.Label, container.Label)
+                )
+
+        # Step 2: equipment -- forget connections to nodes that are gone, then connect new ends.
+        live_keys = set(junctions.keys())
+        for obj in doc.Objects:
+            if Equipment.is_equipment(obj):
+                changed = Equipment.prune_connections(obj, net.Name, live_keys) or changed
+        for node_id, spot in _auto_attach.equipment_matches(matches):
+            equipment = doc.getObject(spot.owner)
+            marker = doc.getObject(spot.marker)
+            junction = junction_at(node_id)
+            if equipment is None or marker is None or junction is None:
+                continue
+            if getattr(junction, "Topology", "") != "end":
+                continue
+            if Equipment.is_connected(equipment, marker, net, junction):
+                continue
+            try:
+                warnings = Equipment.connect(equipment, marker, junction)
+            except ValueError as err:
+                FreeCAD.Console.PrintWarning("HVAC - Connect to Equipment: {}\n".format(err))
+                continue
+            changed = True
+            for warning in warnings:
+                FreeCAD.Console.PrintWarning("HVAC - Connect to Equipment: {}\n".format(warning))
+            FreeCAD.Console.PrintMessage(
+                "HVAC - '{}' connected to {} port '{}'\n".format(junction.Label, equipment.Label, marker.Label)
+            )
+        return changed
 
     def setActive(self):
         """Set this DuctNetwork as the active container in the 3D view."""
@@ -1786,6 +1897,8 @@ class DuctNetwork:
                 # Stage 2: Sync junctions/components, so that each component's
                 # execute() writes its own ConnectionLengthsJson
                 self.syncJunctions(parser, initial_sync=True)
+                # Ducts drawn to equipment / custom fitting ports attach to them.
+                self.autoAttach(parser)
                 obj.Document.recompute()
                 # Aggregate each junction's ConnectionLengthsJson from its
                 # now-computed component chain, for Stage 3 to consume.
@@ -1812,6 +1925,8 @@ class DuctNetwork:
                 # that each component's execute() writes its own
                 # ConnectionLengthsJson
                 changed_junctions = self.syncJunctions(parser, initial_sync=False)
+                # Ducts drawn to equipment / custom fitting ports attach to them.
+                changed_junctions = self.autoAttach(parser) or changed_junctions
                 if changed_junctions or force_recompute:
                     obj.Document.recompute()
                 # Aggregate each junction's ConnectionLengthsJson from its

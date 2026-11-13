@@ -13,7 +13,9 @@ Equipment" adds the equipment properties to that App::Part, so selecting
 the equipment selects its geometry and markers, and the ports sit directly
 in it. (Documents from before keep a separate equipment object that links
 its App::Part through `Model`; model_of() reads both.) A port is connected to one terminal of one
-network ("Connect to Equipment"); that terminal becomes the network's
+network: automatically when the network's base geometry has a duct end on
+the port (DuctNetwork.autoAttach, core/_auto_attach.py), or by hand with
+"Connect to Equipment". That terminal becomes the network's
 balancing terminal (its Source) and gets the `end_equipment_connection`
 type, a collar carrying the fan-connection loss.
 
@@ -26,7 +28,7 @@ import json
 
 import FreeCAD
 
-from . import _custom_fitting
+from . import _auto_attach, _custom_fitting
 
 PORT_FUNCTIONS = ["SupplyOutlet", "ReturnInlet", "OutdoorAirInlet", "ExhaustOutlet"]
 # The system a network connected to each kind of port should be.
@@ -299,9 +301,9 @@ def ensure_equipment_port(lcs, function=None):
 def _parse_connections(equipment):
     out = []
     for entry in list(getattr(equipment, "Connections", []) or []):
-        parts = str(entry).split("|")
-        if len(parts) == 3:
-            out.append({"port": parts[0], "network": parts[1], "node_key": parts[2]})
+        connection = _auto_attach.parse_connection(entry)
+        if connection is not None:
+            out.append(connection)
     return out
 
 
@@ -369,6 +371,29 @@ def connect(equipment, port_marker, junction):
         library_id = "builtin_basic"
     DuctNetwork.applyTypeSelection([junction], library_id=library_id, type_id=CONNECTION_TYPE_ID)
     return warnings
+
+
+def is_connected(equipment, port_marker, net, junction):
+    """True when `port_marker` is already connected to `junction` of `net`."""
+    node_key = str(getattr(junction, "NodeKey", ""))
+    return any(
+        c["port"] == port_marker.Name and c["network"] == net.Name and c["node_key"] == node_key
+        for c in _parse_connections(equipment)
+    )
+
+
+def prune_connections(equipment, network_name, live_node_keys):
+    """
+    Drop `equipment`'s connections to nodes of network `network_name` that
+    no longer exist (a duct end moved off the port). Returns True when any
+    was dropped.
+    """
+    entries = list(getattr(equipment, "Connections", []) or [])
+    keep = _auto_attach.live_connections(entries, network_name, live_node_keys)
+    if keep == entries:
+        return False
+    equipment.Connections = keep
+    return True
 
 
 def equipment_for_network(net):

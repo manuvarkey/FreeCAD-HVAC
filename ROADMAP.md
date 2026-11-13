@@ -99,16 +99,13 @@ asked, done the same day:
 2. *Warnings link to elements.* Calculate Airflow and Size Ducts warnings
    show each element number or label as a link that selects it
    (`_analysis_adapter.network_element_index` / `link_spans`).
-3. *Result labels face the viewer.* Overlay values are world-sized
-   `SoText3` inside a `SoVRMLBillboard`, rows stacked on screen.
+3. *Result labels face the viewer.* Superseded on review, see below.
 4. *Size change policy.* `SizeChangePolicy`: `AtStraightJunctions`
    (default, replaces `AtReducers`: in-line nodes and the run of a tee or
    cross), `AtInlineNodesOnly` (the old rule), `EverySegment`; editable in
    the Size Ducts panel; `AllowSizeChange` now also on branch and cross
    junctions. Old documents map `AtReducers` to `AtStraightJunctions`.
-5. *Spreadsheets locked:* not reproduced. In FreeCAD 1.1 the exported
-   sheets delete with Std_Delete right after export, with a results panel
-   open, and after save and reopen. Needs the owner's steps.
+5. *Spreadsheets locked:* solved (owner, 13 November 2026).
 6. *Ports.* Port markers are made visible (FreeCAD creates them hidden);
    "Add HVAC Port" first asks for an X/Y offset from the opening's centre
    (`PortOffsetX` / `PortOffsetY`, kept on the marker).
@@ -129,17 +126,45 @@ asked, done the same day:
    outside view updates, since one set inside `updateData` left the old
    mesh on screen.
 
-**For review (owner, 13 November 2026): corrections 3 and 7 need updating.**
-- Correction 3, result labels facing the viewer (`Observer.buildFlowRateLabelCoinNode`,
-  `SoVRMLBillboard`): the current implementation is not what the owner wants; revisit.
-- Correction 7, the equipment and custom fitting panels (`TaskPanel.TaskPanelPortContainer`,
-  `PortOffsetDialog`, commands `HVAC_CreateEquipment` / `HVAC_CreateCustomFitting` /
-  `HVAC_AddCustomPort`): the current implementation needs updating; revisit with the owner.
-Ask the owner what to change in each before starting; both were only driven from a script.
+**Corrections 3 and 7 reworked (owner's answers, 13 November 2026); not
+yet tried in the GUI.**
+- Correction 3, result labels. *Owner:* lay the labels as originally (flat
+  on their plane); only flip them (in the plane) or turn them 90 degrees when
+  the camera looks from the back or from below. *Done:* the billboard is
+  gone. `buildFlowRateLabelCoinNode` builds each label in its 8 in-plane
+  orientations (front / back times four quarter turns) under one `SoSwitch`;
+  variant 0 is the original layout. A `LabelOrienter` per overlay observer
+  watches the active view's camera (`SoFieldSensor` on its orientation) and
+  picks, per label, `chooseLabelVariant()`: flipped when seen from behind,
+  turned only when another quarter turn's up is clearly better (by 0.3, so
+  labels don't flicker near 45 degrees).
+- Correction 7, equipment and custom fitting panels. *Owner's sequence:*
+  (1) select the App::Part and call the equipment / custom junction command;
+  (2) the panel opens to add ports, each with its role (equipment only) and
+  X/Y; (3) equipment and custom junctions attach to the network
+  automatically when base geometry is drawn to their ports. *Done:*
+  `HVAC_CreateEquipment` / `HVAC_CreateCustomFitting` (names and menu texts
+  kept; the latter now marks the part, `_custom_fitting.make_custom_fitting`)
+  open `TaskPanelPortContainer`, which already had role and X/Y per port;
+  the separate `HVAC_AddCustomPort` command and its `PortOffsetDialog` are
+  removed. Automatic attachment (`core/_auto_attach.py`,
+  `DuctNetwork.getNodeGroups` / `autoAttach`): an open duct end within 1 mm
+  of a port marker sits on it. The ends on one custom fitting become one
+  node group (like a virtual junction), and that junction's Primary takes
+  the fitting with the new `CustomPlacement` = "In place": the App::Part
+  stays where it was modelled, no link, each duct's trim is the distance
+  from its end to its port (`library/custom_fitting.fit_in_place`); a port no
+  duct reaches is left open with a warning. This is done once per junction
+  (`AutoAttachedTo`), so a later change by the user is kept. An end on an
+  equipment port is connected with `Equipment.connect` (once per port and
+  node); connections to nodes that no longer exist are dropped. "Connect to
+  Equipment" and "Use This Fitting There" (fit to node) stay as manual
+  alternatives. Tests: `tests/test_auto_attach.py`, the in-place tests in
+  `tests/test_custom_fitting_fit.py`.
 
-**Next task:** the review of corrections 3 and 7 above; the owner's GUI
-check of the other corrections; the steps for the locked spreadsheets
-(correction 5); then tag the freeze (Stage 11). Known open defects: the radius wye fails on
+**Next task:** the owner's GUI check of the reworked labels and port panel
+(including drawing ducts onto equipment and custom fitting ports) and of
+the other corrections; then tag the freeze (Stage 11). Known open defects: the radius wye fails on
 hollow round and rectangular ducts (and hangs in OpenCascade with the SMACNA
 wall, so it is not in `smacna`); plenum defaults reject ducts crossing a
 box corner.

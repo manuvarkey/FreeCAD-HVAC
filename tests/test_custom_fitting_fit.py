@@ -118,3 +118,73 @@ def test_size_mismatch_is_a_warning():
         d.profile, d.section = "Circular", {"Diameter": 200.0}
     result = cf.fit(_tee_ports(), ducts, (0.0, 0.0, 0.0))
     assert len(result.warnings) == 1 and "reducer" in result.warnings[0] and "C" in result.warnings[0]
+
+
+# ----------------------------------------------------------------------------
+# In place: the fitting stays where it was modelled, the ducts end on its ports
+# ----------------------------------------------------------------------------
+
+
+def _in_place_ducts(offset=(0.0, 0.0, 0.0)):
+    # One duct leaving each tee port, drawn from the port centre outward (keys in a shuffled order).
+    o = np.array(offset)
+    return [
+        cf.DuctEnd(
+            "c", (0.0, 1.0, 0.0), profile="Circular", section={"Diameter": 150.0}, position=tuple(o + [0, 250, 0])
+        ),
+        cf.DuctEnd(
+            "a", (-1.0, 0.0, 0.0), profile="Circular", section={"Diameter": 200.0}, position=tuple(o + [-300, 0, 0])
+        ),
+        cf.DuctEnd(
+            "b", (1.0, 0.0, 0.0), profile="Circular", section={"Diameter": 200.0}, position=tuple(o + [300, 0, 0])
+        ),
+    ]
+
+
+def test_in_place_maps_each_duct_to_the_port_at_its_end_with_zero_trims():
+    result = cf.fit_in_place(_tee_ports(), _in_place_ducts())
+    assert result.mapping == {"c": 2, "a": 0, "b": 1}
+    assert result.trims == pytest.approx({"c": 0.0, "a": 0.0, "b": 0.0})
+    assert np.allclose(result.rotation, np.eye(3)) and np.allclose(result.translation, np.zeros(3))
+    assert result.warnings == []
+
+
+def test_in_place_trim_is_the_distance_from_the_duct_end_out_to_its_port():
+    # Duct "a" is drawn from 20 mm short of port A (on its axis): the port lies 20 mm out along the duct.
+    ducts = _in_place_ducts()
+    ducts[1].position = (-280.0, 0.0, 0.0)
+    result = cf.fit_in_place(_tee_ports(), ducts)
+    assert result.trims["a"] == pytest.approx(20.0)
+
+
+def test_in_place_leaves_unreached_ports_open_with_a_warning():
+    result = cf.fit_in_place(_tee_ports(), _in_place_ducts()[1:])
+    assert result.mapping == {"a": 0, "b": 1}
+    assert result.warnings == ["C has no duct: it is left open"]
+
+
+def test_in_place_rejects_a_gap_before_the_duct_or_a_port_pointing_away():
+    ducts = _in_place_ducts()
+    ducts[2].position = (330.0, 0.0, 0.0)  # starts 30 mm beyond port B, so the port lies behind its end
+    with pytest.raises(cf.CustomFitError, match="starts 30.0 mm beyond B, leaving a gap"):
+        cf.fit_in_place(_tee_ports(), ducts)
+    ducts = _in_place_ducts()
+    ducts[0].direction = (1.0, 0.0, 0.0)  # branch duct leaving sideways from port C
+    with pytest.raises(cf.CustomFitError, match="C points 90.0 deg away"):
+        cf.fit_in_place(_tee_ports(), ducts)
+
+
+def test_in_place_needs_a_port_per_duct_and_honours_overrides():
+    ducts = _in_place_ducts() + [cf.DuctEnd("d", (0.0, 0.0, 1.0), position=(0.0, 0.0, 400.0))]
+    with pytest.raises(cf.CustomFitError, match="3 port"):
+        cf.fit_in_place(_tee_ports(), ducts)
+    # Pinning duct "a" on port B (the far end, facing the other way) is an error, never silently remapped.
+    with pytest.raises(cf.CustomFitError, match="B points 180.0 deg away from duct 'a'"):
+        cf.fit_in_place(_tee_ports(), _in_place_ducts(), overrides={"a": 1})
+
+
+def test_in_place_warns_when_a_duct_size_differs_from_its_port():
+    ducts = _in_place_ducts()
+    ducts[0].section = {"Diameter": 200.0}
+    result = cf.fit_in_place(_tee_ports(), ducts)
+    assert result.warnings == ["C is round 150 but duct 'c' is round 200: a reducer is needed"]

@@ -565,7 +565,28 @@ class DuctComponent:
             "App::PropertyLink",
             "CustomFitting",
             "HVAC Custom Geometry",
-            "App::Part holding the modelled fitting and one HVAC port marker per opening (see Add HVAC Port)",
+            "App::Part holding the modelled fitting and one HVAC port marker per opening "
+            "(see Create / Edit Custom Fitting)",
+        )
+        # Fit to node: a link to the fitting is moved onto the node. In place:
+        # the fitting stays where it was modelled and the ducts end on its
+        # ports (how ducts drawn to a custom fitting's ports are attached).
+        if "CustomPlacement" not in obj.PropertiesList:
+            obj.addProperty(
+                "App::PropertyEnumeration",
+                "CustomPlacement",
+                "HVAC Custom Geometry",
+                "Fit to node: a link to CustomFitting is moved onto the node. In place: CustomFitting stays where "
+                "it was modelled and the ducts end on its port markers",
+            )
+            obj.CustomPlacement = list(_custom_fitting.PLACEMENTS)
+            obj.CustomPlacement = _custom_fitting.PLACEMENT_FIT
+        self._addProperty(
+            obj,
+            "App::PropertyString",
+            "AutoAttachedTo",
+            "HVAC",
+            "Internal: the custom fitting this component was attached to automatically, once",
         )
         self._addProperty(
             obj,
@@ -587,7 +608,12 @@ class DuctComponent:
         self._addProperty(
             obj, "App::PropertyString", "CustomPortMapJson", "HVAC", "Internal: which custom port each duct meets"
         )
-        for name, mode in (("CustomFitWarnings", 1), ("CustomLinkName", 2), ("CustomPortMapJson", 2)):
+        for name, mode in (
+            ("CustomFitWarnings", 1),
+            ("CustomLinkName", 2),
+            ("CustomPortMapJson", 2),
+            ("AutoAttachedTo", 2),
+        ):
             try:
                 obj.setEditorMode(name, mode)
             except Exception:

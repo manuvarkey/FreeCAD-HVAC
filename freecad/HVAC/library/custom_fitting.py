@@ -13,6 +13,11 @@ of a node starts at the node point and runs along its outward `direction`.
 `fit()` finds which custom port goes on which duct, the rigid placement that
 puts every custom port on its duct's centre line pointing along it, and how
 far out along each duct the port lands (its trim).
+
+`fit_in_place()` is for a fitting left where it was modelled: the ducts were
+drawn to end on its ports (each duct then has its own end point, there is no
+single node), so nothing moves; it only works out which port each duct meets
+and the trims.
 """
 
 import itertools
@@ -47,13 +52,18 @@ class CustomPort:
 
 @dataclass
 class DuctEnd:
-    """One duct at the node: its edge key, outward direction and (optional) profile x axis."""
+    """
+    One duct at the node: its edge key, outward direction and (optional)
+    profile x axis. `position` is where the duct ends (only fit_in_place()
+    needs it; fit() takes the shared node point instead).
+    """
 
     edge_key: str
     direction: tuple
     x: Optional[tuple] = None
     profile: str = ""
     section: Dict[str, float] = field(default_factory=dict)
+    position: Optional[tuple] = None
 
 
 @dataclass
@@ -248,8 +258,95 @@ def fit(ports, ducts, node, overrides=None):
     if problems:
         raise CustomFitError("The custom fitting does not fit this node: " + "; ".join(problems))
 
+    warnings = _size_warnings(ports, ducts, mapping)
+    return FitResult(rotation, translation, mapping, trims, angle_errors, offset_errors, warnings)
+
+
+def fit_in_place(ports, ducts, overrides=None):
+    """
+    A custom fitting that stays where it was modelled: every duct was drawn
+    to end on one of its ports, so the placement is the identity. `ports`
+    and every duct's `position` must be in the same coordinates.
+
+    Each duct takes the free port nearest its end point (`overrides`
+    {edge_key: port index} pins one by hand); its trim is how far out along
+    the duct that port sits from the duct's end. Ports no duct reaches are
+    left open, with a warning. Raises CustomFitError when a duct has no
+    port, or its port points away from it or sits off its centre line
+    (ANGLE_TOLERANCE_DEG / OFFSET_TOLERANCE_MM), or lies behind its end
+    (a gap between the fitting and the duct).
+    """
+    if not ports:
+        raise CustomFitError("The custom fitting has no ports")
+    if len(ducts) > len(ports):
+        raise CustomFitError(
+            "The custom fitting has {} port(s) but {} duct(s) end on it".format(len(ports), len(ducts))
+        )
+    for duct in ducts:
+        if duct.position is None:
+            raise CustomFitError("Duct '{}' has no end point".format(duct.edge_key))
+
+    # Step 1: hand-pinned ports first.
+    mapping = {}
+    for duct in ducts:
+        if overrides and duct.edge_key in overrides:
+            j = int(overrides[duct.edge_key])
+            if not 0 <= j < len(ports):
+                raise CustomFitError(
+                    "Port override for duct '{}' names port {} of {}".format(duct.edge_key, j + 1, len(ports))
+                )
+            if j in mapping.values():
+                raise CustomFitError("Port {} is assigned to two ducts".format(j + 1))
+            mapping[duct.edge_key] = j
+
+    # Step 2: every other duct takes the nearest free port, closest pairs first.
+    pairs = sorted(
+        (float(np.linalg.norm(np.asarray(port.origin, float) - np.asarray(duct.position, float))), i, j)
+        for i, duct in enumerate(ducts)
+        if duct.edge_key not in mapping
+        for j, port in enumerate(ports)
+        if j not in mapping.values()
+    )
+    for _distance, i, j in pairs:
+        if ducts[i].edge_key not in mapping and j not in mapping.values():
+            mapping[ducts[i].edge_key] = j
+
+    # Step 3: check each pair and measure its trim.
+    trims, angle_errors, offset_errors, problems = {}, {}, {}, []
+    for duct in ducts:
+        index = mapping[duct.edge_key]
+        port = ports[index]
+        d = _unit(duct.direction)
+        rel = np.asarray(port.origin, float) - np.asarray(duct.position, float)
+        along = float(np.dot(rel, d))
+        offset = float(np.linalg.norm(rel - along * d))
+        angle = _angle_deg(port.z, d)
+        trims[duct.edge_key] = along
+        angle_errors[duct.edge_key] = angle
+        offset_errors[duct.edge_key] = offset
+        name = port.name or "port {}".format(index + 1)
+        if angle > ANGLE_TOLERANCE_DEG:
+            problems.append("{} points {:.1f} deg away from duct '{}'".format(name, angle, duct.edge_key))
+        if offset > OFFSET_TOLERANCE_MM:
+            problems.append("{} sits {:.1f} mm off the centre line of duct '{}'".format(name, offset, duct.edge_key))
+        if along < -OFFSET_TOLERANCE_MM:
+            problems.append("duct '{}' starts {:.1f} mm beyond {}, leaving a gap".format(duct.edge_key, -along, name))
+    if problems:
+        raise CustomFitError("The ducts do not end on the custom fitting's ports: " + "; ".join(problems))
+
+    warnings = _size_warnings(ports, ducts, mapping)
+    used = set(mapping.values())
+    for j, port in enumerate(ports):
+        if j not in used:
+            warnings.append("{} has no duct: it is left open".format(port.name or "port {}".format(j + 1)))
+    return FitResult(np.eye(3), np.zeros(3), mapping, trims, angle_errors, offset_errors, warnings)
+
+
+def _size_warnings(ports, ducts, mapping):
+    """A warning for every duct whose profile or size differs from the custom port it meets."""
     warnings = []
-    for duct, index in zip(ducts, order):
+    for duct in ducts:
+        index = mapping[duct.edge_key]
         port = ports[index]
         if not port.profile or not duct.profile:
             continue
@@ -262,7 +359,7 @@ def fit(ports, ducts, node, overrides=None):
                     describe_section(duct.profile, duct.section),
                 )
             )
-    return FitResult(rotation, translation, mapping, trims, angle_errors, offset_errors, warnings)
+    return warnings
 
 
 def _same_section(a, b, tolerance=0.5):
