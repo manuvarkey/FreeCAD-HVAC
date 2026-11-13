@@ -1016,13 +1016,31 @@ class DuctNetwork:
 
         return node_groups
 
+    def sourceFeedsAir(self):
+        """
+        True when this network's Source pushes air into its ducts, False when
+        it draws air out: from the equipment ports connected to the network,
+        else from its SystemType (_terminal_function.source_feeds_air).
+        """
+        from . import Equipment
+
+        net = self.Object
+        doc = net.Document
+        functions = []
+        for equipment in Equipment.equipment_for_network(net):
+            for connection in Equipment.connections_of(equipment):
+                marker = doc.getObject(connection["port"]) if connection["network"] == net.Name else None
+                if marker is not None:
+                    functions.append(str(getattr(marker, "EquipmentPortFunction", "") or ""))
+        return _terminal_function.source_feeds_air(getattr(net, "SystemType", "Supply"), functions)
+
     def _portSpots(self):
         """Every equipment and custom fitting port marker in the document, as _auto_attach.PortSpot."""
         from . import Equipment, _auto_attach, _custom_fitting
 
         doc = self.Object.Document
         spots = []
-        for obj in doc.Objects:
+        for obj in getattr(doc, "Objects", []):
             if Equipment.is_equipment(obj):
                 kind, markers = _auto_attach.KIND_EQUIPMENT, Equipment.equipment_ports(obj)
             elif _custom_fitting.is_custom_fitting(obj):
@@ -1091,7 +1109,7 @@ class DuctNetwork:
 
         # Step 2: equipment -- forget connections to nodes that are gone, then connect new ends.
         live_keys = set(junctions.keys())
-        for obj in doc.Objects:
+        for obj in getattr(doc, "Objects", []):
             if Equipment.is_equipment(obj):
                 changed = Equipment.prune_connections(obj, net.Name, live_keys) or changed
         for node_id, spot in _auto_attach.equipment_matches(matches):
@@ -1519,6 +1537,9 @@ class DuctNetwork:
         components_by_parent = self.collectComponentObjects()
         segment_map = self.collectSegmentObjects()
 
+        # Which way this network's Source moves air (an equipment port connected to it decides).
+        feeds = self.sourceFeedsAir()
+
         # Inspect each node from the parser and update junction objects
         for node_id in parser.nodes():
             node_key = parser.node_key(node_id)
@@ -1536,6 +1557,7 @@ class DuctNetwork:
                     getattr(known, "TerminalFunction", "Auto") if known is not None else "Auto",
                     getattr(known, "FlowBoundary", "Auto") if known is not None else "Auto",
                     junction_analysis.flow_class,
+                    feeds,
                 )
             analysis_dict = asdict(junction_analysis)
             analysis_json = json.dumps(analysis_dict)

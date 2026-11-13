@@ -89,10 +89,12 @@ def test_plenum_takes_any_number_of_ports():
     assert all(value == pytest.approx(220.0) for value in trims.values())
 
 
-def test_a_duct_through_a_box_corner_does_not_fit():
+def test_a_duct_through_a_box_corner_does_not_fit_a_box_of_set_size():
+    # With the sizes set by the user the box cannot grow (an automatic one does, see below).
     ports = _STRAIGHT + [_port("C", (0.70710678, 0.70710678, 0.0), 100.0)]
+    params = {"BoxLength": 400.0, "BoxWidth": 400.0, "BoxHeight": 400.0}
     with pytest.raises(ValueError, match="does not fit on the box face"):
-        boxes.measure_plenum(_ctx(ports))
+        boxes.measure_plenum(_ctx(ports, params))
 
 
 def test_a_duct_that_passes_beside_the_box_is_an_error():
@@ -162,3 +164,36 @@ def test_ahu_connection_pushed_off_the_face_is_an_error():
 def test_ahu_takes_exactly_one_port():
     with pytest.raises(ValueError):
         boxes.measure_ahu(_ctx(_STRAIGHT))
+
+
+# ----------------------------------------------------------------------------
+# Automatic plenum size: grows so every duct fits on its face
+# ----------------------------------------------------------------------------
+
+
+_DIAGONAL = 0.7071067811865476
+
+
+def test_automatic_plenum_grows_so_a_diagonal_duct_fits_on_its_face():
+    # A 200 mm duct leaving at 45 degrees hits the default 400 mm box at its corner.
+    ports = [_port("A", (-1.0, 0.0, 0.0)), _port("B", (_DIAGONAL, _DIAGONAL, 0.0))]
+    layout = boxes._box_layout(_ctx(ports), "plenum")
+    for port in ports:
+        _leave, _chord, needed = boxes._port_fit(
+            HVACLibraryAPI, port, layout["centre"], layout["axes"], [d / 2.0 for d in layout["dims"]]
+        )
+        assert all(needed[i] <= layout["dims"][i] / 2.0 + 1e-6 for i in needed)
+    assert max(layout["dims"]) > 400.0
+    # Build and measure agree on the grown box.
+    context = _ctx(ports)
+    assert boxes.build_plenum(dict(context))["connection_lengths"] == boxes.measure_plenum(dict(context))
+
+
+def test_a_size_the_user_set_is_never_grown():
+    ports = [_port("A", (-1.0, 0.0, 0.0)), _port("B", (_DIAGONAL, _DIAGONAL, 0.0))]
+    with pytest.raises(ValueError, match="overhangs"):
+        boxes.measure_plenum(_ctx(ports, {"BoxLength": 400.0, "BoxWidth": 400.0, "BoxHeight": 400.0}))
+
+
+def test_a_box_that_already_fits_keeps_its_default_size():
+    assert boxes._box_layout(_ctx(_TEE), "plenum")["dims"] == (400.0, 400.0, 400.0)

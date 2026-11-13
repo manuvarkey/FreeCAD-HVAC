@@ -44,7 +44,7 @@
       "name": "BoxLength",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Casing length. 0 uses two times the largest duct size",
+      "description": "Casing length. 0: automatic, twice the largest duct size, made larger where a duct would not fit on its face",
       "default": 0.0,
       "validation": {
         "minimum": 0.0
@@ -54,7 +54,7 @@
       "name": "BoxWidth",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Casing width. 0 uses twice the largest duct size",
+      "description": "Casing width. 0: automatic, twice the largest duct size, made larger where a duct would not fit on its face",
       "default": 0.0,
       "validation": {
         "minimum": 0.0
@@ -64,7 +64,7 @@
       "name": "BoxHeight",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
-      "description": "Casing height. 0 uses twice the largest duct size",
+      "description": "Casing height. 0: automatic, twice the largest duct size, made larger where a duct would not fit on its face",
       "default": 0.0,
       "validation": {
         "minimum": 0.0

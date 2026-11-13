@@ -124,3 +124,35 @@ def test_balancing_terminal_drawn_the_wrong_way_is_named_once_it_is_the_only_one
     assert len(warnings) == 1 and "AHU" in warnings[0] and "balances" in warnings[0]
     unconfigured = {k: _junction(k, "exit", "Supply", boundary="Auto") for k in ("D1", "D2", "D3")}
     assert terminal_direction_warnings(net, unconfigured) == []
+
+
+# ----------------------------------------------------------------------------
+# Which way the Source moves air: from the connected equipment port
+# ----------------------------------------------------------------------------
+
+
+def test_source_feeds_air_follows_the_equipment_port_else_the_system():
+    assert tf.source_feeds_air("Supply") is True
+    assert tf.source_feeds_air("Exhaust") is False
+    assert tf.source_feeds_air("Exhaust", ["ExhaustOutlet"]) is True
+    assert tf.source_feeds_air("Supply", ["ReturnInlet"]) is False
+    assert tf.source_feeds_air("OutdoorAir", ["", "OutdoorAirInlet"]) is False
+
+
+def test_an_exhaust_outlet_duct_has_a_feeding_source_and_discharge_terminals():
+    # A duct from the AHU's exhaust outlet to outside: air comes in at the equipment end.
+    assert tf.resolve("Exhaust", "Auto", "Auto", "entry", feeds=True) == "Source"
+    assert tf.resolve("Exhaust", "Auto", "Fixed", "exit", feeds=True) == "Discharge"
+    assert tf.expected_flow_class("Source", "Exhaust", feeds=True) == "entry"
+    assert tf.direction_warning("T1", "Source", "Exhaust", "entry", feeds=True) == ""
+    assert tf.direction_warning("T2", "Discharge", "Exhaust", "exit", feeds=True) == ""
+    # Without the equipment it stays an ordinary exhaust system, drawn toward its fan.
+    assert tf.resolve("Exhaust", "Auto", "Fixed", "entry") == "Exhaust"
+    assert tf.direction_warning("T1", "Source", "Exhaust", "entry") != ""
+
+
+def test_system_terminal_defaults():
+    assert tf.system_terminal("Supply") == "Supply"
+    assert tf.system_terminal("Return") == "Return"
+    assert tf.system_terminal("Return", feeds=True) == "Discharge"
+    assert tf.system_terminal("Supply", feeds=False) == "Supply"

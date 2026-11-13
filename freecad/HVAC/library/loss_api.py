@@ -720,6 +720,9 @@ class HVACLossAPI:
             # Geometry the fitting itself would refuse to build: leave it to the plain tee loss.
             return False
 
+    # A face-mounted branch within this many degrees of square reads the 90 degree tee-with-elbow table.
+    _SQUARE_BRANCH_TOLERANCE_DEG = 5.0
+
     @staticmethod
     def _face_mounted_branch_loss(
         context, common, straight, branch, diverging, angle_deg, ab_on_ac, vb_on_vc, vs_on_vc
@@ -727,15 +730,18 @@ class HVACLossAPI:
         """
         Loss of a tee whose branch is face-mounted (collar plus 90 deg elbow).
 
-        A round diverging tee has its own table for exactly this fitting
-        (SMACNA 14-14 E, "90 deg tee, round, with 90 deg elbow"). Every
-        other case has none, so the plain tee loss is used with the loss of
-        the branch elbow added to the branch leg, as an approximation.
+        A round diverging tee with a square branch has its own table for
+        exactly this fitting (SMACNA 14-14 E, "90 deg tee, round, with 90 deg
+        elbow"). Every other case has none -- including a face-mounted
+        lateral, whose elbow turns into an inclined branch -- so the plain
+        tee loss at the branch's angle is used with the loss of the branch
+        elbow added to the branch leg, as an approximation.
         """
         source = "smacna_branch_face_mounted"
         round_ducts = all(HVACLibraryAPI.port_profile(p) == "Circular" for p in (common, straight, branch))
+        square_branch = abs(angle_deg - 90.0) <= HVACLossAPI._SQUARE_BRANCH_TOLERANCE_DEG
 
-        if diverging and round_ducts:
+        if diverging and round_ducts and square_branch:
             lookup_branch, lookup_main = diverging_tables.round_variant("tee_90_elbow_90", vb_on_vc, vs_on_vc)
             # Both are printed against the common duct's velocity; each path is referenced to its own leg's.
             zeta_branch = lookup_branch.value / (vb_on_vc**2) if vb_on_vc > 0 else lookup_branch.value

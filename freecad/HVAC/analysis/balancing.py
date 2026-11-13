@@ -39,6 +39,14 @@ iteration cap is hit, or a path can't be shrunk any further (its velocity
 would exceed a practical ceiling) -- at which point its remaining deficit
 is reported as an explicit BalancingRequirement (e.g. "fit a damper here"),
 rather than forcing an unrealistic duct size to close it.
+
+Sizing sections win over balancing (owner decision, 13 November 2026): the
+base sizer gives every sizing section one size (see
+analysis.sizing.apply_sizing_sections), and balancing never splits one
+again. A shrink step resizes the whole section the divergence segment
+belongs to; a section that also carries the critical path cannot be shrunk
+(it would slow the critical path down too), so its deficit is reported as a
+BalancingRequirement instead.
 """
 
 from dataclasses import dataclass, field
@@ -93,10 +101,19 @@ class PressureBalanceCoordinator:
     def _solve_component(self, network, comp, settings, result):
         base = self.base_sizer.size(network, [comp], settings)
         result.warnings.extend(base.warnings)
+        # The sections and reducer advice come from the base sizing (balancing keeps sections whole).
+        result.sections.extend(base.sections)
+        result.reducer_suggestions.extend(base.reducer_suggestions)
         if not base.segments:
             return
 
         sections = {edge_key: sres.new_section for edge_key, sres in base.segments.items()}
+        # Which sizing section each segment belongs to (a lone segment is its own section).
+        section_of = {}
+        for group in base.sections:
+            members = [edge_key for edge_key in group if edge_key in sections]
+            for edge_key in members:
+                section_of[edge_key] = members
         solver = PressureSolver()
         exhausted = set()
         tree = None
@@ -123,15 +140,22 @@ class PressureBalanceCoordinator:
 
             worst = max(candidates, key=lambda p: p.pressure_deficit_pa)
             divergence_edge = self._divergence_edge(worst, critical.path)
-            shrunk = (
-                self._shrink(sections[divergence_edge], comp.edge_flow_lps[divergence_edge], settings)
-                if divergence_edge is not None else None
-            )
+
+            # Step: shrink the whole sizing section of the divergence segment
+            # one step, unless that section also carries the critical path.
+            shrunk, members = None, []
+            if divergence_edge is not None:
+                members = section_of.get(divergence_edge, [divergence_edge])
+                if not set(members) & set(critical.path.edge_keys):
+                    # The member with the most flow hits the velocity ceiling first.
+                    flow_lps = max(comp.edge_flow_lps.get(edge_key, 0.0) for edge_key in members)
+                    shrunk = self._shrink(sections[divergence_edge], flow_lps, settings)
             if shrunk is None:
                 exhausted.add(worst.terminal_node_id)
                 self._emit_requirement(result, worst, divergence_edge, tree, network.air)
                 continue
-            sections[divergence_edge] = shrunk
+            for edge_key in members:
+                sections[edge_key] = shrunk
         else:
             result.warnings.append(
                 "Pressure balancing for terminal '{}' did not settle after {} iterations; sizes shown "

@@ -28,7 +28,7 @@ import traceback
 import FreeCAD
 import Part
 import FreeCADGui as Gui
-from PySide import QtWidgets, QtCore
+from PySide import QtWidgets, QtCore, QtGui
 from PySide.QtCore import QT_TRANSLATE_NOOP
 translate = FreeCAD.Qt.translate
 
@@ -1565,6 +1565,86 @@ class CommandConnectEquipment:
         )
 
 
+class CommandLayerVisibility:
+    """
+    Toolbar dropdown for the active network's layer visibility (Stage 9):
+    one checkable entry per construction layer role and one for the
+    construction features, bound to the network's ShowLayer_<Role> /
+    ShowFeatures properties (display only, applied at once, no recompute --
+    the same switches as in the Network Type Defaults panel).
+    """
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("EditMaterial.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_LayerVisibility', 'Layer Visibility'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_LayerVisibility',
+                'Show or hide construction layers (by role) and construction features of the active network. '
+                'Display only, applied at once',
+            ),
+            'CmdType': 'ForEdit',
+        }
+
+    def IsActive(self):
+        net = hvaclib.activeHVACNetwork()
+        return net is not None and net.Document == FreeCAD.ActiveDocument
+
+    @staticmethod
+    def _entries(net):
+        """[(property name, label), ...] for the visibility switches this network has."""
+        from ..library.construction import ALL_LAYER_ROLES, role_property_suffix
+
+        entries = []
+        for role in ALL_LAYER_ROLES:
+            prop_name = "ShowLayer_" + role_property_suffix(role)
+            if prop_name in net.PropertiesList:
+                entries.append((prop_name, role.replace("_", " ").capitalize()))
+        if "ShowFeatures" in net.PropertiesList:
+            entries.append(("ShowFeatures", translate("HVAC_LayerVisibility", "Construction features (flanges, ...)")))
+        return entries
+
+    def Activated(self):
+        net = hvaclib.activeHVACNetwork()
+        if net is None:
+            return
+        entries = self._entries(net)
+        if not entries:
+            FreeCAD.Console.PrintWarning("HVAC - Layer Visibility: '{}' has no visibility switches\n".format(net.Label))
+            return
+
+        # Step 1: one checkbox per switch, ticked as the network has it now.
+        # Checkboxes inside the menu (QWidgetAction) keep it open, so several
+        # layers can be switched in one go.
+        menu = QtWidgets.QMenu(Gui.getMainWindow())
+        checks = {}
+        for prop_name, label in entries:
+            check = QtWidgets.QCheckBox(label)
+            check.setChecked(bool(getattr(net, prop_name, True)))
+            check.toggled.connect(lambda checked, prop_name=prop_name: self._set(net, prop_name, checked))
+            holder = QtWidgets.QWidget()
+            row = QtWidgets.QHBoxLayout(holder)
+            row.setContentsMargins(8, 3, 8, 3)
+            row.addWidget(check)
+            action = QtWidgets.QWidgetAction(menu)
+            action.setDefaultWidget(holder)
+            menu.addAction(action)
+            checks[prop_name] = check
+
+        # Step 2: show everything again in one click (ticking each box sets its property).
+        menu.addSeparator()
+        show_all = menu.addAction(translate("HVAC_LayerVisibility", "Show All"))
+        show_all.triggered.connect(lambda: [check.setChecked(True) for check in checks.values()])
+
+        # Step 3: drop the menu down under the cursor (the toolbar button).
+        menu.exec_(QtGui.QCursor.pos())
+
+    @staticmethod
+    def _set(net, prop_name, value):
+        if bool(getattr(net, prop_name, True)) != bool(value):
+            setattr(net, prop_name, bool(value))
+
+
 #=================================================
 # Register Commands
 #=================================================
@@ -1593,6 +1673,7 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_SelectAllSegments', CommandSelectAllSegments())
     FreeCAD.Gui.addCommand('HVAC_SelectAllComponents', CommandSelectAllComponents())
     FreeCAD.Gui.addCommand('HVAC_CreateEquipment', CommandCreateEquipment())
+    FreeCAD.Gui.addCommand('HVAC_LayerVisibility', CommandLayerVisibility())
     FreeCAD.Gui.addCommand('HVAC_CreateCustomFitting', CommandCreateCustomFitting())
     FreeCAD.Gui.addCommand('HVAC_ConnectEquipment', CommandConnectEquipment())
     FreeCAD.Gui.addCommand('HVAC_ReloadLibraries', CommandReloadHVACLibraries())  # Debug method

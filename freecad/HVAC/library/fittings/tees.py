@@ -553,6 +553,11 @@ def _lateral_tee_layout(context):
 
 
 def measure_lateral_tee(context):
+    # A branch passing over or under the run is face-mounted instead (see taps.face_tap_layout):
+    # the collar rises square to the run, and its elbow turns into the inclined branch.
+    face = face_tap_layout(context)
+    if face is not None:
+        return measure_face_tap(context, face)
     api = context["hvac_api"]
     layout = _lateral_tee_layout(context)
     return api.build_trim_rec_from_port_lengths(
@@ -570,6 +575,11 @@ def build_lateral_tee(context):
     TrimRunA/TrimRunB are measured beyond the minimum branch footprint.
     TrimBranch is measured outward from the inclined run surface.
     """
+    # A branch passing over or under the run is face-mounted instead (see taps.face_tap_layout):
+    # the collar rises square to the run, and its elbow turns into the inclined branch.
+    face = face_tap_layout(context)
+    if face is not None:
+        return build_face_tap(context, face)
     api = context["hvac_api"]
     layout = _lateral_tee_layout(context)
     run_a, run_b, branch, center = layout["run_a"], layout["run_b"], layout["branch"], layout["center"]
@@ -654,6 +664,11 @@ def _lateral_bend_layout(context, mitered):
 
 
 def _measure_lateral_bend(context, mitered):
+    # A branch passing over or under the run is face-mounted instead (see taps.face_tap_layout):
+    # the collar rises square to the run, and its elbow turns into the inclined branch.
+    face = face_tap_layout(context)
+    if face is not None:
+        return measure_face_tap(context, face)
     api = context["hvac_api"]
     layout = _lateral_bend_layout(context, mitered)
     return api.build_trim_rec_from_port_lengths(list(zip(layout["ports"], layout["trims"])))
@@ -662,6 +677,11 @@ def _measure_lateral_bend(context, mitered):
 def _build_lateral_bend(context, mitered):
     from .crosses import _double_wye_bend
 
+    # A branch passing over or under the run is face-mounted instead (see taps.face_tap_layout):
+    # the collar rises square to the run, and its elbow turns into the inclined branch.
+    face = face_tap_layout(context)
+    if face is not None:
+        return build_face_tap(context, face)
     api = context["hvac_api"]
     layout = _lateral_bend_layout(context, mitered)
     run_a, run_b, branch = layout["ports"]

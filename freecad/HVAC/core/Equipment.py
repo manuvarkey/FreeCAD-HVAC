@@ -307,6 +307,11 @@ def _parse_connections(equipment):
     return out
 
 
+def connections_of(equipment):
+    """An equipment's connections: [{"port": marker name, "network": network name, "node_key": ...}, ...]."""
+    return _parse_connections(equipment)
+
+
 def _write_connections(equipment, connections):
     equipment.Connections = ["{}|{}|{}".format(c["port"], c["network"], c["node_key"]) for c in connections]
 
@@ -403,7 +408,7 @@ def equipment_for_network(net):
         return []
     return [
         obj
-        for obj in doc.Objects
+        for obj in getattr(doc, "Objects", [])
         if is_equipment(obj) and any(c["network"] == net.Name for c in _parse_connections(obj))
     ]
 

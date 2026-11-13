@@ -35,6 +35,13 @@ API versions: geometry 3, loss 1, PartScript 3.
   (`CustomPlacement` "In place").
 - Result labels lie flat on their planes again; they flip or turn a quarter turn only when seen from behind or
   below.
+- Pressure balancing keeps sizing sections whole (a section shared with the critical path is reported, not
+  shrunk) and keeps the reducer advice.
+- A network fed by an equipment outlet (e.g. an AHU exhaust outlet to outside) takes its air direction from the
+  port: its open ends are Discharge terminals.
+- Lateral tees can be face-mounted (`Attachment`); wyes on a bullhead tee use the bullhead loss.
+- Plenum sizes left at 0 grow so every duct fits on its face.
+- "Layer Visibility" toolbar dropdown.
 - Sizing changes duct size only at straight-through junctions by default (`SizeChangePolicy`
   `AtStraightJunctions`, `AtInlineNodesOnly`, `EverySegment`); pluggable friction models.
 - Automatic fitting selection prefers mitered and straight types; bend radii clamp to half the duct plus the wall.

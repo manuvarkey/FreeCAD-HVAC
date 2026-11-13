@@ -7,7 +7,9 @@ duct. The plenum (any number of ports) and the AHU connection (one port)
 are the same builder with different placement rules.
 
 Each duct leaves through whichever face of the box its own axis passes
-through, and stops at the outer end of its collar.
+through, and stops at the outer end of its collar. A plenum size left at 0
+is automatic: twice the largest duct, grown where needed so every duct fits
+on the face it leaves through.
 """
 
 from ._common import _EPS, _finish, _positive, _props, _size, _trimmed
@@ -47,6 +49,24 @@ def _port_exit(api, port, centre, axes, halves):
     face, length of the port's axis line inside the box). Raises ValueError when the
     axis misses the box or the duct section does not fit on the exit face.
     """
+    leave, chord, needed = _port_fit(api, port, centre, axes, halves)
+    for index, reach in needed.items():
+        if reach > halves[index] + 1.0e-6:
+            label = str(port.get("edge_key", "") or "port")
+            raise ValueError(
+                "Duct {} does not fit on the box face: it overhangs by {:.1f} mm".format(label, reach - halves[index])
+            )
+    return leave, chord
+
+
+def _port_fit(api, port, centre, axes, halves):
+    """
+    The slab test of _port_exit without the fit check: (leave, chord,
+    needed), where needed[i] is the half-size the box must have along axis i
+    for the duct section to lie inside the face it leaves through (the
+    exit face's own axis is left out). Raises ValueError when the axis
+    misses the box.
+    """
     label = str(port.get("edge_key", "") or "port")
     position = api.port_position(port)
     direction = api.unit(api.port_direction(port))
@@ -70,18 +90,42 @@ def _port_exit(api, port, centre, axes, halves):
     chord = leave - enter
     leave = max(leave, 0.0)
 
-    # Step 2: the duct section must lie inside the face it leaves through.
+    # Step 2: how far the duct section reaches across the face it leaves through.
+    needed = {}
     for index in range(3):
         if index == exit_axis:
             continue
-        reach = abs(local_position[index] + local_direction[index] * leave) + _section_half_extent(
+        needed[index] = abs(local_position[index] + local_direction[index] * leave) + _section_half_extent(
             api, port, axes[index]
         )
-        if reach > halves[index] + 1.0e-6:
-            raise ValueError(
-                "Duct {} does not fit on the box face: it overhangs by {:.1f} mm".format(label, reach - halves[index])
-            )
-    return leave, chord
+    return leave, chord, needed
+
+
+# A box size left automatic grows at most this many times to fit its ducts.
+_AUTO_GROW_PASSES = 12
+
+
+def _grow_to_fit(api, ports, centre, axes, halves, automatic):
+    """
+    Grow the automatic box sizes (automatic[i] True) until every duct's
+    section fits on the face it leaves through. Growing one size can move a
+    duct onto another face, so it repeats until nothing changes. A size the
+    user set is never changed: a duct that still overhangs it is reported
+    by _port_exit afterwards.
+    """
+    halves = list(halves)
+    for _pass in range(_AUTO_GROW_PASSES):
+        grown = False
+        for port in ports:
+            _leave, _chord, needed = _port_fit(api, port, centre, axes, halves)
+            for index, reach in needed.items():
+                if automatic[index] and reach > halves[index] + 1.0e-6:
+                    # A small margin, so the duct does not sit exactly on the box edge.
+                    halves[index] = reach + max(1.0, 0.01 * reach)
+                    grown = True
+        if not grown:
+            break
+    return halves
 
 
 def _box_layout(context, kind):
@@ -119,10 +163,16 @@ def _box_layout(context, kind):
         centre = centre - axes[1] * _number(props, "ConnectionOffsetY") - axes[2] * _number(props, "ConnectionOffsetZ")
         collars = [_positive(props.get("TrimNeck"), 0.25 * _size(api, lead))]
     else:
-        dims = tuple(_positive(props.get(name), 2.0 * size) for name in ("BoxLength", "BoxWidth", "BoxHeight"))
+        names = ("BoxLength", "BoxWidth", "BoxHeight")
+        dims = tuple(_positive(props.get(name), 2.0 * size) for name in names)
         offsets = [_number(props, name) for name in ("CentreOffsetX", "CentreOffsetY", "CentreOffsetZ")]
         centre = node + axes[0] * offsets[0] + axes[1] * offsets[1] + axes[2] * offsets[2]
         collars = [_positive(api.port_param(context, "TrimLength", port), 0.25 * _size(api, port)) for port in ports]
+        # A size left at 0 is automatic: it starts at twice the largest duct and grows until every duct fits.
+        automatic = [_number(props, name) <= 0.0 for name in names]
+        if any(automatic):
+            halves = _grow_to_fit(api, ports, centre, axes, [value / 2.0 for value in dims], automatic)
+            dims = tuple(2.0 * half for half in halves)
 
     halves = [value / 2.0 for value in dims]
     exits, inside = [], []

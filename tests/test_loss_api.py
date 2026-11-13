@@ -944,6 +944,24 @@ def test_face_mounted_decision_measures_a_rectangular_run_along_the_offset():
         assert (source == "smacna_branch_face_mounted") is face
 
 
+def test_face_mounted_lateral_adds_the_branch_elbow_to_the_lateral_tee_loss():
+    # A 45 degree lateral lifted clear of the run: its elbow turns into an
+    # inclined branch, which the 90 degree tee-with-elbow table (14-14 E)
+    # does not describe, so it is the plain lateral loss plus a round elbow
+    # at R/D = 1 (0.22), as an approximation.
+    def lateral(properties):
+        context = _tee_over_context(400.0, properties)
+        context["connected_ports"][2]["direction"] = [0.7071067811865476, 0.7071067811865476, 0.0]
+        return context
+
+    plain = api.branch_loss(lateral({}))
+    result = api.branch_loss(lateral({"Attachment": "Auto", "ElbowRadius": 0.0}))
+    assert result.status == api.APPROXIMATION
+    assert _path_for(result, "BRANCH").source == "smacna_branch_face_mounted"
+    assert _paths_by_edge(result)["BRANCH"] == pytest.approx(_paths_by_edge(plain)["BRANCH"] + 0.22)
+    assert _paths_by_edge(result)["STRAIGHT"] == pytest.approx(_paths_by_edge(plain)["STRAIGHT"])
+
+
 # ----------------------------------------------------------------------------
 # offset_loss -- reads the offset's own length property
 # ----------------------------------------------------------------------------

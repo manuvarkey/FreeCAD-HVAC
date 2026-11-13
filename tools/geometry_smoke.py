@@ -129,9 +129,9 @@ def _node(family, profile, section):
             _port(1, _dir(0), profile, section, position=(0.0, 150.0, 0.0)),
         ]
         return ports, [(0, 1)]
-    if family == "branch.tee over":
-        # A tee whose branch passes over the run: its axis is lifted clear of the run's top face.
-        ports, pairs = _node("branch.tee", profile, section)
+    if family in ("branch.tee over", "branch.lateral_tee over"):
+        # A tee (or lateral) whose branch passes over the run: its axis is lifted clear of the run's top face.
+        ports, pairs = _node(family.split(" ")[0], profile, section)
         ports[2]["position"] = [0.0, 0.0, 450.0]
         return ports, pairs
     if family not in layouts:
@@ -150,8 +150,10 @@ def _families_for(type_def):
         if base not in seen and not family.endswith(".3d"):
             seen.append(base)
     # A type with an Attachment property is also tried with the branch passing over the run.
-    if "branch.tee" in seen and any(prop.name == "Attachment" for prop in type_def.properties):
-        seen.append("branch.tee over")
+    if any(prop.name == "Attachment" for prop in type_def.properties):
+        for base in ("branch.tee", "branch.lateral_tee"):
+            if base in seen:
+                seen.append(base + " over")
     return seen
 
 
