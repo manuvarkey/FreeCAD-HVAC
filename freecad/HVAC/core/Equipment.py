@@ -5,11 +5,14 @@
 HVAC equipment joining several networks (ROADMAP 6.5): an AHU with a
 supply outlet and a return inlet, a fan with an intake and a discharge.
 
-The equipment is a document object of its own, outside every network. Its
-geometry is the user's model: an App::Part holding the modelled unit and
-one port marker per connection (the same `Part::LocalCoordinateSystem`
-markers custom fittings use, see core/_custom_fitting.py), each with an
-`EquipmentPortFunction`. A port is connected to one terminal of one
+The equipment is the user's model itself: an App::Part holding the modelled
+unit and one port marker per connection (the same
+`Part::LocalCoordinateSystem` markers custom fittings use, see
+core/_custom_fitting.py), each with an `EquipmentPortFunction`. "Create
+Equipment" adds the equipment properties to that App::Part, so selecting
+the equipment selects its geometry and markers, and the ports sit directly
+in it. (Documents from before keep a separate equipment object that links
+its App::Part through `Model`; model_of() reads both.) A port is connected to one terminal of one
 network ("Connect to Equipment"); that terminal becomes the network's
 balancing terminal (its Source) and gets the `end_equipment_connection`
 type, a collar carrying the fan-connection loss.
@@ -130,7 +133,13 @@ def report_lines(port_results, summary):
 
 
 class HVACEquipment:
-    """A unit (AHU, fan) whose ports feed terminals of one or more networks."""
+    """
+    A unit (AHU, fan) whose ports feed terminals of one or more networks.
+
+    New equipment is an App::Part carrying the properties of setProperties()
+    (make_equipment); this proxy class is kept so documents with the older,
+    separate equipment object still load.
+    """
 
     TYPE = "HVACEquipment"
 
@@ -167,12 +176,6 @@ class HVACEquipment:
         if getattr(obj, "EquipmentType", "") != HVACEquipment.TYPE:
             obj.EquipmentType = HVACEquipment.TYPE
         add(
-            "App::PropertyLink",
-            "Model",
-            "HVAC Equipment",
-            "App::Part holding the modelled unit and one HVAC port marker per connection (Add HVAC Port)",
-        )
-        add(
             "App::PropertyFloat",
             "InternalPressureDrop",
             "HVAC Equipment",
@@ -207,15 +210,45 @@ def is_equipment(obj):
     return getattr(obj, "EquipmentType", "") == HVACEquipment.TYPE
 
 
+def make_equipment(part):
+    """
+    Turn an App::Part (the modelled unit) into HVAC equipment: add the
+    equipment properties to it and give every port marker already in it an
+    EquipmentPortFunction. Safe to call again. Returns the part.
+    """
+    HVACEquipment.setProperties(part)
+    for marker in _custom_fitting.container_ports(part):
+        ensure_equipment_port(marker)
+    return part
+
+
 def create_equipment(doc, model=None, name="Equipment"):
-    """A new HVACEquipment object, optionally linked to its model (an App::Part with port markers)."""
-    obj = doc.addObject("App::FeaturePython", name)
-    HVACEquipment(obj)
-    if FreeCAD.GuiUp:
-        HVACEquipmentViewProvider(obj.ViewObject)
-    if model is not None:
-        obj.Model = model
-    return obj
+    """Equipment from `model` (an App::Part), or from a new empty App::Part named `name`."""
+    if model is None:
+        model = doc.addObject("App::Part", name)
+    return make_equipment(model)
+
+
+def model_of(equipment):
+    """The App::Part holding an equipment's geometry and ports: the equipment itself, or an older object's Model."""
+    model = getattr(equipment, "Model", None)
+    return model if model is not None else equipment
+
+
+def equipment_ports(equipment):
+    """An equipment's port markers, in a stable order."""
+    return _custom_fitting.container_ports(model_of(equipment))
+
+
+def equipment_of_marker(marker):
+    """The equipment a port marker belongs to, or None."""
+    doc = getattr(marker, "Document", None)
+    if doc is None:
+        return None
+    for obj in doc.Objects:
+        if is_equipment(obj) and marker in equipment_ports(obj):
+            return obj
+    return None
 
 
 class HVACEquipmentViewProvider:
@@ -278,7 +311,7 @@ def _write_connections(equipment, connections):
 
 def connect(equipment, port_marker, junction):
     """
-    Connect an equipment port (a port marker inside its Model) to a network
+    Connect an equipment port (one of its port markers) to a network
     terminal. The terminal becomes the network's Source: FlowBoundary Auto,
     TerminalFunction Auto, its fitting the equipment connection collar.
     Returns a list of warnings (position or system mismatches); raises
@@ -287,11 +320,8 @@ def connect(equipment, port_marker, junction):
     from ..utils import hvaclib
     from .Network import DuctNetwork
 
-    model = getattr(equipment, "Model", None)
-    if model is None:
-        raise ValueError("Set the equipment's Model first")
-    if port_marker not in _custom_fitting.container_ports(model):
-        raise ValueError("'{}' is not a port marker of the equipment's model".format(port_marker.Label))
+    if port_marker not in equipment_ports(equipment):
+        raise ValueError("'{}' is not a port marker of equipment '{}'".format(port_marker.Label, equipment.Label))
     if not hvaclib.isDuctJunction(junction) or getattr(junction, "Topology", "") != "end":
         raise ValueError("Pick an open duct end (a terminal node) to connect")
     net = DuctNetwork.getOwnerNetwork(junction)

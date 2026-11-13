@@ -65,7 +65,36 @@ def apply_geometry_result(obj, result):
         if shape is not None:
             ordered_shapes.append(shape)
 
+    # Layers and features switched off on the network are left out of the
+    # displayed compound (their own shape properties above stay complete).
+    try:
+        from . import _component_appearance
+
+        hidden_layers, hidden_features = _component_appearance.hidden_parts(obj)
+    except Exception:
+        hidden_layers, hidden_features = set(), set()
+    if hidden_layers or hidden_features:
+        ordered_shapes = [
+            shape
+            for kind, part_id, shape in _ordered_parts(obj, result)
+            if not (kind == "layer" and part_id in hidden_layers)
+            and not (kind == "feature" and part_id in hidden_features)
+        ]
     obj.Shape = Part.makeCompound(ordered_shapes)
+
+
+def _ordered_parts(obj, result):
+    """[(kind, id, shape), ...] of the result's real layer and feature shapes, layers first, in declared order."""
+    parts = []
+    for layer_id in list(getattr(obj, "ConstructionLayerIds", []) or []):
+        shape = _entry_shape(result.layers.get(layer_id))
+        if shape is not None:
+            parts.append(("layer", layer_id, shape))
+    for feature_id in list(getattr(obj, "ConstructionFeatureIds", []) or []):
+        shape = _entry_shape(result.features.get(feature_id))
+        if shape is not None:
+            parts.append(("feature", feature_id, shape))
+    return parts
 
 
 def apply_computed_properties(obj, type_def, result):

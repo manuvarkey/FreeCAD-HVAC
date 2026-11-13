@@ -85,3 +85,36 @@ def test_update_from_airflow_collects_this_network_and_keeps_the_others():
     assert equipment.SupplyFanStatic == pytest.approx(520.0)
     assert equipment.ReturnFanStatic == pytest.approx(110.0)
     assert any("supply minus return" in line for line in equipment.Report)
+
+
+def _marker(name, label):
+    return _Obj(Name=name, Label=label, PropertiesList=["PortProfile"])
+
+
+def test_equipment_ports_are_the_markers_inside_the_part_itself():
+    # New equipment is the App::Part: its own members are its ports.
+    port_b, port_a = _marker("P2", "B"), _marker("P1", "A")
+    body = _Obj(Name="Body", Label="Body", PropertiesList=["Shape"])
+    part = _Obj(Name="Part", Label="AHU", OutListRecursive=[body, port_b, port_a], EquipmentType=eq.HVACEquipment.TYPE)
+    assert eq.model_of(part) is part
+    assert eq.equipment_ports(part) == [port_a, port_b]
+
+
+def test_an_older_equipment_object_reads_its_ports_through_model():
+    port = _marker("P1", "A")
+    model = _Obj(Name="Part", Label="AHU", OutListRecursive=[port])
+    legacy = _Obj(Name="Equipment", Label="Equipment", Model=model, EquipmentType=eq.HVACEquipment.TYPE)
+    assert eq.model_of(legacy) is model
+    assert eq.equipment_ports(legacy) == [port]
+
+
+def test_equipment_of_marker_finds_the_owning_equipment():
+    port = _marker("P1", "A")
+    stray = _marker("P9", "Z")
+    part = _Obj(Name="Part", Label="AHU", OutListRecursive=[port], EquipmentType=eq.HVACEquipment.TYPE)
+    other = _Obj(Name="Box", Label="Box", OutListRecursive=[stray])
+    doc = SimpleNamespace(Objects=[other, part])
+    port.Document = doc
+    stray.Document = doc
+    assert eq.equipment_of_marker(port) is part
+    assert eq.equipment_of_marker(stray) is None

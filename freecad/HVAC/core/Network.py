@@ -29,6 +29,7 @@ from dataclasses import asdict
 
 import FreeCAD
 
+from ..analysis.sizing import SIZE_CHANGE_POLICIES
 from ..core import _construction_schema, _terminal_function
 from ..core.Component import DuctComponent
 from ..core.Junction import DuctJunction, DuctJunctionVirtual
@@ -155,6 +156,8 @@ class DuctNetwork:
         for child in list(getattr(geometry, "OutList", []) or []):
             if not (hvaclib.isDuctSegment(child) or hvaclib.isDuctComponent(child)):
                 continue
+            # Rebuild the displayed compound first (outside any view update), then colour it.
+            _component_appearance.refresh_display_shape(child)
             vobj = getattr(child, "ViewObject", None)
             if vobj is not None:
                 _component_appearance.apply_component_appearance(vobj)
@@ -466,12 +469,21 @@ class DuctNetwork:
                 "App::PropertyEnumeration",
                 "SizeChangePolicy",
                 "HVAC Duct Sizing",
-                "Where Size Ducts may change a duct's size. AtReducers: only at straight nodes, where a reducer "
-                "can go (a duct keeps its size through bends and along the run of a tee). EverySegment: every "
-                "segment is sized for its own flow",
+                "Where Size Ducts may change a duct's size. AtStraightJunctions: wherever air passes straight "
+                "through a junction (in-line nodes and the run of a tee or cross), never through a bend. "
+                "AtInlineNodesOnly: only at in-line two-port nodes (a tee run keeps its size). EverySegment: "
+                "every segment is sized for its own flow. A junction's AllowSizeChange can pin it",
             )
-            obj.SizeChangePolicy = ["AtReducers", "EverySegment"]
-            obj.SizeChangePolicy = "AtReducers"
+            obj.SizeChangePolicy = list(SIZE_CHANGE_POLICIES)
+            obj.SizeChangePolicy = "AtStraightJunctions"
+        elif hasattr(obj, "getEnumerationsOfProperty") and list(
+            obj.getEnumerationsOfProperty("SizeChangePolicy") or []
+        ) != list(SIZE_CHANGE_POLICIES):
+            # A document saved with the old choices (AtReducers / EverySegment): AtReducers now reads
+            # AtStraightJunctions, everything else keeps its value.
+            old = str(obj.SizeChangePolicy)
+            obj.SizeChangePolicy = list(SIZE_CHANGE_POLICIES)
+            obj.SizeChangePolicy = old if old in SIZE_CHANGE_POLICIES else "AtStraightJunctions"
 
         if "TargetVelocity" not in obj.PropertiesList:
             obj.addProperty(

@@ -224,10 +224,14 @@ class SizingSettings:
     default_height_mm: float = 0.0
     balance_tolerance_pa: float = 5.0
     balance_max_iterations: int = 10
-    # "AtReducers": a duct keeps one size from one place a reducer can go to
-    # the next (see sizing.sizing_sections). "EverySegment": every segment
-    # is sized for its own flow (the size steps at every junction).
-    size_change_policy: str = "AtReducers"
+    # Where a duct may change size (see sizing.sizing_sections):
+    # "AtStraightJunctions": at every junction the air passes straight
+    #   through -- in-line nodes (straight, transition, offset) and the run
+    #   of a tee or cross; never through a bend.
+    # "AtInlineNodesOnly": only at in-line two-port nodes; a tee or cross
+    #   run keeps one size.
+    # "EverySegment": every segment is sized for its own flow.
+    size_change_policy: str = "AtStraightJunctions"
     # Suggest an extra reducer where a segment's shared size has at least
     # this many times the area its own flow would need.
     reducer_advice_area_ratio: float = 1.25

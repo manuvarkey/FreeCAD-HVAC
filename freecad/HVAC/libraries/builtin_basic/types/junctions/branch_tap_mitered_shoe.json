@@ -63,7 +63,8 @@
       "prop_type": "App::PropertyInteger",
       "group": "Dimensions",
       "description": "Number of mitre cuts in the branch's lean into the run (1 = a single two-piece joint)",
-      "default": 2
+      "default": 2,
+      "validation": {"minimum": 1}
     },
     {
       "name": "ReverseBranchBend",

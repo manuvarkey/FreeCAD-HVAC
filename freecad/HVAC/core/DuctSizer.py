@@ -211,7 +211,7 @@ class DuctSizer:
             default_roughness_mm=float(getattr(net, "DefaultRoughness", 0.09) or 0.09),
             default_width_mm=float(getattr(net, "DefaultWidth", 0.0) or 0.0),
             default_height_mm=float(getattr(net, "DefaultHeight", 0.0) or 0.0),
-            size_change_policy=str(getattr(net, "SizeChangePolicy", "AtReducers") or "AtReducers"),
+            size_change_policy=str(getattr(net, "SizeChangePolicy", "AtStraightJunctions") or "AtStraightJunctions"),
         )
 
     def apply(self, result):

@@ -960,12 +960,12 @@ def test_bundled_libraries_have_no_unresolved_priority_ties():
 
 
 def test_bundled_builtin_basic_branch_tee_prefers_specific_tee_model():
-    # Rectangular tees keep the edge-aligned radius model as the automatic
-    # default over the center, straight, and broad generic alternatives.
+    # The straight tee is the automatic default: it builds on any duct size,
+    # while the radius tees depend on BranchRadius fitting the node.
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.tee", "Rectangular", _ports(3, "Rectangular"))
     selection = reg.select_type("builtin_basic", request, strict=True)
-    assert selection.type_def.id == "branch_tee_radius_edge"
+    assert selection.type_def.id == "branch_tee_straight"
 
 
 def test_bundled_builtin_basic_branch_wye_prefers_specific_wye_model():
@@ -981,25 +981,30 @@ def test_bundled_smacna_branch_tee_prefers_specific_tee_model():
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular"))
     selection = reg.select_type("smacna", request, strict=True)
-    # The ported builtin_basic tee types outrank the old star-shaped fallback.
-    assert selection.type_def.id == "branch_tee_radius_center"
+    # The ported builtin_basic tee types outrank the old star-shaped fallback; the straight tee comes first.
+    assert selection.type_def.id == "branch_tee_straight"
 
 
-def test_bundled_smacna_rectangular_elbow_prefers_dedicated_rectangular_model():
+def test_bundled_smacna_rectangular_elbow_prefers_the_mitered_then_the_dedicated_rectangular_model():
+    # The mitered elbow is the robust default; among the radius elbows the
+    # rectangular one still comes before the generic one.
     reg = _load_bundled_registry()
     request = _junction_request("through", "through.bend_90", "Rectangular", _ports(2, "Rectangular"))
     selection = reg.select_type("smacna", request, strict=True)
-    assert selection.type_def.id == "through_elbow_rectangular"
+    assert selection.type_def.id == "through_elbow_mitered"
+    lib = reg.get_library("smacna")
+    found = lib.list_types(category="junction", family="through.bend_90", connected_ports=_ports(2, "Rectangular"))
+    ids = [t.id for t in found]
+    assert ids.index("through_elbow_rectangular") < ids.index("through_elbow_generic")
 
 
-def test_bundled_smacna_circular_elbow_uses_generic_elbow_model():
+def test_bundled_smacna_circular_elbow_uses_the_mitered_elbow_model():
     # through_elbow_rectangular only advertises the Rectangular profile, so
-    # a Circular request must still resolve to the generic elbow model, not
-    # be blocked by the rectangular-specific type's higher priority.
+    # a Circular request is not blocked by it and gets the mitered default.
     reg = _load_bundled_registry()
     request = _junction_request("through", "through.bend_90", "Circular", _ports(2, "Circular"))
     selection = reg.select_type("smacna", request, strict=True)
-    assert selection.type_def.id == "through_elbow_generic"
+    assert selection.type_def.id == "through_elbow_mitered"
 
 
 def test_bundled_end_topology_always_falls_back_to_terminal_marker():
@@ -1047,23 +1052,24 @@ def _mixed_ports(n, extra_profile="Rectangular"):
 
 
 def test_bundled_builtin_basic_mixed_profile_branch_reaches_dedicated_tee_model():
-    # The center-aligned radius tee accepts each built-in profile, including
-    # a mixed set of connected ports.
+    # The straight tee accepts each built-in profile, including a mixed set of connected ports.
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.tee", "Mixed", _mixed_ports(3))
     selection = reg.select_type("builtin_basic", request, strict=True)
     assert selection.status == "exact"
-    assert selection.type_def.id == "branch_tee_radius_center"
+    assert selection.type_def.id == "branch_tee_straight"
 
 
-def test_bundled_builtin_basic_radius_tee_selects_alignment_by_profile():
-    reg = _load_bundled_registry()
+def test_bundled_builtin_basic_radius_tee_alignment_follows_profile_in_the_list():
+    # Both radius tees come after the straight default; the edge-aligned one
+    # is offered for rectangular ducts only.
+    lib = _load_bundled_registry().get_library("builtin_basic")
     for profile in ("Rectangular", "Circular", "Oval"):
-        request = _junction_request("branch", "branch.tee", profile, _ports(3, profile))
-        selection = reg.select_type("builtin_basic", request, strict=True)
-        assert selection.status == "exact"
-        expected = "branch_tee_radius_edge" if profile == "Rectangular" else "branch_tee_radius_center"
-        assert selection.type_def.id == expected
+        found = lib.list_types(category="junction", family="branch.tee", connected_ports=_ports(3, profile))
+        ids = [t.id for t in found]
+        assert ids[0] == "branch_tee_straight"
+        assert "branch_tee_radius_center" in ids
+        assert ("branch_tee_radius_edge" in ids) == (profile == "Rectangular")
 
 
 def test_bundled_builtin_basic_mixed_profile_cross_reaches_dedicated_cross_model():
@@ -1075,13 +1081,13 @@ def test_bundled_builtin_basic_mixed_profile_cross_reaches_dedicated_cross_model
     assert selection.type_def.id == "cross_tee_straight"
 
 
-def test_bundled_builtin_basic_double_wye_reaches_the_radius_double_wye():
-    # Two dedicated double-wye models exist; the smooth-radius one has the higher priority.
+def test_bundled_builtin_basic_double_wye_reaches_the_mitered_double_wye():
+    # Two dedicated double-wye models exist; the mitered one (no radius to fit) has the higher priority.
     reg = _load_bundled_registry()
     request = _junction_request("cross", "cross.double_wye", "Circular", _ports(4, "Circular"))
     selection = reg.select_type("builtin_basic", request, strict=True)
     assert selection.status == "exact"
-    assert selection.type_def.id == "cross_double_wye_radius"
+    assert selection.type_def.id == "cross_double_wye_mitered"
 
 
 def test_bundled_builtin_basic_irregular_cross_still_uses_the_generic_cross():
@@ -1215,7 +1221,7 @@ def test_bundled_mixed_profile_fix_does_not_disturb_exact_profile_ranking():
     # capable broad model for a real, single-profile Circular tee.
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.tee", "Circular", _ports(3, "Circular"))
-    for lib_id, expected in (("builtin_basic", "branch_tee_radius_center"), ("smacna", "branch_tee_radius_center")):
+    for lib_id, expected in (("builtin_basic", "branch_tee_straight"), ("smacna", "branch_tee_straight")):
         selection = reg.select_type(lib_id, request, strict=True)
         assert selection.status == "exact"
         assert selection.type_def.id == expected
@@ -1493,12 +1499,12 @@ def test_end_types_are_listed_grouped_by_kind():
 # ----------------------------------------------------------------------
 
 
-def test_bundled_builtin_basic_lateral_tee_defaults_to_the_radius_one():
+def test_bundled_builtin_basic_lateral_tee_defaults_to_the_mitered_one():
     reg = _load_bundled_registry()
     request = _junction_request("branch", "branch.lateral_tee", "Circular", _ports(3, "Circular"))
     selection = reg.select_type("builtin_basic", request, strict=True)
     assert selection.status == "exact"
-    assert selection.type_def.id == "branch_lateral_tee_radius"
+    assert selection.type_def.id == "branch_lateral_tee_mitered"
 
 
 def test_bundled_builtin_basic_lateral_tee_list_offers_all_three_kinds_in_order():
@@ -1506,7 +1512,7 @@ def test_bundled_builtin_basic_lateral_tee_list_offers_all_three_kinds_in_order(
     found = lib.list_types(category="junction", family="branch.lateral_tee", connected_ports=_ports(3, "Circular"))
     ids = [t.id for t in found]
     laterals = [i for i in ids if i.startswith("branch_lateral_tee_")]
-    assert laterals == ["branch_lateral_tee_radius", "branch_lateral_tee_mitered", "branch_lateral_tee_generic"]
+    assert laterals == ["branch_lateral_tee_mitered", "branch_lateral_tee_radius", "branch_lateral_tee_generic"]
 
 
 def test_bundled_builtin_basic_wye_types_are_offered_on_a_bullhead_tee_only():

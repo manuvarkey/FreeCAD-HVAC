@@ -16,7 +16,7 @@
   ],
   "selection": {
     "kind": "model",
-    "priority": 40
+    "priority": 50
   },
   "constraints": {
     "degree": 2
@@ -44,7 +44,8 @@
       "prop_type": "App::PropertyInteger",
       "group": "Dimensions",
       "description": "Number of mitre cuts (1 = a single two-piece joint)",
-      "default": 1
+      "default": 1,
+      "validation": {"minimum": 1}
     }
   ],
   "geometry": {

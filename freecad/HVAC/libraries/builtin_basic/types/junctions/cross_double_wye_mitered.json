@@ -14,7 +14,7 @@
   ],
   "selection": {
     "kind": "model",
-    "priority": 55
+    "priority": 60
   },
   "constraints": {
     "degree": 4

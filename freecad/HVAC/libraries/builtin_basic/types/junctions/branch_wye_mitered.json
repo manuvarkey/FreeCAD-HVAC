@@ -72,7 +72,8 @@
       "prop_type": "App::PropertyInteger",
       "group": "Dimensions",
       "description": "Number of internal mitre joints in each branch bend",
-      "default": 2
+      "default": 2,
+      "validation": {"minimum": 1}
     }
   ],
   "geometry": {

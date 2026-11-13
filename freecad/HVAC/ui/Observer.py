@@ -2280,13 +2280,14 @@ MONOSPACE_CHAR_WIDTH_RATIO = 0.6
 
 def buildFlowRateLabelCoinNode(port, text, color, row_index=0, scale=2.0, top_extend=0.0):
     """
-    Build one Coin node: a world-space text label lying flat in the same
-    plane as the port's own highlight plane (see buildPortHighlightCoinNode
-    -- same port dict, same scale/top_extend, so the two line up exactly),
-    sized to 15% of that plane's own height (shrunk further if needed so
-    it can't overflow past the plane's own edges) and anchored just inside
-    its top-right corner, as seen by a viewer facing the terminal (standing
-    in the open space the terminal faces, looking toward the duct). Used by
+    Build one Coin node: a world-space text label at the port's own
+    highlight plane (see buildPortHighlightCoinNode -- same port dict, same
+    scale/top_extend, so the two line up exactly), sized to 15% of that
+    plane's own height (shrunk further if needed so it can't overflow past
+    the plane's own edges) and anchored just inside its top-right corner,
+    as seen by a viewer facing the terminal. The text itself always turns
+    to face the camera, upright on screen (SoVRMLBillboard), so it stays
+    readable from any view direction. Used by
     TerminalFlowRateObserver/AirflowResultObserver to print result values
     right on a port's own plane, so the value itself is readable at a
     glance instead of only being implied by the plane/arrow color.
@@ -2327,15 +2328,9 @@ def buildFlowRateLabelCoinNode(port, text, color, row_index=0, scale=2.0, top_ex
     if available_width > 0.0 and estimated_width > available_width:
         text_height *= available_width / estimated_width
 
-    # Anchor just inside the plane's own top-right corner (from the
-    # viewer's own point of view), each further row_index stacked one
-    # fixed row_height further down, so the label(s) read inward within
-    # the plane's bounds rather than drifting past its edges.
-    anchor = (
-        origin
-        + x_dir * (half_w - margin)
-        + y_dir * (half_h_top - margin - row_height * (row_index + 1))
-    )
+    # Anchor row 0 just inside the plane's own top-right corner (from the
+    # viewer's own point of view); further rows stack below it.
+    anchor = origin + x_dir * (half_w - margin) + y_dir * (half_h_top - margin - row_height)
 
     root = coin.SoSeparator()
 
@@ -2343,19 +2338,40 @@ def buildFlowRateLabelCoinNode(port, text, color, row_index=0, scale=2.0, top_ex
     mat.diffuseColor.setValue(*color)
     root.addChild(mat)
 
-    transform = coin.SoTransform()
-    transform.translation.setValue(anchor.x, anchor.y, anchor.z)
-    transform.rotation.setValue(*placement.Rotation.Q)
-    root.addChild(transform)
+    billboard_type = getattr(coin, "SoVRMLBillboard", None)
+    if billboard_type is not None:
+        # The text turns to face the camera, upright on screen, whatever the
+        # view direction (a billboard with no rotation axis aligns its local Y
+        # with the viewer's up). It keeps its size in mm, so it still scales
+        # with the plane it labels. Rows stack downward on screen, so they
+        # never fold onto each other when the plane is seen edge-on.
+        translation = coin.SoTranslation()
+        translation.translation.setValue(anchor.x, anchor.y, anchor.z)
+        root.addChild(translation)
+        billboard = billboard_type()
+        billboard.axisOfRotation.setValue(0.0, 0.0, 0.0)
+        root.addChild(billboard)
+        parent = billboard
+        row_offset = coin.SoTranslation()
+        row_offset.translation.setValue(0.0, -row_height * row_index, 0.0)
+        parent.addChild(row_offset)
+    else:
+        # Fallback without billboard support: lie flat in the plane, as before.
+        flat_anchor = anchor - y_dir * (row_height * row_index)
+        transform = coin.SoTransform()
+        transform.translation.setValue(flat_anchor.x, flat_anchor.y, flat_anchor.z)
+        transform.rotation.setValue(*placement.Rotation.Q)
+        root.addChild(transform)
+        parent = root
 
     font = coin.SoFont()
     font.size.setValue(text_height)
-    root.addChild(font)
+    parent.addChild(font)
 
     text_node = coin.SoText3()
     text_node.string.setValue(text_str)
     text_node.justification = coin.SoText3.RIGHT
-    root.addChild(text_node)
+    parent.addChild(text_node)
 
     return root
 

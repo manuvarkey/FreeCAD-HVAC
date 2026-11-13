@@ -14,7 +14,13 @@ def generate(context):
     radius = float(p.get("CenterlineRadius", 0.0) or 0.0)
     if radius <= 1.0e-7:
         radius = 0.6 * size
-    radius = max(radius, 0.5 * size)
+    # Below half the size plus the wall the inside of the bend (or of a wall
+    # layer around it) folds over; keep a small clearance on top.
+    wall = sum(
+        float(p.get(getattr(layer, "thickness_property", None) or "", 0.0) or 0.0)
+        for layer in context.get("construction_layers") or []
+    )
+    radius = max(radius, 0.5 * size + wall + max(1.0, 0.01 * size))
     route = api.make_elbow_path(ports[0], ports[1], radius)
     # The transverse_flange feature (shared:features) mounts here,
     # not on the raw connected ports -- those sit further back, before the

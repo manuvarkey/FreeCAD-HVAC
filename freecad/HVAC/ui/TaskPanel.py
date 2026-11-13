@@ -1485,6 +1485,60 @@ def _resolveSelectableObjects(obj):
     return [obj]
 
 
+def _network_elements(network_obj):
+    """Every segment, junction and component of a network (what a results warning may name)."""
+    proxy = getattr(network_obj, "Proxy", None)
+    if proxy is None:
+        return []
+    objects = list(proxy.collectSegmentObjects().values()) + list(proxy.collectJunctionObjects().values())
+    for components in proxy.collectComponentObjects().values():
+        objects.extend(components)
+    return objects
+
+
+def _select_objects(objs):
+    """Replace the 3D selection with `objs` (a junction selects its fittings, see _resolveSelectableObjects)."""
+    Gui.Selection.clearSelection()
+    for obj in objs:
+        for target in _resolveSelectableObjects(obj):
+            try:
+                Gui.Selection.addSelection(target.Document.Name, target.Name)
+            except Exception:
+                pass
+
+
+def _build_warnings_box(title, warnings, network_obj):
+    """
+    A "Warnings" group whose element references (duct, junction and fitting
+    numbers or labels) are links: clicking one selects that object in the
+    3D view and the tree. One label per warning, so each wraps on its own.
+    """
+    import html
+
+    from ..core import _analysis_adapter
+
+    index = _analysis_adapter.network_element_index(_network_elements(network_obj))
+    by_name = {obj.Name: obj for obj in index.values()}
+
+    box = QtWidgets.QGroupBox(title)
+    layout = QtWidgets.QVBoxLayout(box)
+    for warning in warnings:
+        # Step 1: escape the plain text and wrap each named element in a link carrying its object name.
+        parts = []
+        for piece, obj in _analysis_adapter.link_spans(warning, index):
+            text = html.escape(piece)
+            parts.append('<a href="{}">{}</a>'.format(html.escape(obj.Name), text) if obj is not None else text)
+        # Step 2: a rich-text label that hands link clicks to us instead of opening a browser.
+        label = QtWidgets.QLabel("&#8226; " + "".join(parts))
+        label.setWordWrap(True)
+        label.setTextFormat(QtCore.Qt.RichText)
+        label.setTextInteractionFlags(QtCore.Qt.LinksAccessibleByMouse | QtCore.Qt.TextSelectableByMouse)
+        label.setOpenExternalLinks(False)
+        label.linkActivated.connect(lambda name, objs=by_name: _select_objects([objs[name]] if name in objs else []))
+        layout.addWidget(label)
+    return box
+
+
 class _ResultsSelectionSync:
     """
     Two-way sync between one or more results tables' row selection and
@@ -1731,11 +1785,10 @@ class TaskPanelAirflowResults:
         self.airflow_result_observer.setResult(result)
 
         if result.warnings:
-            warn_box = QtWidgets.QGroupBox(translate("HVAC_CalculateAirflow", "Warnings"))
-            warn_layout = QtWidgets.QVBoxLayout(warn_box)
-            warn_label = QtWidgets.QLabel("\n".join(result.warnings))
-            warn_label.setWordWrap(True)
-            warn_layout.addWidget(warn_label)
+            # Element references in each warning are links that select the element.
+            warn_box = _build_warnings_box(
+                translate("HVAC_CalculateAirflow", "Warnings"), result.warnings, self.network_obj
+            )
             self.results_layout.addWidget(warn_box)
 
         if not result.components:
@@ -2008,6 +2061,11 @@ class TaskPanelSizeDucts:
         ("StaticRegain", "Static Regain"),
         ("PressureBalancedStaticRegain", "Pressure-Balanced Static Regain"),
     ]
+    SIZE_CHANGE_POLICIES = [
+        ("AtStraightJunctions", "At straight-through junctions"),
+        ("AtInlineNodesOnly", "At in-line nodes only"),
+        ("EverySegment", "Every segment"),
+    ]
     RECTANGULAR_SIZING_MODES = [
         ("FixedAspectRatio", "Fixed Aspect Ratio"),
         ("FixedHeight", "Fixed Height"),
@@ -2104,6 +2162,24 @@ class TaskPanelSizeDucts:
         grid.addWidget(self.minimum_velocity, row, 1)
         row += 1
 
+        # Where a duct may change size; the tooltip spells out each choice.
+        grid.addWidget(QtWidgets.QLabel(translate("HVAC_SizeDucts", "Size changes:")), row, 0)
+        self.size_change_policy_combo = QtWidgets.QComboBox()
+        for value, label in self.SIZE_CHANGE_POLICIES:
+            self.size_change_policy_combo.addItem(translate("HVAC_SizeDucts", label), value)
+        self.size_change_policy_combo.setToolTip(
+            translate(
+                "HVAC_SizeDucts",
+                "At straight-through junctions: a duct may change size wherever air passes straight through a "
+                "junction (straight, transition and offset nodes, and the run of a tee or cross); it keeps its "
+                "size through bends.\nAt in-line nodes only: as above, but a tee or cross run keeps one size.\n"
+                "Every segment: each segment is sized for its own flow.\n"
+                "A junction's AllowSizeChange property can pin it to one size.",
+            )
+        )
+        grid.addWidget(self.size_change_policy_combo, row, 1)
+        row += 1
+
         grid.addWidget(QtWidgets.QLabel(translate("HVAC_SizeDucts", "Rectangular sizing mode:")), row, 0)
         self.rectangular_sizing_mode_combo = QtWidgets.QComboBox()
         for value, label in self.RECTANGULAR_SIZING_MODES:
@@ -2142,6 +2218,10 @@ class TaskPanelSizeDucts:
         self.static_regain_factor.setValue(float(getattr(net, "StaticRegainFactor", 0.75) or 0.75))
         self.minimum_velocity.setValue(float(getattr(net, "MinimumVelocity", 2.5) or 2.5))
 
+        policy = str(getattr(net, "SizeChangePolicy", "AtStraightJunctions") or "AtStraightJunctions")
+        idx = self.size_change_policy_combo.findData(policy)
+        self.size_change_policy_combo.setCurrentIndex(idx if idx >= 0 else 0)
+
         mode = str(getattr(net, "RectangularSizingMode", "FixedAspectRatio") or "FixedAspectRatio")
         idx = self.rectangular_sizing_mode_combo.findData(mode)
         self.rectangular_sizing_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
@@ -2173,6 +2253,8 @@ class TaskPanelSizeDucts:
         net.TargetFrictionRate = self.target_friction_rate.value()
         net.StaticRegainFactor = self.static_regain_factor.value()
         net.MinimumVelocity = self.minimum_velocity.value()
+        if "SizeChangePolicy" in net.PropertiesList:
+            net.SizeChangePolicy = self.size_change_policy_combo.currentData()
         net.RectangularSizingMode = self.rectangular_sizing_mode_combo.currentData()
         net.TargetAspectRatio = self.target_aspect_ratio.value()
         net.SizeRoundingIncrement = self.size_rounding_increment.value()
@@ -2208,11 +2290,8 @@ class TaskPanelSizeDucts:
         self.selection_sync.clearTables()
 
         if result.warnings:
-            warn_box = QtWidgets.QGroupBox(translate("HVAC_SizeDucts", "Warnings"))
-            warn_layout = QtWidgets.QVBoxLayout(warn_box)
-            warn_label = QtWidgets.QLabel("\n".join(result.warnings))
-            warn_label.setWordWrap(True)
-            warn_layout.addWidget(warn_label)
+            # Element references in each warning are links that select the element.
+            warn_box = _build_warnings_box(translate("HVAC_SizeDucts", "Warnings"), result.warnings, self.network_obj)
             self.results_layout.addWidget(warn_box)
 
         info = QtWidgets.QLabel(
@@ -2306,4 +2385,431 @@ class TaskPanelSizeDucts:
     def reject(self):
         self.flow_arrow_observer.stop()
         self.selection_sync.stop()
+        return True
+
+
+# =================================================
+# Port containers: custom fittings and equipment
+# =================================================
+
+
+def selected_planar_faces():
+    """
+    [(body, face_name), ...] for every face picked in the 3D view, with the
+    selection resolved through any App::Part / link to the body that owns
+    the face. Used by "Add HVAC Port" and the port panel.
+    """
+    faces = []
+    for sel in Gui.Selection.getSelectionEx("", 0) or []:
+        owner = sel.Object
+        for sub in sel.SubElementNames or []:
+            face_name = sub.split(".")[-1]
+            if not face_name.startswith("Face"):
+                continue
+            body = owner
+            if "." in sub:
+                resolved = owner.getSubObject(sub, retType=1)
+                body = resolved if resolved is not None else owner
+            faces.append((body, face_name))
+    return faces
+
+
+class PortOffsetDialog(QtWidgets.QDialog):
+    """
+    Asked before a port is made: where on the face the port goes, as an X/Y
+    offset from the centre of the opening (X along the opening's width, Y
+    across it, both in the face plane), and an optional name.
+    """
+
+    def __init__(self, face_text, parent=None):
+        super().__init__(parent or Gui.getMainWindow())
+        self.setWindowTitle(translate("HVAC_AddCustomPort", "Add HVAC Port"))
+        layout = QtWidgets.QFormLayout(self)
+        layout.addRow(QtWidgets.QLabel(face_text))
+        self.offset_x = _length_spin_box()
+        self.offset_y = _length_spin_box()
+        self.name = QtWidgets.QLineEdit()
+        layout.addRow(translate("HVAC_AddCustomPort", "Offset X from face centre:"), self.offset_x)
+        layout.addRow(translate("HVAC_AddCustomPort", "Offset Y from face centre:"), self.offset_y)
+        layout.addRow(translate("HVAC_AddCustomPort", "Name (optional):"), self.name)
+        hint = QtWidgets.QLabel(
+            translate(
+                "HVAC_AddCustomPort",
+                "X runs along the width of the opening, Y across it, both in the plane of the face. "
+                "0, 0 puts the port on the centre of the opening.",
+            )
+        )
+        hint.setWordWrap(True)
+        layout.addRow(hint)
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def values(self):
+        return self.offset_x.value(), self.offset_y.value(), self.name.text().strip()
+
+
+def _length_spin_box(value=0.0):
+    box = QtWidgets.QDoubleSpinBox()
+    box.setRange(-1.0e6, 1.0e6)
+    box.setDecimals(1)
+    box.setSingleStep(10.0)
+    box.setSuffix(" mm")
+    box.setValue(float(value))
+    return box
+
+
+class TaskPanelPortContainer:
+    """
+    Create and edit the ports of an App::Part: an HVAC equipment's ports
+    (kind "equipment", grouped by what each port does) or a custom fitting's
+    (kind "fitting"). The same panel opens again later to edit them.
+
+    - The tree lists the ports; picking one selects its marker in the 3D
+      view and loads it into "Selected port" for renaming, moving (X/Y from
+      the face centre), changing its function, or removing it.
+    - "Add port" makes a port on the face picked in the 3D view, at the
+      given X/Y offset from the centre of the opening; for equipment, of
+      the kind picked in the tree or in the Function list.
+    - Equipment: its internal pressure drop. Custom fitting: use it at a
+      junction (that junction's fitting then takes this geometry).
+    """
+
+    def __init__(self, container, kind="equipment"):
+        from ..core import Equipment, _custom_fitting
+
+        self.container = container
+        self.kind = kind
+        self.doc = container.Document
+        self._custom_fitting = _custom_fitting
+        self._equipment = Equipment
+
+        self.form = QtWidgets.QWidget()
+        title = "Equipment" if kind == "equipment" else "Custom Fitting"
+        self.form.setWindowTitle(translate("HVAC_PortContainer", title) + ": " + container.Label)
+        layout = QtWidgets.QVBoxLayout(self.form)
+
+        # Step 1: the port list.
+        self.tree = QtWidgets.QTreeWidget()
+        self.tree.setColumnCount(5)
+        self.tree.setHeaderLabels(
+            [translate("HVAC_PortContainer", text) for text in ("Port", "Profile", "Size", "X", "Y")]
+        )
+        self.tree.itemSelectionChanged.connect(self._onTreeSelection)
+        layout.addWidget(self.tree)
+
+        # Step 2: adding a port on the face picked in the 3D view.
+        add_box = QtWidgets.QGroupBox(translate("HVAC_PortContainer", "Add port"))
+        add_form = QtWidgets.QFormLayout(add_box)
+        self.face_label = QtWidgets.QLabel()
+        self.face_label.setWordWrap(True)
+        add_form.addRow(self.face_label)
+        self.add_function = self._functionCombo()
+        if self.add_function is not None:
+            add_form.addRow(translate("HVAC_PortContainer", "Function:"), self.add_function)
+        self.add_name = QtWidgets.QLineEdit()
+        add_form.addRow(translate("HVAC_PortContainer", "Name (optional):"), self.add_name)
+        self.add_x = _length_spin_box()
+        self.add_y = _length_spin_box()
+        add_form.addRow(translate("HVAC_PortContainer", "Offset X from face centre:"), self.add_x)
+        add_form.addRow(translate("HVAC_PortContainer", "Offset Y from face centre:"), self.add_y)
+        self.add_button = QtWidgets.QPushButton(translate("HVAC_PortContainer", "Add Port"))
+        self.add_button.clicked.connect(self._addPort)
+        add_form.addRow(self.add_button)
+        layout.addWidget(add_box)
+
+        # Step 3: editing the port picked in the tree.
+        edit_box = QtWidgets.QGroupBox(translate("HVAC_PortContainer", "Selected port"))
+        edit_form = QtWidgets.QFormLayout(edit_box)
+        self.edit_name = QtWidgets.QLineEdit()
+        edit_form.addRow(translate("HVAC_PortContainer", "Name:"), self.edit_name)
+        self.edit_function = self._functionCombo()
+        if self.edit_function is not None:
+            edit_form.addRow(translate("HVAC_PortContainer", "Function:"), self.edit_function)
+        self.edit_x = _length_spin_box()
+        self.edit_y = _length_spin_box()
+        edit_form.addRow(translate("HVAC_PortContainer", "Offset X from face centre:"), self.edit_x)
+        edit_form.addRow(translate("HVAC_PortContainer", "Offset Y from face centre:"), self.edit_y)
+        buttons = QtWidgets.QHBoxLayout()
+        self.apply_button = QtWidgets.QPushButton(translate("HVAC_PortContainer", "Apply"))
+        self.apply_button.clicked.connect(self._applyEdit)
+        self.remove_button = QtWidgets.QPushButton(translate("HVAC_PortContainer", "Remove"))
+        self.remove_button.clicked.connect(self._removePort)
+        buttons.addWidget(self.apply_button)
+        buttons.addWidget(self.remove_button)
+        edit_form.addRow(buttons)
+        self.edit_box = edit_box
+        layout.addWidget(edit_box)
+
+        # Step 4: the container's own options.
+        if kind == "equipment":
+            options = QtWidgets.QGroupBox(translate("HVAC_PortContainer", "Equipment"))
+            options_form = QtWidgets.QFormLayout(options)
+            self.pressure_drop = QtWidgets.QDoubleSpinBox()
+            self.pressure_drop.setRange(0.0, 1.0e5)
+            self.pressure_drop.setDecimals(1)
+            self.pressure_drop.setSuffix(" Pa")
+            self.pressure_drop.setValue(float(getattr(container, "InternalPressureDrop", 0.0) or 0.0))
+            self.pressure_drop.setToolTip(
+                translate("HVAC_PortContainer", "Pressure drop inside the unit (coils, filters, casing)")
+            )
+            self.pressure_drop.valueChanged.connect(self._setPressureDrop)
+            options_form.addRow(translate("HVAC_PortContainer", "Internal pressure drop:"), self.pressure_drop)
+            hint = QtWidgets.QLabel(
+                translate(
+                    "HVAC_PortContainer",
+                    "Then select a port marker and a duct end and use Connect to Equipment.",
+                )
+            )
+            hint.setWordWrap(True)
+            options_form.addRow(hint)
+            layout.addWidget(options)
+        else:
+            options = QtWidgets.QGroupBox(translate("HVAC_PortContainer", "Use at a junction"))
+            options_form = QtWidgets.QFormLayout(options)
+            self.junction_combo = QtWidgets.QComboBox()
+            options_form.addRow(translate("HVAC_PortContainer", "Junction:"), self.junction_combo)
+            self.use_button = QtWidgets.QPushButton(translate("HVAC_PortContainer", "Use This Fitting There"))
+            self.use_button.clicked.connect(self._useAtJunction)
+            options_form.addRow(self.use_button)
+            layout.addWidget(options)
+
+        self._refresh()
+        self._refreshFace()
+        Gui.Selection.addObserver(self)
+
+    # -- helpers ------------------------------------------------------------
+
+    def _functionCombo(self):
+        if self.kind != "equipment":
+            return None
+        combo = QtWidgets.QComboBox()
+        for value, label in self.FUNCTION_LABELS:
+            combo.addItem(translate("HVAC_PortContainer", label), value)
+        return combo
+
+    FUNCTION_LABELS = [
+        ("SupplyOutlet", "Supply outlet"),
+        ("ReturnInlet", "Return inlet"),
+        ("OutdoorAirInlet", "Outdoor air inlet"),
+        ("ExhaustOutlet", "Exhaust outlet"),
+    ]
+    GROUP_LABELS = {
+        "SupplyOutlet": "Supply outlets",
+        "ReturnInlet": "Return inlets",
+        "OutdoorAirInlet": "Outdoor air inlets",
+        "ExhaustOutlet": "Exhaust outlets",
+    }
+
+    def _ports(self):
+        return self._custom_fitting.container_ports(self.container)
+
+    def _selectedMarker(self):
+        items = self.tree.selectedItems()
+        if not items:
+            return None
+        name = items[0].data(0, QtCore.Qt.UserRole)
+        return self.doc.getObject(name) if name else None
+
+    def _refresh(self, select_name=None):
+        """Rebuild the tree from the container's markers (grouped by function for equipment)."""
+        self.tree.blockSignals(True)
+        self.tree.clear()
+        groups = {}
+        if self.kind == "equipment":
+            for value, _label in self.FUNCTION_LABELS:
+                item = QtWidgets.QTreeWidgetItem([translate("HVAC_PortContainer", self.GROUP_LABELS[value])])
+                item.setData(1, QtCore.Qt.UserRole, value)
+                self.tree.addTopLevelItem(item)
+                groups[value] = item
+        else:
+            groups[""] = QtWidgets.QTreeWidgetItem([translate("HVAC_PortContainer", "Ports")])
+            self.tree.addTopLevelItem(groups[""])
+        selected = None
+        for marker in self._ports():
+            key = str(getattr(marker, "EquipmentPortFunction", "SupplyOutlet")) if self.kind == "equipment" else ""
+            parent = groups.get(key) or next(iter(groups.values()))
+            item = QtWidgets.QTreeWidgetItem(
+                [
+                    str(getattr(marker, "PortName", "") or marker.Label),
+                    str(getattr(marker, "PortProfile", "")),
+                    self._custom_fitting.port_size_text(marker),
+                    "{:.1f}".format(float(getattr(marker, "PortOffsetX", 0.0) or 0.0)),
+                    "{:.1f}".format(float(getattr(marker, "PortOffsetY", 0.0) or 0.0)),
+                ]
+            )
+            item.setData(0, QtCore.Qt.UserRole, marker.Name)
+            parent.addChild(item)
+            if marker.Name == select_name:
+                selected = item
+        self.tree.expandAll()
+        for column in range(self.tree.columnCount()):
+            self.tree.resizeColumnToContents(column)
+        if selected is not None:
+            selected.setSelected(True)
+        self.tree.blockSignals(False)
+        self._loadSelected()
+        if self.kind == "fitting":
+            self._refreshJunctions()
+
+    def _loadSelected(self):
+        marker = self._selectedMarker()
+        self.edit_box.setEnabled(marker is not None)
+        if marker is None:
+            return
+        self.edit_name.setText(str(getattr(marker, "PortName", "") or ""))
+        self.edit_x.setValue(float(getattr(marker, "PortOffsetX", 0.0) or 0.0))
+        self.edit_y.setValue(float(getattr(marker, "PortOffsetY", 0.0) or 0.0))
+        if self.edit_function is not None:
+            index = self.edit_function.findData(str(getattr(marker, "EquipmentPortFunction", "SupplyOutlet")))
+            self.edit_function.setCurrentIndex(max(index, 0))
+
+    def _refreshFace(self):
+        faces = selected_planar_faces()
+        if faces:
+            body, face_name = faces[0]
+            self.face_label.setText(translate("HVAC_PortContainer", "Face: {}").format(body.Label + "." + face_name))
+        else:
+            self.face_label.setText(
+                translate("HVAC_PortContainer", "Pick a planar end face of the model in the 3D view.")
+            )
+        self.add_button.setEnabled(bool(faces))
+
+    def _refreshJunctions(self):
+        """Every junction of every network in the document, with how many ports it has."""
+        from ..utils import hvaclib
+
+        count = len(self._ports())
+        self.junction_combo.clear()
+        for obj in self.doc.Objects:
+            if not hvaclib.isDuctJunction(obj) or getattr(obj, "Topology", "") in ("", "end"):
+                continue
+            degree = int(getattr(obj, "Degree", 0) or 0)
+            mark = "" if degree == count else "  ({} ports, fitting has {})".format(degree, count)
+            self.junction_combo.addItem("{} {}{}".format(getattr(obj, "Number", "") or "", obj.Label, mark), obj.Name)
+
+    # -- selection observer (FreeCAD calls these) ------------------------------
+
+    def addSelection(self, doc, obj, sub, pnt):
+        self._refreshFace()
+
+    def removeSelection(self, doc, obj, sub):
+        self._refreshFace()
+
+    def setSelection(self, doc):
+        self._refreshFace()
+
+    def clearSelection(self, doc):
+        self._refreshFace()
+
+    # -- actions ------------------------------------------------------------
+
+    def _onTreeSelection(self):
+        items = self.tree.selectedItems()
+        # Picking a group header for equipment picks the kind of port the next "Add Port" makes.
+        if items and self.add_function is not None and items[0].parent() is None:
+            index = self.add_function.findData(items[0].data(1, QtCore.Qt.UserRole))
+            if index >= 0:
+                self.add_function.setCurrentIndex(index)
+        marker = self._selectedMarker()
+        if marker is not None:
+            Gui.Selection.clearSelection()
+            Gui.Selection.addSelection(self.doc.Name, marker.Name)
+        self._loadSelected()
+
+    def _addPort(self):
+        faces = selected_planar_faces()
+        if not faces:
+            return
+        body, face_name = faces[0]
+        self.doc.openTransaction("Add HVAC Port")
+        try:
+            marker = self._custom_fitting.add_port(
+                body,
+                face_name,
+                container=self.container,
+                name=self.add_name.text().strip(),
+                offset_x=self.add_x.value(),
+                offset_y=self.add_y.value(),
+            )
+            if self.kind == "equipment":
+                self._equipment.ensure_equipment_port(marker, self.add_function.currentData())
+        except Exception as e:
+            self.doc.abortTransaction()
+            FreeCAD.Console.PrintWarning("HVAC - Add port on {}.{}: {}\n".format(body.Label, face_name, e))
+            return
+        self.doc.commitTransaction()
+        self.doc.recompute()
+        self.add_name.clear()
+        self._refresh(select_name=marker.Name)
+
+    def _applyEdit(self):
+        marker = self._selectedMarker()
+        if marker is None:
+            return
+        self.doc.openTransaction("Edit HVAC Port")
+        try:
+            marker.PortName = self.edit_name.text().strip()
+            if self.edit_function is not None:
+                self._equipment.ensure_equipment_port(marker, self.edit_function.currentData())
+            self._custom_fitting.set_port_offset(marker, self.edit_x.value(), self.edit_y.value())
+        finally:
+            self.doc.commitTransaction()
+        self.doc.recompute()
+        self._refresh(select_name=marker.Name)
+
+    def _removePort(self):
+        marker = self._selectedMarker()
+        if marker is None:
+            return
+        self.doc.openTransaction("Remove HVAC Port")
+        try:
+            self._custom_fitting.remove_port(marker)
+        finally:
+            self.doc.commitTransaction()
+        self.doc.recompute()
+        self._refresh()
+
+    def _setPressureDrop(self, value):
+        if "InternalPressureDrop" in self.container.PropertiesList:
+            self.container.InternalPressureDrop = float(value)
+
+    def _useAtJunction(self):
+        """Make the picked junction's Primary fitting take this container's geometry."""
+        junction = self.doc.getObject(self.junction_combo.currentData() or "")
+        if junction is None:
+            return
+        primary = junction.Proxy.getPrimaryComponent()
+        if primary is None or "GeometrySource" not in primary.PropertiesList:
+            FreeCAD.Console.PrintWarning("HVAC - '{}' has no fitting to replace\n".format(junction.Label))
+            return
+        self.doc.openTransaction("Use Custom Fitting")
+        try:
+            primary.CustomFitting = self.container
+            primary.GeometrySource = "Custom"
+        finally:
+            self.doc.commitTransaction()
+        self.doc.recompute()
+        FreeCAD.Console.PrintMessage(
+            "HVAC - '{}' now uses custom fitting '{}'\n".format(junction.Label, self.container.Label)
+        )
+
+    # -- task dialog -----------------------------------------------------------
+
+    def getStandardButtons(self):
+        return QtWidgets.QDialogButtonBox.Close
+
+    def _stop(self):
+        try:
+            Gui.Selection.removeObserver(self)
+        except Exception:
+            pass
+
+    def accept(self):
+        self._stop()
+        return True
+
+    def reject(self):
+        self._stop()
         return True

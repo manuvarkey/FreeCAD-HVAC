@@ -16,7 +16,7 @@ only called from here with the offset's own property values.
 """
 
 from . import transitions
-from ._common import _props
+from ._common import _props, _wall_thickness
 
 # Offset property -> the property name the shared transition geometry reads.
 _PROPERTY_MAP = {"OffsetLength": "TransitionLength", "OffsetRadius": "TransitionRadius"}
@@ -37,7 +37,9 @@ def _with_derived(context, result, radiussed=False):
     """Replace the transition's computed properties with the offset's own (ROADMAP 6.1)."""
     mapped = _as_transition_context(context)
     api = mapped["hvac_api"]
-    dims = transitions.offset_dimensions(api, list(api.connected_ports(mapped)), _props(mapped), radiussed)
+    dims = transitions.offset_dimensions(
+        api, list(api.connected_ports(mapped)), _props(mapped), radiussed, _wall_thickness(mapped)
+    )
     computed = {"BodyLength": dims["body_length"], "OffsetAngle": dims["offset_angle"]}
     if radiussed:
         computed["ActualRadius"] = dims["actual_radius"]

@@ -930,7 +930,7 @@ class DuctComponentViewProvider:
         if _component_appearance.is_trigger_property(obj, prop):
             vobj = getattr(self, "ViewObject", None)
             if vobj is not None:
-                _component_appearance.apply_component_appearance(vobj)
+                _component_appearance.apply_component_appearance(vobj, from_view_update=True)
 
     def getIcon(self):
         return hvaclib.get_icon_path("DuctsIcon.svg")

@@ -14,11 +14,13 @@ from ._common import (
     _junction_shape_minimums,
     _junction_trims,
     _loft,
+    _min_bend_radius,
     _mitered_bend,
     _port_axis_point,
     _props,
     _size,
     _trimmed,
+    _wall_thickness,
 )
 
 
@@ -52,14 +54,47 @@ def _wye_mitered_branch_shapes(api, branch, split_face, route, main_center, cuts
     return split_shape, bend_shape, route_trims[0]
 
 
+# A mitered wye's gores fuse cleanly for most radii, but OpenCascade fails on a
+# few isolated ones. The layout then retries with the radius grown by this
+# step, up to _WYE_RADIUS_ATTEMPTS times in all.
+_WYE_RADIUS_STEP = 0.03
+_WYE_RADIUS_ATTEMPTS = 5
+
+
 def _wye_mitered_layout(context):
-    """Lay out two split-profile faceted bends entering one common leg."""
+    """
+    Lay out two split-profile faceted bends entering one common leg.
+
+    The air space and the outside of the wall are fused here already: if
+    either does not come out as one valid solid, the layout is redone with
+    a slightly larger bend radius.
+    Doing it in the layout (not in the build) keeps measure_wye_mitered()
+    and build_wye_mitered() on the same radius, so their trims agree.
+    """
+    api = context["hvac_api"]
+    # The air space and the outside of the wall are the two envelopes most likely to fail.
+    offsets = sorted({0.0, _wall_thickness(context)})
+    layout = None
+    for attempt in range(_WYE_RADIUS_ATTEMPTS):
+        layout = _wye_mitered_layout_at(context, 1.0 + _WYE_RADIUS_STEP * attempt)
+        if all(_is_one_valid_solid(api, _wye_mitered_envelope(api, layout, offset)) for offset in offsets):
+            break
+    return layout
+
+
+def _is_one_valid_solid(api, shape):
+    validation = api.validate(shape, require_solid=True)
+    return bool(validation["valid"]) and validation["solid_count"] == 1
+
+
+def _wye_mitered_layout_at(context, radius_scale):
+    """One mitered wye layout, with the bend radius multiplied by `radius_scale`."""
     api = context["hvac_api"]
     p = _props(context)
     cuts = max(int(p.get("NumberOfCuts", 2) or 2), 1)
 
     # Reuse the same split plane and feasible elbow paths as the radius wye.
-    ports, center, main_center, split_routes = _wye_split_route_layout(context)
+    ports, center, main_center, split_routes = _wye_split_route_layout(context, radius_scale)
     main = ports[0]
     main_direction = api.unit(api.port_direction(main))
     routes = []
@@ -114,40 +149,43 @@ def measure_wye_mitered(context):
     return api.build_trim_rec_from_port_lengths(list(zip(layout["ports"], layout["trims"])))
 
 
-def build_wye_mitered(context):
-    """Mitered wye with each non-main branch entering the common leg through a faceted bend."""
-    api = context["hvac_api"]
-    layout = _wye_mitered_layout(context)
-
-    ports = layout["ports"]
+def _wye_mitered_envelope(api, layout, offset):
+    """The mitered wye's whole outer boundary grown by `offset`: main leg, split halves and bends, fused."""
     main = layout["main"]
     main_center = layout["main_center"]
     trims = layout["trims"]
-
     main_end = _trimmed(api, main, trims[0])
     main_reach = api.port_position(main_end) - api.port_position(main_center)
     main_tolerance = max(api.EPS, 1.0e-6 * _size(api, main))
 
-    def envelope(offset):
-        shape = None
-        if main_reach.Length > main_tolerance:
-            shape = _loft(api, [main_end, main_center], offset, ruled=True)
+    shape = None
+    if main_reach.Length > main_tolerance:
+        shape = _loft(api, [main_end, main_center], offset, ruled=True)
 
-        for route in layout["routes"]:
-            branch = route["branch"]
-            # The layout already built the air-space pieces to measure them;
-            # only a wall envelope (offset > 0) needs them built again, larger.
-            if offset > 0.0:
-                split_shape, bend_shape, _ = _wye_mitered_branch_shapes(
-                    api, branch, route["split_face"], route["route"], main_center, layout["cuts"], offset
-                )
-            else:
-                split_shape, bend_shape = route["split_shape"], route["bend_shape"]
-            bend_shape = _extend_leg(
-                api, bend_shape, branch, route["branch_trim"], trims[route["branch_index"]], offset
+    for route in layout["routes"]:
+        branch = route["branch"]
+        # The layout already built the air-space pieces to measure them;
+        # only a wall envelope (offset > 0) needs them built again, larger.
+        if offset > 0.0:
+            split_shape, bend_shape, _ = _wye_mitered_branch_shapes(
+                api, branch, route["split_face"], route["route"], main_center, layout["cuts"], offset
             )
-            shape = api.fuse(shape, split_shape, bend_shape)
+        else:
+            split_shape, bend_shape = route["split_shape"], route["bend_shape"]
+        bend_shape = _extend_leg(api, bend_shape, branch, route["branch_trim"], trims[route["branch_index"]], offset)
+        shape = api.fuse(shape, split_shape, bend_shape)
+    return shape
 
+
+def build_wye_mitered(context):
+    """Mitered wye with each non-main branch entering the common leg through a faceted bend."""
+    api = context["hvac_api"]
+    layout = _wye_mitered_layout(context)
+    ports = layout["ports"]
+    trims = layout["trims"]
+
+    def envelope(offset):
+        shape = _wye_mitered_envelope(api, layout, offset)
         validation = api.validate(shape, require_solid=True)
         if not validation["valid"] or validation["solid_count"] != 1:
             raise RuntimeError(
@@ -260,14 +298,14 @@ def _wye_route_clearance(api, branch):
     return max(1.0e-2 * _size(api, branch), 0.1)
 
 
-def _wye_elbow_route(api, branch, split_port, requested_radius):
+def _wye_elbow_route(api, branch, split_port, requested_radius, wall=0.0):
     """Build a route whose tangent points stay on both usable leg sides."""
     branch_size = _size(api, branch)
     clearance = _wye_route_clearance(api, branch)
 
-    # The half-size limit keeps the inside of the swept profile from folding
-    # through the bend centerline.
-    radius = max(float(requested_radius or 0.0), 0.5 * branch_size)
+    # The minimum keeps the inside of the swept profile (and of each wall
+    # layer around it) from folding through the bend centerline.
+    radius = max(float(requested_radius or 0.0), _min_bend_radius(branch_size, wall))
     route = api.make_elbow_path(branch, split_port, radius)
 
     # An offset split profile can need more radius before both tangent points
@@ -286,8 +324,11 @@ def _wye_elbow_route(api, branch, split_port, requested_radius):
     return route
 
 
-def _wye_split_route_layout(context):
-    """Calculate shared port roles, split profiles, and feasible elbow paths."""
+def _wye_split_route_layout(context, radius_scale=1.0):
+    """
+    Calculate shared port roles, split profiles, and feasible elbow paths.
+    `radius_scale` grows the bend radius (requested or minimum) for a retry.
+    """
     api = context["hvac_api"]
     raw_ports = list(api.connected_ports(context))
     if len(raw_ports) != 3:
@@ -297,7 +338,11 @@ def _wye_split_route_layout(context):
     ports = [main, branch_a, branch_b]
     center = api.center_from_context(context)
     branch_legs = [(1, branch_a), (2, branch_b)]
+    wall = _wall_thickness(context)
     radius = float(_props(context).get("BranchRadius") or 0.0)
+    if radius_scale != 1.0:
+        smallest = max(_min_bend_radius(_size(api, branch), wall) for _, branch in branch_legs)
+        radius = max(radius, smallest) * float(radius_scale)
 
     # Step 1: Build provisional paths at the junction center.
     main_direction = api.unit(api.port_direction(main))
@@ -310,7 +355,7 @@ def _wye_split_route_layout(context):
         for branch_index, branch in branch_legs:
             split_face = split_faces[id(branch)]
             split_port = api.copy_port(split_center, position=split_face.CenterOfMass)
-            route = _wye_elbow_route(api, branch, split_port, radius)
+            route = _wye_elbow_route(api, branch, split_port, radius, wall)
             result.append((branch, branch_index, split_face, route))
         return result
 

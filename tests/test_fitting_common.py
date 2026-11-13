@@ -46,6 +46,25 @@ def test_layer_thickness_reads_the_property_the_layer_names():
     assert _common._layer_thickness(SimpleNamespace(thickness_property=None), {"Thickness": 1.2}) == 0.0
 
 
+def test_wall_thickness_sums_every_layer_that_names_a_thickness():
+    layers = [
+        SimpleNamespace(thickness_property="Thickness"),
+        SimpleNamespace(thickness_property="InsulationThickness"),
+        SimpleNamespace(thickness_property=None),
+    ]
+    context = {"properties": {"Thickness": 1.0, "InsulationThickness": 25.0}, "construction_layers": layers}
+    assert _common._wall_thickness(context) == 26.0
+    assert _common._wall_thickness({"properties": {}}) == 0.0
+
+
+def test_min_bend_radius_adds_the_wall_and_a_clearance_to_half_the_size():
+    # Small ducts get a 1 mm clearance, large ones 1 % of the size.
+    assert _common._min_bend_radius(50.0) == 26.0
+    assert _common._min_bend_radius(400.0, wall=26.0) == 200.0 + 26.0 + 4.0
+    # A negative wall (never expected) does not lower the minimum below the bare duct's.
+    assert _common._min_bend_radius(400.0, wall=-5.0) == 204.0
+
+
 def test_flange_switch_prefers_role_then_number_then_shared():
     params = {"ShowFlangeBranch": False, "ShowFlange2": True, "ShowFlange": True}
     assert _common._flange_enabled(params, 1, "Branch") is False

@@ -53,8 +53,8 @@ it's kept accurate and up to date on purpose.
 | `core/Junction.py` | `DuctJunction`: a logical node with no type/geometry of its own. `getComponents()`/`getPrimaryComponent()` find its `DuctComponent` children (via `ParentJunctionName`, in `Sequence` order); `composeComponents()` works out each child's local inlet/outlet ports for the current sync (a single-component junction gets the real connected ports unchanged); `aggregateConnectionLengths()` rolls each component's own trim into the external trim contract (`ConnectionLengthsJson`). See "Junction component composition" below. |
 | `core/_port_properties.py` | Per-port type properties (`"per_port": true` in a type-def): keeps each one's value list and hidden edge-key list on a component in step with its current ports, and carries the keys across a document reload. Resolution into `{edge_key: value}` is in `library/validation.py` (`PortValues`). |
 | `core/_terminal_function.py` | Terminal function (ROADMAP 6.5): resolves an end node's role (Supply, Return, Exhaust, OutdoorAir, Discharge, Source) from `DuctNetwork.SystemType`, the junction's `TerminalFunction` and its drawn direction; written into the node's `terminal_function` qualifier during junction sync, and checked against the drawn direction by the flow solve. Pure. |
-| `core/_custom_fitting.py` | Custom fittings (ROADMAP 6.3): port markers (`Part::LocalCoordinateSystem` with `PortProfile`/size), `add_port()` from an end face, and the `App::Link` a custom Primary component places on its node using `library/custom_fitting.py`'s fit. |
-| `core/Equipment.py` | `HVACEquipment` (ROADMAP 6.5): a user-modelled unit whose port markers feed terminals of several networks; `connect()` makes a terminal its network's Source, and `update_from_airflow()` totals port flows and fan duties after each network's calculation. |
+| `core/_custom_fitting.py` | Port markers shared by custom fittings and equipment (ROADMAP 6.3): `Part::LocalCoordinateSystem` with `PortProfile`/size and an X/Y offset from the face centre, `add_port()` / `set_port_offset()` / `remove_port()`, and the `App::Link` a custom Primary component places on its node using `library/custom_fitting.py`'s fit. |
+| `core/Equipment.py` | HVAC equipment (ROADMAP 6.5): an App::Part made equipment by `make_equipment()`, whose port markers feed terminals of several networks; `connect()` makes a terminal its network's Source, and `update_from_airflow()` totals port flows and fan duties after each network's calculation. `TaskPanelPortContainer` (ui) edits the ports of equipment and custom fittings. |
 | `core/FlowNetwork.py` | Thin FreeCAD adapter: builds a `NetworkModel` from a `DuctNetwork` (via `core/_analysis_adapter.py`) and calls `analysis/flow.py`'s pure solve — see "Analysis layer" below for the actual algorithm. Shared by AirflowSolver and DuctSizer. |
 | `core/AirflowSolver.py` | Thin FreeCAD adapter over `analysis/pressure.py`'s pure `PressureSolver`: builds the network model, solves it, writes the results back onto segment/junction/component `Calc*` properties, and returns the same `SegmentResult`/`JunctionResult`/`ComponentResult`/`AirflowSolveResult` shape it always has. |
 | `core/DuctSizer.py` | Thin FreeCAD adapter over `analysis/sizing.py`/`analysis/balancing.py`: picks the sizing strategy for the network's `SizingMethod`, maps the pure result back onto `SegmentSizeResult`/`DuctSizingResult`. Never mutates objects itself — `solve()` returns a preview; `apply()` is a separate, explicit write step. |
@@ -500,8 +500,13 @@ Shipped metal cards declare the native property directly; cards without
 that property use the network fallback rather than a name- or UUID-based
 implicit material value.
 
-`core/_component_appearance.py` renders every layer's own material: since
-`Shape` is always the compound built in `ConstructionLayerIds` order,
+`core/_component_appearance.py` renders every layer's own material. Layers
+and features switched off on the network (`ShowLayer_<Role>`,
+`ShowFeatures`, a feature's own visible parameter) are left out of `Shape`
+(`displayed_parts` / `refresh_display_shape`; each layer keeps its own
+`Layer_<id>_Shape`), because FreeCAD draws a selected object with a single
+transparency and a transparent layer made it vanish. Since
+`Shape` is always the compound of the shown parts in `ConstructionLayerIds` order,
 `len(Layer_<id>_Shape.Faces)` for each layer in that same order tells the
 ViewProvider exactly where each layer's own faces fall in that compound
 (an exact count derived from the very shapes the compound was built from,

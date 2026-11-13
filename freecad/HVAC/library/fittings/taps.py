@@ -12,11 +12,13 @@ from ._common import (
     _finish,
     _lean_port,
     _loft,
+    _min_bend_radius,
     _port_axis_point,
     _positive,
     _props,
     _size,
     _trimmed,
+    _wall_thickness,
 )
 
 
@@ -374,14 +376,15 @@ def face_tap_layout(context, run_factor=0.3, branch_factor=0.5):
     size = _size(api, branch)
 
     # Step 1: the elbow radius. It can't be larger than the height the
-    # collar has to rise, and not smaller than half the branch size (the
-    # inside of the bend would fold over).
+    # collar has to rise, and not smaller than the bend minimum (half the
+    # branch size plus the wall; below it the inside of the bend folds over).
     rise = offsets["offset"] - offsets["run_half"]
-    radius = min(max(_positive(p.get("ElbowRadius"), size), 0.5 * size), rise)
-    if radius < 0.5 * size - 1.0e-6:
+    minimum = _min_bend_radius(size, _wall_thickness(context))
+    radius = min(max(_positive(p.get("ElbowRadius"), size), minimum), rise)
+    if radius < minimum - 1.0e-6:
         raise ValueError(
             "The branch is too close to the run surface for its elbow: move it {:.1f} mm further away".format(
-                0.5 * size - radius
+                minimum - radius
             )
         )
 

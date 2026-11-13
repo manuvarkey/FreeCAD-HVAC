@@ -26,17 +26,18 @@
 import json
 import traceback
 
-import FreeCAD
 import FreeCADGui as Gui
 import Part
 from PySide import QtCore, QtWidgets
 from PySide.QtCore import QT_TRANSLATE_NOOP
 
+import FreeCAD
+
 translate = FreeCAD.Qt.translate
 
 from ..library.library_api import HVACLibraryAPI
-from . import _custom_fitting, _terminal_function
 from ..utils import hvaclib
+from . import _custom_fitting, _terminal_function
 
 
 def _json_safe_port(port):
@@ -264,8 +265,10 @@ class DuctJunction:
                 "App::PropertyBool",
                 "AllowSizeChange",
                 "HVAC Duct Sizing",
-                "Whether Size Ducts may give the ducts on either side of this straight node different sizes "
-                "(a reducer here). Off keeps them one size. Only used when the network's SizeChangePolicy is AtReducers",
+                "Whether Size Ducts may change the duct size where air passes straight through this junction "
+                "(a reducer at an in-line node, a reducing run at a tee or cross). Off keeps them one size. "
+                "Used by the network's SizeChangePolicy AtStraightJunctions (in-line nodes and runs) and "
+                "AtInlineNodesOnly (in-line nodes)",
             )
             obj.AllowSizeChange = True
 
@@ -358,9 +361,10 @@ class DuctJunction:
             else:
                 obj.setEditorMode("DesignFlowRate", 2)
             obj.setEditorMode("IsFlowSource", 1 if is_terminal else 2)
-            # Only a two-port node can hold a reducer.
+            # Only a junction air passes straight through can change size: an in-line node or a tee/cross run.
             if "AllowSizeChange" in obj.PropertiesList:
-                obj.setEditorMode("AllowSizeChange", 0 if getattr(obj, "Topology", "") == "through" else 2)
+                straight_through = getattr(obj, "Topology", "") in ("through", "branch", "cross")
+                obj.setEditorMode("AllowSizeChange", 0 if straight_through else 2)
         except Exception:
             pass
 

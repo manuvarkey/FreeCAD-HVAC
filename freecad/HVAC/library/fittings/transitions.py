@@ -9,7 +9,7 @@ radiussed (S-curve) and mitered.
 import math
 
 from ..loss_tables import transitions as transition_tables
-from ._common import _finish, _loft, _positive, _props, _size, _trimmed
+from ._common import _finish, _loft, _min_bend_radius, _positive, _props, _size, _trimmed, _wall_thickness
 
 _KNOWN_PROFILES = ("Circular", "Rectangular", "Oval")
 
@@ -74,19 +74,19 @@ def transition_dimensions(api, ports, params):
     return result
 
 
-def _radiussed_radius(api, ports, total, requested):
+def _radiussed_radius(api, ports, total, requested, wall=0.0):
     """
     The arc radius a radiussed offset really gets: the requested one (default
-    the duct size), at least half the duct size, and at most what fits
-    between the ends and the diagonal. Raises when even half the duct size
-    does not fit.
+    the duct size), at least the bend minimum (half the duct size plus the
+    wall), and at most what fits between the ends and the diagonal. Raises
+    when even the minimum does not fit.
     """
     size = max(_size(api, ports[0]), _size(api, ports[1]))
     radius = _positive(requested, max(size, 10.0))
-    # A bend radius smaller than the duct's own half-width folds the swept
-    # surface back on itself on the inside of the bend (same minimum
-    # build_elbow enforces on CenterlineRadius).
-    radius = max(radius, 0.5 * size)
+    # A smaller radius folds the swept surface (or a wall layer around it)
+    # back on itself on the inside of the bend; build_elbow uses the same minimum.
+    minimum = _min_bend_radius(size, wall)
+    radius = max(radius, minimum)
 
     # The two arcs have to fit between the ends and the diagonal: each arc
     # takes R tan(turn / 2) on either side of its corner. A radius larger
@@ -97,25 +97,26 @@ def _radiussed_radius(api, ports, total, requested):
     if turn > 1.0e-6:
         room = min(total / 4.0, (axis["corner1"] - axis["corner0"]).Length / 2.0)
         largest = 0.98 * room / math.tan(turn / 2.0)
-        if largest < 0.5 * size:
+        if largest < minimum:
             raise ValueError(
                 "The offset is too steep for a radiussed fitting of this size: make OffsetLength / "
                 "TransitionLength longer (the arcs need a radius of at least {:.0f} mm, only {:.0f} mm fits)".format(
-                    0.5 * size, largest
+                    minimum, largest
                 )
             )
         radius = min(radius, largest)
     return radius
 
 
-def offset_dimensions(api, ports, params, radiussed=False):
+def offset_dimensions(api, ports, params, radiussed=False, wall=0.0):
     """
     A two-port offset's derived values, from the transition-named properties
     (TransitionLength, TransitionRadius; offsets.py maps OffsetLength and
     OffsetRadius onto them):
       - "body_length": the length, or its default;
       - "offset_angle" (deg): each corner's deflection from the duct axis;
-      - "actual_radius": radiussed only, the arc radius after the fit limit.
+      - "actual_radius": radiussed only, the arc radius after the fit limit
+        (`wall` is the fitting's total wall thickness, see _min_bend_radius).
     """
     if len(ports) != 2:
         raise ValueError("Expected 2 connected ports, got {}".format(len(ports)))
@@ -123,7 +124,7 @@ def offset_dimensions(api, ports, params, radiussed=False):
     axis = api.offset_transition_axis(ports[0], ports[1], length)
     result = {"body_length": length, "offset_angle": math.degrees(axis["turn_angle"])}
     if radiussed:
-        result["actual_radius"] = _radiussed_radius(api, ports, length, params.get("TransitionRadius"))
+        result["actual_radius"] = _radiussed_radius(api, ports, length, params.get("TransitionRadius"), wall)
     return result
 
 
@@ -167,7 +168,7 @@ def _transition_radiussed_route(context):
         raise ValueError(f"Expected 2 connected ports, got {len(ports)}")
     p = _props(context)
     total = body_length(api, ports, p.get("TransitionLength"))
-    radius = _radiussed_radius(api, ports, total, p.get("TransitionRadius"))
+    radius = _radiussed_radius(api, ports, total, p.get("TransitionRadius"), _wall_thickness(context))
     route = api.make_radiussed_path(ports[0], ports[1], total, radius)
     return ports, route
 

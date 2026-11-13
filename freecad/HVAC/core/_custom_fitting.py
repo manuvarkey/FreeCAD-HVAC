@@ -6,11 +6,13 @@ Custom fittings (ROADMAP 6.3), FreeCAD side.
 
 A custom fitting is an `App::Part` holding the user's fully modelled fitting
 (walls included) and one port marker per opening: a
-`Part::LocalCoordinateSystem` whose origin is the centre of the opening, Z
-points out of the fitting and X along the width of a rectangular or oval
-opening, carrying the port's profile and clear-air size as dynamic
-properties (group "HVAC Port"). `add_port()` makes one from a selected end
-face.
+`Part::LocalCoordinateSystem` whose origin is the centre of the opening
+(moved by an optional X/Y offset in the face), Z points out of the fitting
+and X along the width of a rectangular or oval opening, carrying the port's
+profile and clear-air size as dynamic properties (group "HVAC Port").
+`add_port()` makes one from a selected end face. The same markers, in the
+same kind of App::Part, are an HVAC equipment's ports (core/Equipment.py),
+so every helper here works on either container.
 
 A Primary `DuctComponent` with `GeometrySource = Custom` and
 `CustomFitting` set to that container owns an `App::Link` to it. Every
@@ -21,8 +23,9 @@ to its port, so the ducts end exactly at the port faces.
 
 import json
 
-import FreeCAD
 import Part
+
+import FreeCAD
 
 from ..library import custom_fitting as fit_math
 from ..library.library_api import HVACLibraryAPI
@@ -55,6 +58,57 @@ def ensure_port_properties(lcs):
             lcs.addProperty("App::PropertyLength", name, PORT_GROUP, description)
     if "PortName" not in lcs.PropertiesList:
         lcs.addProperty("App::PropertyString", "PortName", PORT_GROUP, "Optional name shown in messages")
+    # Where the port sits relative to the centre of the opening it was made on, in the face's own X/Y.
+    # Read-only here: the port panel (or set_port_offset) moves the marker and updates both together.
+    for name, description in (
+        ("PortOffsetX", "Offset of the port from the centre of its face, along the marker's X axis"),
+        ("PortOffsetY", "Offset of the port from the centre of its face, along the marker's Y axis"),
+    ):
+        if name not in lcs.PropertiesList:
+            lcs.addProperty("App::PropertyDistance", name, PORT_GROUP, description)
+            lcs.setEditorMode(name, 1)
+
+
+def show_port(lcs):
+    """Make a marker visible, so the user sees where the port went (FreeCAD creates them hidden)."""
+    view = getattr(lcs, "ViewObject", None)
+    if view is not None:
+        try:
+            view.Visibility = True
+        except Exception:
+            pass
+
+
+def set_port_offset(lcs, offset_x, offset_y):
+    """
+    Move a marker to (offset_x, offset_y) from the centre of its face, in
+    the marker's own X/Y (the face plane). The marker stays attached to the
+    face; only its attachment offset changes, by the difference from the
+    offset it had.
+    """
+    ensure_port_properties(lcs)
+    dx = float(offset_x) - float(lcs.PortOffsetX)
+    dy = float(offset_y) - float(lcs.PortOffsetY)
+    if abs(dx) > 1.0e-9 or abs(dy) > 1.0e-9:
+        lcs.AttachmentOffset = lcs.AttachmentOffset.multiply(
+            FreeCAD.Placement(FreeCAD.Vector(dx, dy, 0.0), FreeCAD.Rotation())
+        )
+    lcs.PortOffsetX = float(offset_x)
+    lcs.PortOffsetY = float(offset_y)
+
+
+def remove_port(lcs):
+    """Delete a port marker."""
+    doc = getattr(lcs, "Document", None)
+    if doc is not None:
+        doc.removeObject(lcs.Name)
+
+
+def port_size_text(lcs):
+    """A short size label for lists: "Ø 200" for a round port, "400 x 200" otherwise."""
+    if str(getattr(lcs, "PortProfile", "")) == "Circular":
+        return "\u00d8 {:.0f}".format(float(lcs.PortDiameter))
+    return "{:.0f} x {:.0f}".format(float(lcs.PortWidth), float(lcs.PortHeight))
 
 
 def container_ports(container):
@@ -129,15 +183,17 @@ def _opening_size(wire, normal):
     return "", {}, None, centre
 
 
-def add_port(body, face_name, container=None, name=""):
+def add_port(body, face_name, container=None, name="", offset_x=0.0, offset_y=0.0):
     """
     Create a port marker on `body`'s planar end face `face_name`: a
     Part::LocalCoordinateSystem attached to the face (FlatFace), with an
-    attachment offset that puts its origin on the centre of the opening, Z
-    out of the fitting and X along the opening's width; its profile and
+    attachment offset that puts its origin on the centre of the opening
+    (plus `offset_x` / `offset_y` along the marker's X / Y, in the face),
+    Z out of the fitting and X along the opening's width; its profile and
     size are read from the opening. The marker goes into `container` (an
     App::Part), else into the App::Part holding `body`, else a new
-    "CustomFitting" App::Part that `body` is moved into. Returns the marker.
+    "CustomFitting" App::Part that `body` is moved into. The marker is
+    made visible. Returns the marker.
     An opening whose shape is not recognised gets profile Circular and size
     0, to be set by hand (a console warning says so).
     """
@@ -169,10 +225,14 @@ def add_port(body, face_name, container=None, name=""):
     if x_axis is None:
         x_axis = attached.Rotation.multVec(FreeCAD.Vector(1, 0, 0))
         x_axis = (x_axis - normal * x_axis.dot(normal)).normalize()
-    rotation = FreeCAD.Rotation(x_axis, normal.cross(x_axis), normal, "ZXY")
-    wanted = FreeCAD.Placement(centre, rotation)
+    y_axis = normal.cross(x_axis)
+    rotation = FreeCAD.Rotation(x_axis, y_axis, normal, "ZXY")
+    origin = centre + x_axis * float(offset_x) + y_axis * float(offset_y)
+    wanted = FreeCAD.Placement(origin, rotation)
     lcs.AttachmentOffset = attached.inverse().multiply(wanted)
     ensure_port_properties(lcs)
+    lcs.PortOffsetX = float(offset_x)
+    lcs.PortOffsetY = float(offset_y)
     if profile:
         lcs.PortProfile = profile
         if profile == "Circular":
@@ -187,6 +247,7 @@ def add_port(body, face_name, container=None, name=""):
         )
     if name:
         lcs.PortName = name
+    show_port(lcs)
     doc.recompute()
     return lcs
 

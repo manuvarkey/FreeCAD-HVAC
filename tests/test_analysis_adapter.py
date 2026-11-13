@@ -3,9 +3,9 @@
 import json
 from types import SimpleNamespace
 
-import conftest  # noqa: F401 -- installs FreeCAD/Materials stubs
 import pytest
 
+import conftest  # noqa: F401 -- installs FreeCAD/Materials stubs
 from freecad.HVAC.analysis.loss import LossStatus
 from freecad.HVAC.core import _analysis_adapter
 
@@ -32,6 +32,30 @@ def test_humanize_diagnostics_prefers_number_then_label():
 
     assert messages == ["Segment 'D012' meets node 'Main tee'."]
     assert "internal" not in messages[0]
+
+
+def test_network_element_index_reaches_each_object_by_number_label_and_name():
+    seg = SimpleNamespace(Number="S-1", Label="Duct 1", Name="DuctSegment001")
+    other = SimpleNamespace(Number="", Label="S-1", Name="DuctSegment002")
+    index = _analysis_adapter.network_element_index([seg, None, other])
+    assert index["S-1"] is seg  # the first object to claim an identifier keeps it
+    assert index["Duct 1"] is seg
+    assert index["DuctSegment001"] is seg
+    assert index["DuctSegment002"] is other
+
+
+def test_link_spans_links_whole_identifiers_and_keeps_the_text():
+    s1 = SimpleNamespace(Number="S-1", Label="", Name="a")
+    s12 = SimpleNamespace(Number="S-12", Label="", Name="b")
+    index = {"S-1": s1, "S-12": s12}
+    text = "Duct 'S-12' is wider than S-1; S-1x and S-1.5 are not names."
+    spans = _analysis_adapter.link_spans(text, index)
+    assert "".join(piece for piece, _ in spans) == text
+    assert [(piece, obj) for piece, obj in spans if obj is not None] == [("S-12", s12), ("S-1", s1)]
+
+
+def test_link_spans_without_identifiers_returns_the_whole_text():
+    assert _analysis_adapter.link_spans("nothing here", {}) == [("nothing here", None)]
 
 
 def test_element_identifier_falls_back_to_internal_name():

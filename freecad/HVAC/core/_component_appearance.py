@@ -101,6 +101,96 @@ def _feature_defs_by_id(obj):
     return {fdef.id: fdef for fdef in getattr(type_def, "features", None) or []}
 
 
+def hidden_parts(obj):
+    """
+    (hidden layer ids, hidden feature ids) for `obj` right now: a layer whose
+    roles are all switched off on its network (ShowLayer_<Role>), and a
+    feature when the network's ShowFeatures is off or its own
+    visible_parameter (e.g. FlangeVisible) is off. Nothing is hidden when
+    the object's network or type cannot be read.
+    """
+    try:
+        shown_roles, show_features = network_display_flags(hvaclib.getOwnerNetwork(obj))
+        roles_by_id = _layer_roles_by_id(obj)
+        feature_defs_by_id = _feature_defs_by_id(obj)
+    except Exception:
+        return set(), set()
+    hidden_layers = {
+        layer_id
+        for layer_id in getattr(obj, "ConstructionLayerIds", []) or []
+        if not layer_shown(roles_by_id.get(layer_id), shown_roles)
+    }
+    hidden_features = set()
+    for feature_id in getattr(obj, "ConstructionFeatureIds", []) or []:
+        feature_def = feature_defs_by_id.get(feature_id)
+        visible = show_features
+        if feature_def is not None and feature_def.visible_parameter:
+            visible = visible and bool(getattr(obj, feature_def.visible_parameter, True))
+        if not visible:
+            hidden_features.add(feature_id)
+    return hidden_layers, hidden_features
+
+
+def displayed_parts(obj, hidden=None):
+    """
+    [(kind, id, shape), ...] making up `obj`'s displayed Shape: every layer
+    with a real shape, then every feature, in declared order, leaving out
+    the hidden ones (see hidden_parts). Hidden parts are left out instead of
+    drawn transparent: FreeCAD draws a selected object with one
+    transparency for all its faces, so a transparent layer made the whole
+    object vanish to a wireframe when selected.
+    """
+    hidden_layers, hidden_features = hidden if hidden is not None else hidden_parts(obj)
+    parts = []
+    for layer_id in getattr(obj, "ConstructionLayerIds", []) or []:
+        shape = getattr(obj, _construction_schema.shape_property_name(layer_id), None)
+        if layer_id not in hidden_layers and _face_count(shape) and not shape.isNull():
+            parts.append(("layer", layer_id, shape))
+    for feature_id in getattr(obj, "ConstructionFeatureIds", []) or []:
+        shape = getattr(obj, _construction_schema.feature_shape_property_name(feature_id), None)
+        if feature_id not in hidden_features and _face_count(shape) and not shape.isNull():
+            parts.append(("feature", feature_id, shape))
+    return parts
+
+
+# The (kind, id) list each object's Shape was last built from, so a re-render
+# only rebuilds the displayed compound when what is shown actually changed.
+_display_keys = {}
+
+
+def display_shape_is_current(obj, parts=None):
+    """True when obj.Shape already holds exactly the parts displayed_parts() gives."""
+    parts = displayed_parts(obj) if parts is None else parts
+    key = (getattr(getattr(obj, "Document", None), "Name", ""), getattr(obj, "Name", ""))
+    signature = tuple((kind, part_id, _face_count(shape)) for kind, part_id, shape in parts)
+    return _display_keys.get(key) == signature and _face_count(getattr(obj, "Shape", None)) == sum(
+        sig[2] for sig in signature
+    )
+
+
+def refresh_display_shape(obj, force=False):
+    """
+    Rebuild `obj.Shape` from its shown layers and features (displayed_parts).
+    Each layer's and feature's own shape property is untouched, so nothing
+    is lost: switching a layer back on just puts it back in the compound.
+    Returns the displayed parts.
+    """
+    import Part
+
+    parts = displayed_parts(obj)
+    key = (getattr(getattr(obj, "Document", None), "Name", ""), getattr(obj, "Name", ""))
+    signature = tuple((kind, part_id, _face_count(shape)) for kind, part_id, shape in parts)
+    current = getattr(obj, "Shape", None)
+    if force or _display_keys.get(key) != signature or _face_count(current) != sum(sig[2] for sig in signature):
+        # Only the display changed: don't leave the object marked for a (costly) geometry rebuild.
+        was_touched = "Touched" in list(getattr(obj, "State", []) or [])
+        obj.Shape = Part.makeCompound([shape for _kind, _id, shape in parts])
+        if not was_touched and hasattr(obj, "purgeTouched"):
+            obj.purgeTouched()
+        _display_keys[key] = signature
+    return parts
+
+
 def _trigger_property_names(obj):
     """
     Property names whose change should trigger a re-render for this
@@ -152,28 +242,33 @@ def _face_count(shape):
         return 0
 
 
-_FULLY_TRANSPARENT_TRANSPARENCY = 1.0
+def _schedule_display_refresh(vobj):
+    obj = vobj.Object
+
+    def run():
+        try:
+            if getattr(obj, "Document", None) is None:
+                return
+            refresh_display_shape(obj)
+            apply_component_appearance(vobj)
+        except Exception:
+            pass
+
+    from PySide import QtCore
+
+    QtCore.QTimer.singleShot(0, run)
 
 
-def _fully_transparent_appearance():
-    """A FreeCAD.Material() forced fully transparent -- the "hidden" override for a non-visible feature's own faces."""
-    appearance = FreeCAD.Material()
-    try:
-        appearance.Transparency = _FULLY_TRANSPARENT_TRANSPARENCY
-    except Exception:
-        pass
-    return appearance
-
-
-def apply_component_appearance(vobj):
+def apply_component_appearance(vobj, from_view_update=False):
     """
-    Re-render `vobj` (a DuctSegment/DuctComponent ViewObject)'s construction
-    layer faces from their own native Layer_<id>_Material, and every
-    construction feature's own faces from its host layer's appearance (or
-    fully transparent, if the feature currently resolves not-visible). Safe
-    to call any time; does nothing if the object has no faces at all, no
-    ShapeAppearance property (older FreeCAD), or nothing resolves to a
-    usable appearance/override.
+    Re-render `vobj` (a DuctSegment/DuctComponent ViewObject): first make
+    its Shape hold only the shown layers and features (refresh_display_shape,
+    so a hidden layer is simply not drawn), then colour each shown layer's
+    faces from its own Layer_<id>_Material and each shown feature's faces
+    from its host layer's appearance. `from_view_update` says the call comes
+    from a view provider's updateData. Safe to call any time; does nothing if
+    the object has no faces at all, no ShapeAppearance property (older
+    FreeCAD), or nothing resolves to a usable appearance.
     """
     obj = getattr(vobj, "Object", None)
     if obj is None or not hasattr(vobj, "ShapeAppearance"):
@@ -184,61 +279,40 @@ def apply_component_appearance(vobj):
         return
     _rendering.add(key)
     try:
-        shown_roles, show_features = network_display_flags(hvaclib.getOwnerNetwork(obj))
-        roles_by_id = _layer_roles_by_id(obj)
-        layer_ids = list(getattr(obj, "ConstructionLayerIds", []) or [])
-        layer_faces = []
-        layer_appearances_by_id = {}
-        hidden_layers = set()
-        for layer_id in layer_ids:
-            face_count = _face_count(getattr(obj, _construction_schema.shape_property_name(layer_id), None))
-            appearance = hvac_materials.get_view_appearance(getattr(obj, _construction_schema.material_property_name(layer_id), None))
-            layer_faces.append(face_count)
-            layer_appearances_by_id[layer_id] = appearance
-            if not layer_shown(roles_by_id.get(layer_id), shown_roles):
-                hidden_layers.add(layer_id)
+        # Step 1: the displayed compound must hold the shown layers and features only. Changing
+        # obj.Shape from inside a view update leaves FreeCAD drawing the old mesh, so there an
+        # out-of-date compound is rebuilt on the next event-loop turn, which re-renders after it.
+        parts = displayed_parts(obj)
+        if not display_shape_is_current(obj, parts):
+            if from_view_update:
+                _schedule_display_refresh(vobj)
+                return
+            parts = refresh_display_shape(obj)
+        if not parts:
+            return
 
+        # Step 2: one appearance per face, in the compound's own order (layers, then features).
         feature_defs_by_id = _feature_defs_by_id(obj)
-        feature_ids = list(getattr(obj, "ConstructionFeatureIds", []) or [])
-        feature_faces = []
-        feature_appearances = []
-        for feature_id in feature_ids:
-            face_count = _face_count(getattr(obj, _construction_schema.feature_shape_property_name(feature_id), None))
-            feature_faces.append(face_count)
-
-            feature_def = feature_defs_by_id.get(feature_id)
-            visible = show_features
-            if feature_def is not None and feature_def.visible_parameter:
-                visible = visible and bool(getattr(obj, feature_def.visible_parameter, True))
-
-            if visible:
-                appearance = layer_appearances_by_id.get(feature_def.host_layer) if feature_def is not None else None
+        layer_appearances = {}
+        for layer_id in getattr(obj, "ConstructionLayerIds", []) or []:
+            layer_appearances[layer_id] = hvac_materials.get_view_appearance(
+                getattr(obj, _construction_schema.material_property_name(layer_id), None)
+            )
+        per_part = []
+        for kind, part_id, shape in parts:
+            if kind == "layer":
+                appearance = layer_appearances.get(part_id)
             else:
-                appearance = _fully_transparent_appearance()
-            feature_appearances.append(appearance)
-
-        if sum(layer_faces) + sum(feature_faces) == 0:
+                feature_def = feature_defs_by_id.get(part_id)
+                appearance = layer_appearances.get(feature_def.host_layer) if feature_def is not None else None
+            per_part.append((appearance, _face_count(shape)))
+        if all(appearance is None for appearance, _count in per_part):
             return
-        if (
-            not hidden_layers
-            and all(a is None for a in layer_appearances_by_id.values())
-            and all(a is None for a in feature_appearances)
-        ):
-            return
-
-        # A layer/feature with no usable appearance still needs an entry
-        # per its own face (the list length must match the compound's
-        # total face count), so it falls back to FreeCAD's own default
-        # appearance rather than shifting later entries out of alignment.
-        default_appearance = FreeCAD.Material()
+        # A part with no usable appearance still needs an entry per face, so later entries stay aligned.
+        default_appearance = FreeCAD.Material() if any(a is None for a, _count in per_part) else None
         entries = []
-        for layer_id, face_count in zip(layer_ids, layer_faces):
-            if layer_id in hidden_layers:
-                entries.extend([_fully_transparent_appearance()] * face_count)
-            else:
-                entries.extend([layer_appearances_by_id[layer_id] or default_appearance] * face_count)
-        for face_count, appearance in zip(feature_faces, feature_appearances):
-            entries.extend([appearance or default_appearance] * face_count)
+        for appearance, count in per_part:
+            entries.extend([appearance if appearance is not None else default_appearance] * count)
 
         try:
             vobj.ShapeAppearance = entries

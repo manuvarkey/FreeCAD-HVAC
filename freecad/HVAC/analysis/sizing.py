@@ -118,27 +118,33 @@ class DuctSizingResult:
 # ----------------------------------------------------------------------------
 
 
-def sizing_sections(network: NetworkModel) -> List[List[str]]:
+SIZE_CHANGE_POLICIES = ("AtStraightJunctions", "AtInlineNodesOnly", "EverySegment")
+
+
+def sizing_sections(network: NetworkModel, policy: str = "AtStraightJunctions") -> List[List[str]]:
     """
     Group the network's segments into sizing sections: runs of duct that
-    must share one cross-section, because there is no place between them
-    where a reducer could go.
+    must share one cross-section, because there is no junction between them
+    where the size may change.
 
     Two segments meeting at a node join one section when:
     - the node is a bend (a two-port node whose ducts are not in line):
       an elbow keeps its size;
-    - they are a run pair of a branch or cross node (the straight-through
-      legs of a tee, a cross's runs): the main keeps its size through the
-      takeoff, which is also what most SMACNA tee tables assume (As = Ac);
     - the node is an in-line two-port node (straight, offset, transition)
-      whose AllowSizeChange is off: the user pinned it.
-    A section ends at every other in-line two-port node (where a reducer
-    can go), at every branch leg, at terminals and at multiport nodes.
-    Segments of different profiles never join (a change of shape needs a
-    transition anyway).
+      whose AllowSizeChange is off: the user pinned it;
+    - they are a run pair of a branch or cross node (the straight-through
+      legs of a tee, a cross's runs) and either the policy is
+      "AtInlineNodesOnly" (the main keeps its size through every takeoff,
+      as most SMACNA tee tables assume, As = Ac) or that node's
+      AllowSizeChange is off. With "AtStraightJunctions" the run of a tee
+      may step down at the takeoff (a reducing tee).
+    A section ends at every other straight-through junction, at every
+    branch leg, at terminals and at multiport nodes. Segments of different
+    profiles never join (a change of shape needs a transition anyway).
 
     Returns the sections as sorted lists of edge_keys, in a stable order.
     """
+    runs_may_change = str(policy or "AtStraightJunctions") == "AtStraightJunctions"
     parent = {edge_key: edge_key for edge_key in network.segments}
 
     def find(edge_key):
@@ -165,7 +171,7 @@ def sizing_sections(network: NetworkModel) -> List[List[str]]:
             bend = family.startswith("bend")
             if bend or not node.allow_size_change:
                 join(*edge_keys)
-        elif node.topology in ("branch", "cross"):
+        elif node.topology in ("branch", "cross") and not (runs_may_change and node.allow_size_change):
             for a, b in node.run_edge_pairs:
                 join(a, b)
 
@@ -221,15 +227,17 @@ def apply_sizing_sections(
     the largest flow (the section's upstream end), which every member then
     gets, with its velocity and friction rate recomputed at that size.
     Members whose own flow would need much less area are listed as reducer
-    suggestions. With size_change_policy "EverySegment" nothing changes.
+    suggestions. With size_change_policy "EverySegment" nothing changes;
+    the other policies decide where sections end (see sizing_sections).
 
     For the static regain methods each segment was sized against its own
     upstream velocity first; the section then takes its upstream end's
     size, so regain is effectively evaluated at section boundaries.
     """
-    if str(settings.size_change_policy or "AtReducers") != "AtReducers":
+    policy = str(settings.size_change_policy or "AtStraightJunctions")
+    if policy == "EverySegment":
         return result
-    sections = sizing_sections(network)
+    sections = sizing_sections(network, policy)
     result.sections = [group for group in sections if any(edge_key in result.segments for edge_key in group)]
     ratio_limit = float(settings.reducer_advice_area_ratio or 0.0)
     for group in result.sections:

@@ -5,7 +5,16 @@
 Elbows: smooth-radius and mitered (gored) bends between two ports.
 """
 
-from ._common import _finish, _mitered_bend, _positive, _profile_extent, _props, _size
+from ._common import (
+    _finish,
+    _min_bend_radius,
+    _mitered_bend,
+    _positive,
+    _profile_extent,
+    _props,
+    _size,
+    _wall_thickness,
+)
 
 
 def _elbow_route(context):
@@ -21,7 +30,7 @@ def _elbow_route(context):
     p = _props(context)
     size = max(_size(api, ports[0]), _size(api, ports[1]))
     radius = _positive(p.get("CenterlineRadius"), 0.6 * size)
-    radius = max(radius, 0.5 * size)
+    radius = max(radius, _min_bend_radius(size, _wall_thickness(context)))
     route = api.make_elbow_path(ports[0], ports[1], radius)
     return ports, route
 
@@ -53,7 +62,7 @@ def _elbow_mitered_radius(context, ports):
     size = max(_profile_extent(api.profile_from_port(ports[0])), _profile_extent(api.profile_from_port(ports[1])))
     props = _props(context)
     radius = _positive(props.get("CenterlineRadius"), 0.6 * size)
-    return max(radius, 0.5 * size)
+    return max(radius, _min_bend_radius(size, _wall_thickness(context)))
 
 
 def measure_elbow_mitered(context):

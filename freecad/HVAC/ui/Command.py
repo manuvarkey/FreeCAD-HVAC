@@ -1419,40 +1419,39 @@ class CommandAddCustomPort:
             'ToolTip': QT_TRANSLATE_NOOP(
                 'HVAC_AddCustomPort',
                 'Mark the selected planar end face(s) of a modelled fitting as duct ports. Each port is a '
-                'coordinate system on the opening (Z out of the fitting) with its profile and size read from '
-                'the opening. Use the App::Part that holds them as a component\'s CustomFitting',
+                'coordinate system on the opening (Z out of the fitting), placed at an X/Y offset from the centre '
+                'of the opening you enter first, with its profile and size read from the opening',
             ),
             'CmdType': 'ForEdit',
         }
 
-    @staticmethod
-    def _selected_faces():
-        faces = []
-        for sel in Gui.Selection.getSelectionEx("", 0) or []:
-            obj = sel.Object
-            for sub in sel.SubElementNames or []:
-                name = sub.split(".")[-1]
-                if name.startswith("Face"):
-                    faces.append((obj, sub, name))
-        return faces
-
     def IsActive(self):
-        return Gui.ActiveDocument is not None and bool(self._selected_faces())
+        from ..ui.TaskPanel import selected_planar_faces
+
+        return Gui.ActiveDocument is not None and bool(selected_planar_faces())
 
     def Activated(self):
-        from ..core import _custom_fitting
+        from ..core import Equipment, _custom_fitting
+        from ..ui.TaskPanel import PortOffsetDialog, selected_planar_faces
 
+        faces = selected_planar_faces()
+        # Step 1: ask where on the face(s) the port goes, before anything is created.
+        face_text = ", ".join("{}.{}".format(body.Label, face_name) for body, face_name in faces)
+        dialog = PortOffsetDialog(translate("HVAC_AddCustomPort", "Face: {}").format(face_text))
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return
+        offset_x, offset_y, name = dialog.values()
+
+        # Step 2: one marker per face, made visible so the user sees where it went.
         doc = FreeCAD.ActiveDocument
         doc.openTransaction("Add HVAC Port")
         try:
-            for owner, sub, face_name in self._selected_faces():
-                # The selection may run through an App::Part: resolve to the body that owns the face.
-                body = owner
-                if "." in sub:
-                    resolved = owner.getSubObject(sub, retType=1)
-                    body = resolved if resolved is not None else owner
+            for body, face_name in faces:
                 try:
-                    lcs = _custom_fitting.add_port(body, face_name)
+                    lcs = _custom_fitting.add_port(body, face_name, name=name, offset_x=offset_x, offset_y=offset_y)
+                    # A port added to an equipment's model is an equipment port.
+                    if Equipment.equipment_of_marker(lcs) is not None:
+                        Equipment.ensure_equipment_port(lcs)
                     FreeCAD.Console.PrintMessage(
                         "HVAC - Added port '{}' ({}) on {}.{}\n".format(lcs.Label, lcs.PortProfile, body.Label, face_name)
                     )
@@ -1465,50 +1464,86 @@ class CommandAddCustomPort:
         doc.recompute()
 
 
+def _selected_part():
+    """The first App::Part in the selection (picking a face inside it counts too)."""
+    for sel in Gui.Selection.getSelectionEx("", 0) or []:
+        obj = sel.Object
+        if obj.TypeId == "App::Part":
+            return obj
+        parent = obj.getParentGeoFeatureGroup() if hasattr(obj, "getParentGeoFeatureGroup") else None
+        if parent is not None and parent.TypeId == "App::Part":
+            return parent
+    return None
+
+
 class CommandCreateEquipment:
-    """Make an HVAC equipment object (AHU, fan) from a modelled unit with port markers (ROADMAP 6.5)."""
+    """Make (or edit) HVAC equipment from a modelled unit, an App::Part (ROADMAP 6.5)."""
 
     def GetResources(self):
         return {
             'Pixmap': hvaclib.get_icon_path("CreateDuctsIcon.svg"),
-            'MenuText': QT_TRANSLATE_NOOP('HVAC_CreateEquipment', 'Create Equipment'),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_CreateEquipment', 'Create / Edit Equipment'),
             'ToolTip': QT_TRANSLATE_NOOP(
                 'HVAC_CreateEquipment',
-                'Make an HVAC equipment object from the selected App::Part: a modelled unit with one HVAC port '
-                'marker per connection (Add HVAC Port). Set each marker\'s EquipmentPortFunction, then use '
-                'Connect to Equipment',
+                'Make the selected App::Part (a modelled AHU, fan, ...) an HVAC equipment, or edit one: a panel '
+                'lists its ports by kind (supply, return, outdoor air, exhaust) and adds new ones on a picked face '
+                'at an X/Y offset from its centre. Then use Connect to Equipment',
             ),
             'CmdType': 'ForEdit',
         }
 
-    @staticmethod
-    def _selected_part():
-        for obj in Gui.Selection.getSelection() or []:
-            if obj.TypeId == "App::Part":
-                return obj
-        return None
-
     def IsActive(self):
-        return Gui.ActiveDocument is not None and self._selected_part() is not None
+        return Gui.ActiveDocument is not None and _selected_part() is not None and not Gui.Control.activeDialog()
 
     def Activated(self):
-        from ..core import Equipment, _custom_fitting
+        from ..core import Equipment
+        from ..ui.TaskPanel import TaskPanelPortContainer
 
-        model = self._selected_part()
-        doc = model.Document
-        doc.openTransaction("Create Equipment")
-        try:
-            equipment = Equipment.create_equipment(doc, model)
-            for marker in _custom_fitting.container_ports(model):
-                Equipment.ensure_equipment_port(marker)
-        finally:
-            doc.commitTransaction()
-        doc.recompute()
-        FreeCAD.Console.PrintMessage(
-            "HVAC - Created equipment '{}' from '{}'; set each port's EquipmentPortFunction\n".format(
-                equipment.Label, model.Label
-            )
+        part = _selected_part()
+        doc = part.Document
+        if not Equipment.is_equipment(part):
+            doc.openTransaction("Create Equipment")
+            try:
+                Equipment.make_equipment(part)
+            finally:
+                doc.commitTransaction()
+            FreeCAD.Console.PrintMessage("HVAC - '{}' is now HVAC equipment\n".format(part.Label))
+        self.task_panel = TaskPanelPortContainer(part, kind="equipment")
+        Gui.Control.showDialog(self.task_panel)
+
+
+class CommandCreateCustomFitting:
+    """Make (or edit) a custom fitting from a modelled App::Part (ROADMAP 6.3)."""
+
+    def GetResources(self):
+        return {
+            'Pixmap': hvaclib.get_icon_path("EditPlacement.svg"),
+            'MenuText': QT_TRANSLATE_NOOP('HVAC_CreateCustomFitting', 'Create / Edit Custom Fitting'),
+            'ToolTip': QT_TRANSLATE_NOOP(
+                'HVAC_CreateCustomFitting',
+                'Use the selected App::Part (a modelled fitting) as a custom junction fitting: a panel lists its '
+                'ports, adds new ones on a picked face at an X/Y offset from its centre, and puts the fitting on '
+                'a junction',
+            ),
+            'CmdType': 'ForEdit',
+        }
+
+    def IsActive(self):
+        from ..core import Equipment
+
+        part = _selected_part()
+        return (
+            Gui.ActiveDocument is not None
+            and part is not None
+            and not Equipment.is_equipment(part)
+            and not Gui.Control.activeDialog()
         )
+
+    def Activated(self):
+        from ..ui.TaskPanel import TaskPanelPortContainer
+
+        self.task_panel = TaskPanelPortContainer(_selected_part(), kind="fitting")
+        Gui.Control.showDialog(self.task_panel)
 
 
 class CommandConnectEquipment:
@@ -1539,13 +1574,7 @@ class CommandConnectEquipment:
             elif hvaclib.isDuctComponent(obj):
                 parent = obj.Document.getObject(getattr(obj, "ParentJunctionName", "") or "")
                 junction = parent or junction
-        equipment = None
-        if marker is not None:
-            for obj in marker.Document.Objects:
-                model = getattr(obj, "Model", None)
-                if Equipment.is_equipment(obj) and model is not None and marker in _custom_fitting.container_ports(model):
-                    equipment = obj
-                    break
+        equipment = Equipment.equipment_of_marker(marker) if marker is not None else None
         return equipment, marker, junction
 
     def IsActive(self):
@@ -1560,8 +1589,8 @@ class CommandConnectEquipment:
         equipment, marker, junction = self._pieces()
         if equipment is None:
             FreeCAD.Console.PrintWarning(
-                "HVAC - Connect to Equipment: '{}' belongs to no equipment; use Create Equipment on its model "
-                "first\n".format(marker.Label)
+                "HVAC - Connect to Equipment: '{}' belongs to no equipment; use Create / Edit Equipment on its "
+                "App::Part first\n".format(marker.Label)
             )
             return
         doc = junction.Document
@@ -1609,5 +1638,6 @@ if FreeCAD.GuiUp:
     FreeCAD.Gui.addCommand('HVAC_SelectAllComponents', CommandSelectAllComponents())
     FreeCAD.Gui.addCommand('HVAC_AddCustomPort', CommandAddCustomPort())
     FreeCAD.Gui.addCommand('HVAC_CreateEquipment', CommandCreateEquipment())
+    FreeCAD.Gui.addCommand('HVAC_CreateCustomFitting', CommandCreateCustomFitting())
     FreeCAD.Gui.addCommand('HVAC_ConnectEquipment', CommandConnectEquipment())
     FreeCAD.Gui.addCommand('HVAC_ReloadLibraries', CommandReloadHVACLibraries())  # Debug method

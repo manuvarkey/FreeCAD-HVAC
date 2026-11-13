@@ -26,8 +26,12 @@ API versions: geometry 3, loss 1, PartScript 3.
   context key for property values (`properties`).
 - Edge keys are stable across save and reload (sketch geometry ids).
 - Networks have a `SystemType`; terminals a `TerminalFunction`.
-- `HVACEquipment` joins networks through user-modelled units with port markers.
+- HVAC equipment joins networks: an App::Part (the modelled unit) made equipment, its port markers inside it.
 - Custom fittings: a user-modelled fitting linked at a node, ducts trimmed to its port markers.
-- Sizing changes duct size only at reducers (`SizeChangePolicy`); pluggable friction models.
+- Equipment and custom fittings are set up in one panel (ports by kind, X/Y offset from a face's centre).
+- Sizing changes duct size only at straight-through junctions by default (`SizeChangePolicy`
+  `AtStraightJunctions`, `AtInlineNodesOnly`, `EverySegment`); pluggable friction models.
+- Automatic fitting selection prefers mitered and straight types; bend radii clamp to half the duct plus the wall.
+- Hidden construction layers are left out of the displayed shape instead of drawn transparent.
 - SMACNA library: the full builtin_basic type set with sheet-metal walls, insulation and flanges as construction features.
 - Result tooltips; per-network layer visibility; per-port values table.

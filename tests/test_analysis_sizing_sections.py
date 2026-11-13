@@ -78,8 +78,25 @@ def test_a_change_of_profile_always_ends_a_section():
     assert sizing_sections(_chain("bend_90", profiles=("Circular", "Rectangular"))) == [["A"], ["B"]]
 
 
-def test_a_tee_run_keeps_its_size_and_the_branch_starts_a_section():
-    assert sizing_sections(_tee_with_run_pair()) == [["A", "B"], ["C"]]
+def test_a_tee_run_may_step_down_at_the_takeoff_by_default():
+    # AtStraightJunctions (the default): the run of a tee is a straight-through junction too.
+    assert sizing_sections(_tee_with_run_pair()) == [["A"], ["B"], ["C"]]
+
+
+def test_a_pinned_tee_keeps_one_size_along_its_run():
+    net = _tee_with_run_pair()
+    net.nodes["N2"].allow_size_change = False
+    assert sizing_sections(net) == [["A", "B"], ["C"]]
+
+
+def test_inline_nodes_only_keeps_the_tee_run_one_size_and_the_branch_starts_a_section():
+    assert sizing_sections(_tee_with_run_pair(), "AtInlineNodesOnly") == [["A", "B"], ["C"]]
+
+
+@pytest.mark.parametrize("policy", ["AtStraightJunctions", "AtInlineNodesOnly"])
+def test_both_policies_split_at_an_in_line_node_and_keep_a_bend(policy):
+    assert sizing_sections(_chain("straight"), policy) == [["A"], ["B"]]
+    assert sizing_sections(_chain("bend_90"), policy) == [["A", "B"]]
 
 
 def test_a_tee_without_run_pair_data_joins_nothing():
@@ -87,13 +104,14 @@ def test_a_tee_without_run_pair_data_joins_nothing():
 
 
 def test_sections_chain_through_several_nodes():
-    # A -tee(run A,B)- B -bend- D, so A, B and D share one size.
+    # A -tee(run A,B)- B -bend- D: with tee runs kept one size, A, B and D share one size.
     net = _tee_with_run_pair()
     net.nodes["N3"] = NodeModel("N3", "through", 2, [port("B", "N3", True), port("D", "N3", False)], family="bend_90")
     net.nodes["N5"] = NodeModel("N5", "end", 1, [port("D", "N5", True)], 50.0, flow_boundary="Fixed")
     net.segments["D"] = SegmentModel("D", circular_section(150.0), 1000.0)
     net.edges["D"] = ("N3", "N5")
-    assert sizing_sections(net) == [["A", "B", "D"], ["C"]]
+    assert sizing_sections(net, "AtInlineNodesOnly") == [["A", "B", "D"], ["C"]]
+    assert sizing_sections(net) == [["A"], ["B", "D"], ["C"]]
 
 
 # ----------------------------------------------------------------------------
@@ -103,7 +121,9 @@ def test_sections_chain_through_several_nodes():
 
 def test_constant_velocity_run_takes_the_size_of_its_upstream_end():
     net = _tee_with_run_pair()
-    settings = SizingSettings(method="ConstantVelocity", target_velocity_ms=5.0, rounding_mm=0.0)
+    settings = SizingSettings(
+        method="ConstantVelocity", target_velocity_ms=5.0, rounding_mm=0.0, size_change_policy="AtInlineNodesOnly"
+    )
     result = ConstantVelocitySizer().size(net, _components(net), settings)
 
     a, b, c = (result.segments[k] for k in "ABC")
@@ -134,7 +154,9 @@ def test_friction_rate_and_static_regain_sizers_also_share_the_run_size():
         (ConstantFrictionRateSizer(), "ConstantFrictionRate"),
         (LocalStaticRegainSizer(), "StaticRegain"),
     ):
-        settings = SizingSettings(method=method, target_velocity_ms=5.0, rounding_mm=0.0)
+        settings = SizingSettings(
+            method=method, target_velocity_ms=5.0, rounding_mm=0.0, size_change_policy="AtInlineNodesOnly"
+        )
         result = sizer.size(net, _components(net), settings)
         assert result.segments["B"].new_section == result.segments["A"].new_section, method
 
@@ -143,10 +165,21 @@ def test_reducer_is_suggested_where_the_shared_size_is_much_too_big():
     # B carries 20 of 80 L/s: at A's size it has 4 times the area it needs.
     net = base_tree(j3_flow=20.0, j4_flow=60.0)
     net.nodes["N2"].run_edge_pairs = [("A", "B")]
-    settings = SizingSettings(method="ConstantVelocity", target_velocity_ms=5.0, rounding_mm=0.0)
+    settings = SizingSettings(
+        method="ConstantVelocity", target_velocity_ms=5.0, rounding_mm=0.0, size_change_policy="AtInlineNodesOnly"
+    )
     result = ConstantVelocitySizer().size(net, _components(net), settings)
     assert [s.edge_key for s in result.reducer_suggestions] == ["B"]
     assert result.reducer_suggestions[0].area_ratio == pytest.approx(4.0)
+
+
+def test_a_tee_run_is_sized_for_its_own_flow_by_default():
+    # AtStraightJunctions: B (50 of 80 L/s) may step down at the tee, so it keeps the target velocity.
+    net = _tee_with_run_pair()
+    settings = SizingSettings(method="ConstantVelocity", target_velocity_ms=5.0, rounding_mm=0.0)
+    result = ConstantVelocitySizer().size(net, _components(net), settings)
+    assert result.segments["B"].velocity_ms == pytest.approx(5.0)
+    assert result.reducer_suggestions == []
 
 
 def test_no_reducer_is_suggested_below_the_threshold():

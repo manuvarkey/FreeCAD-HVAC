@@ -26,7 +26,8 @@
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
       "description": "Clear-air duct diameter",
-      "default": 100.0
+      "default": 100.0,
+      "validation": {"exclusiveMinimum": 0.0}
     }
   ],
   "geometry": {

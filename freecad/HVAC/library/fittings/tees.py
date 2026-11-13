@@ -16,12 +16,14 @@ from ._common import (
     _junction_trims,
     _lean_port,
     _loft,
+    _min_bend_radius,
     _mitered_bend,
     _port_axis_point,
     _positive,
     _props,
     _size,
     _trimmed,
+    _wall_thickness,
 )
 from .stars import _star_body
 from .taps import build_face_tap, face_tap_layout, measure_face_tap
@@ -137,9 +139,9 @@ def _radius_tee_layout(context, run_factor, branch_factor, branch_alignment):
         # The full destination profile needs non-zero clearance around the
         # inner bend; an exact half-size radius produces degenerate sweeps.
         bend_size = max(branch_size, _size(api, main))
-        radius = max(radius, 0.5 * bend_size + max(1.0, 0.001 * bend_size))
+        radius = max(radius, _min_bend_radius(bend_size, _wall_thickness(context)))
     else:
-        radius = max(radius, 0.5 * branch_size)
+        radius = max(radius, _min_bend_radius(branch_size, _wall_thickness(context)))
     inner_position = _port_axis_point(api, main, center)
     run_dir = api.unit(api.port_direction(main))
 
@@ -401,7 +403,7 @@ def _tee_mitered_shoe_layout(context):
 
     branch_size = _size(api, branch)
     radius = _positive(p.get("BranchRadius"), 0.6 * branch_size)
-    radius = max(radius, 0.5 * branch_size)
+    radius = max(radius, _min_bend_radius(branch_size, _wall_thickness(context)))
     cuts = max(int(p.get("NumberOfCuts", 1) or 1), 1)
 
     lean = _lean_port(api, run_a, run_b, branch, reverse=bool(p.get("ReverseBranchBend", False)))
@@ -628,7 +630,7 @@ def _lateral_bend_layout(context, mitered):
     # so air coming along the run takes the gentle turn into the branch.
     branch_dir = api.unit(api.port_direction(branch))
     from_leg = min((run_a, run_b), key=lambda leg: branch_dir.dot(api.unit(api.port_direction(leg))))
-    radius = _branch_bend_radius(api, p.get("BranchRadius"), branch, from_leg, center)
+    radius = _branch_bend_radius(api, p.get("BranchRadius"), branch, from_leg, center, _wall_thickness(context))
     trunk_axis_port = api.copy_port(
         branch, position=_port_axis_point(api, branch, center), direction=api.port_direction(from_leg)
     )

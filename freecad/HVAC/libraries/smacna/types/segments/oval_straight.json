@@ -18,14 +18,16 @@
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
       "description": "Clear-air duct width",
-      "default": 200.0
+      "default": 200.0,
+      "validation": {"exclusiveMinimum": 0.0}
     },
     {
       "name": "Height",
       "prop_type": "App::PropertyLength",
       "group": "Dimensions",
       "description": "Clear-air duct height",
-      "default": 100.0
+      "default": 100.0,
+      "validation": {"exclusiveMinimum": 0.0}
     },
     {
       "name": "Thickness",

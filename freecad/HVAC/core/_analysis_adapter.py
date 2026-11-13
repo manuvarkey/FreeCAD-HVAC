@@ -79,6 +79,51 @@ def humanize_diagnostics(messages, segment_map, junction_map, component_map=None
     return out
 
 
+def network_element_index(objects):
+    """
+    {display identifier: object} for every segment, junction and component
+    a warning may name. Each object is reachable by its element_identifier()
+    (what humanize_diagnostics writes), its Label and its internal Name, so
+    a message written either way can still be linked back to the object.
+    The first object to claim an identifier keeps it.
+    """
+    index = {}
+    for obj in objects:
+        if obj is None:
+            continue
+        for ident in (element_identifier(obj), getattr(obj, "Label", ""), getattr(obj, "Name", "")):
+            ident = str(ident or "").strip()
+            if ident and ident not in index:
+                index[ident] = obj
+    return index
+
+
+def link_spans(text, index):
+    """
+    Split a warning into [(piece, obj_or_None), ...] so a panel can show
+    every element it names as a clickable link. An identifier only counts
+    as a whole word (never inside a longer name), and longer identifiers win
+    over shorter ones they contain. Joining the pieces gives `text` back.
+    """
+    text = str(text)
+    keys = sorted((k for k in index if k), key=len, reverse=True)
+    if not keys:
+        return [(text, None)]
+    pattern = re.compile(
+        r"(?<![A-Za-z0-9_.-])(" + "|".join(re.escape(k) for k in keys) + r")(?![A-Za-z0-9_])(?!\.[A-Za-z0-9])"
+    )
+    spans = []
+    last = 0
+    for match in pattern.finditer(text):
+        if match.start() > last:
+            spans.append((text[last : match.start()], None))
+        spans.append((match.group(1), index[match.group(1)]))
+        last = match.end()
+    if last < len(text):
+        spans.append((text[last:], None))
+    return spans or [(text, None)]
+
+
 def build_network_model(net_obj):
     """
     Returns (network_model, segment_map, junction_map, component_map) --

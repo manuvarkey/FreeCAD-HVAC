@@ -69,6 +69,23 @@ def _layer_thickness(layer_def, params):
     return float(params.get(name, 0.0) or 0.0) if name else 0.0
 
 
+def _wall_thickness(context):
+    """Total thickness of every construction layer outside the air space (0 when the type has no wall)."""
+    params = _props(context)
+    return sum(_layer_thickness(layer_def, params) for layer_def in (context.get("construction_layers") or []))
+
+
+def _min_bend_radius(size, wall=0.0):
+    """
+    The smallest centre-line radius a swept or mitered bend of duct `size`
+    can take. Below half the size the inside of the bend folds over; every
+    wall layer is built further out, so its inner face needs the wall's
+    thickness on top, plus a small clearance so the sweep never degenerates.
+    """
+    size = float(size)
+    return 0.5 * size + max(float(wall or 0.0), 0.0) + max(1.0, 0.01 * size)
+
+
 def _finish(context, envelope, connection_lengths, port_suffixes=None):
     """
     Turn a fitting's envelope builder into the result dict a generator returns.
@@ -130,7 +147,6 @@ def _fuse_into_structure(context, result, shape):
     else:
         return
     layers[layer_id] = {"shape": api.refine(api.fuse(layers[layer_id]["shape"], shape))}
-
 
 
 def _flange_enabled(params, index, suffix, port=None):

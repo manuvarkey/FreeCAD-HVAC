@@ -2,7 +2,8 @@
 Tests for core/_component_appearance.py: rendering every construction
 layer's own Layer_<id>_Shape from its own native Layer_<id>_Material, and
 every construction feature's own Feature_<id>_Shape from its host layer's
-appearance (or fully transparent when hidden), via FreeCAD's per-face
+appearance (hidden layers and features are left out of the displayed
+Shape), via FreeCAD's per-face
 ViewObject.ShapeAppearance -- see ARCHITECTURE.md's "Component geometry &
 materials" section for why the per-layer/per-feature face-count split
 (len(Layer_<id>_Shape.Faces)/len(Feature_<id>_Shape.Faces)) is an exact
@@ -11,7 +12,6 @@ hardcoded/guessed index.
 """
 
 import conftest  # noqa: F401 -- installs FreeCAD/FreeCADGui/Part/Materials/PySide stubs
-
 from freecad.HVAC.core import _component_appearance as appearance_mod
 from freecad.HVAC.library.construction import ConstructionFeatureDef
 
@@ -280,7 +280,7 @@ def test_visible_feature_inherits_its_host_layers_appearance(monkeypatch):
     assert vobj.ShapeAppearance == [casing_appearance] * 3 + [casing_appearance] * 2
 
 
-def test_non_visible_feature_gets_a_fully_transparent_override_not_its_host_layers_material(monkeypatch):
+def test_non_visible_feature_is_left_out_of_the_displayed_shape(monkeypatch):
     casing_material = FakeMaterial("Galvanized Steel")
     casing_appearance = object()
     _patch_view_appearance(monkeypatch, [(casing_material, casing_appearance)])
@@ -298,13 +298,10 @@ def test_non_visible_feature_gets_a_fully_transparent_override_not_its_host_laye
 
     appearance_mod.apply_component_appearance(vobj)
 
-    entries = vobj.ShapeAppearance
-    assert entries[:3] == [casing_appearance] * 3
-    # The 2 flange faces are neither the casing's own appearance nor None --
-    # a distinct, forced fully-transparent override.
-    assert len(entries) == 5
-    assert all(e is not casing_appearance for e in entries[3:])
-    assert all(getattr(e, "Transparency", None) == appearance_mod._FULLY_TRANSPARENT_TRANSPARENCY for e in entries[3:])
+    # The hidden flange is not drawn transparent (FreeCAD would then draw the whole
+    # selected object transparent): it is left out, so only the casing's faces get an entry.
+    assert vobj.ShapeAppearance == [casing_appearance] * 3
+    assert [part_id for _kind, part_id, _shape in appearance_mod.displayed_parts(obj)] == ["casing"]
 
 
 def test_feature_defaults_to_visible_when_no_visible_parameter_declared(monkeypatch):
