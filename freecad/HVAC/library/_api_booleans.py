@@ -181,11 +181,21 @@ class _BooleansMixin:
         return result
 
     @classmethod
-    def fuse(cls, *shapes, refine=False):
-        """Fuse nested shape arguments, optionally removing splitters."""
+    def fuse(cls, *shapes, refine=False, fuzzy=0.0):
+        """
+        Fuse nested shape arguments, optionally removing splitters.
+
+        A `fuzzy` value (mm) fuses everything in one operation that treats
+        faces closer than that as touching. Use it for bodies whose faces
+        meet at grazing angles (two sweeps leaving one section side by side),
+        where a plain fuse can return a valid solid that is subtly wrong.
+        """
         items = cls._flatten_shapes(shapes)
         if not items:
             return Part.Shape()
+        if float(fuzzy) > 0.0 and len(items) > 1:
+            result = items[0].fuse(items[1:], float(fuzzy))
+            return cls.refine(result) if refine else result
         result = items[0]
         for item in items[1:]:
             result = result.fuse(item)

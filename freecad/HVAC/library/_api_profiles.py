@@ -147,6 +147,48 @@ class _ProfilesMixin:
         return Part.Wire(edges)
 
     @staticmethod
+    def make_circular_wire_split_at(center, normal, diameter, directions):
+        """
+        A circle drawn as one arc per entry of `directions`, with a corner
+        where each direction (from the centre, projected onto the circle's
+        plane) crosses it.
+
+        Use it where a sweep or loft goes from a section with corners (one
+        half of a split profile) to a circle: a circle with the same number
+        of corners, placed to match, keeps the solid from twisting.
+        """
+        c = HVACLibraryAPI.vec(center)
+        n = HVACLibraryAPI.unit(normal)
+        r = float(diameter) * 0.5
+        if r <= 0.0 or len(directions) < 2:
+            raise ValueError("Split circle needs a positive diameter and at least two directions")
+        x = None
+        angles = []
+        for direction in directions:
+            d = HVACLibraryAPI.vec(direction)
+            d = d - n * d.dot(n)
+            if d.Length <= HVACLibraryAPI.EPS:
+                raise ValueError("Split direction lies along the circle's axis")
+            d = HVACLibraryAPI.unit(d)
+            if x is None:
+                x = d
+            angles.append(math.atan2(n.cross(x).dot(d), x.dot(d)) % (2.0 * math.pi))
+        y = n.cross(x)
+        angles.sort()
+        if min((angles[(i + 1) % len(angles)] - angles[i]) % (2.0 * math.pi) for i in range(len(angles))) < 1.0e-3:
+            raise ValueError("Split directions must be distinct")
+
+        def point(angle):
+            return c + x * (r * math.cos(angle)) + y * (r * math.sin(angle))
+
+        edges = []
+        for i, start in enumerate(angles):
+            end = angles[(i + 1) % len(angles)]
+            span = (end - start) % (2.0 * math.pi)
+            edges.append(Part.Arc(point(start), point(start + span / 2.0), point(start + span)).toShape())
+        return Part.Wire(edges)
+
+    @staticmethod
     def make_oval_wire(center, x_axis, y_axis, width, height):
         """
         Flat-oval / obround section.
