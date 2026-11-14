@@ -10,6 +10,7 @@ import math
 from ._common import (
     _extend_leg,
     _finish,
+    _is_union_of,
     _junction_minimums,
     _junction_shape_minimums,
     _junction_trims,
@@ -22,11 +23,6 @@ from ._common import (
     _trimmed,
     _wall_thickness,
 )
-
-# When no plain fuse gives a usable solid, a radius wye's pieces are fused
-# again treating faces closer than each of these (mm) as touching, smallest
-# first (see `_wye_pick_fuse`). All are well under a sheet thickness.
-_WYE_FUSE_FUZZ = (0.01, 0.05, 0.2)
 
 
 def _wye_mitered_branch_shapes(api, branch, split_face, route, main_center, cuts, offset=0.0):
@@ -59,47 +55,19 @@ def _wye_mitered_branch_shapes(api, branch, split_face, route, main_center, cuts
     return split_shape, bend_shape, route_trims[0]
 
 
-# A mitered wye's gores fuse cleanly for most radii, but OpenCascade fails on a
-# few isolated ones. The layout then retries with the radius grown by this
-# step, up to _WYE_RADIUS_ATTEMPTS times in all.
-_WYE_RADIUS_STEP = 0.03
-_WYE_RADIUS_ATTEMPTS = 5
-
-
 def _wye_mitered_layout(context):
     """
     Lay out two split-profile faceted bends entering one common leg.
 
-    The air space and the outside of the wall are fused here already: if
-    either does not come out as one valid solid, the layout is redone with
-    a slightly larger bend radius.
-    Doing it in the layout (not in the build) keeps measure_wye_mitered()
-    and build_wye_mitered() on the same radius, so their trims agree.
+    measure_wye_mitered() and build_wye_mitered() both use this layout, so
+    their trims agree.
     """
-    api = context["hvac_api"]
-    # The air space and the outside of the wall are the two envelopes most likely to fail.
-    offsets = sorted({0.0, _wall_thickness(context)})
-    layout = None
-    for attempt in range(_WYE_RADIUS_ATTEMPTS):
-        layout = _wye_mitered_layout_at(context, 1.0 + _WYE_RADIUS_STEP * attempt)
-        if all(_is_one_valid_solid(api, _wye_mitered_envelope(api, layout, offset)) for offset in offsets):
-            break
-    return layout
-
-
-def _is_one_valid_solid(api, shape):
-    validation = api.validate(shape, require_solid=True)
-    return bool(validation["valid"]) and validation["solid_count"] == 1
-
-
-def _wye_mitered_layout_at(context, radius_scale):
-    """One mitered wye layout, with the bend radius multiplied by `radius_scale`."""
     api = context["hvac_api"]
     p = _props(context)
     cuts = max(int(p.get("NumberOfCuts", 2) or 2), 1)
 
     # Reuse the same split plane and feasible elbow paths as the radius wye.
-    ports, center, main_center, split_routes = _wye_split_route_layout(context, radius_scale)
+    ports, center, main_center, split_routes = _wye_split_route_layout(context)
     main = ports[0]
     main_direction = api.unit(api.port_direction(main))
     routes = []
@@ -275,6 +243,26 @@ def _wye_horizontal_extent(api, port):
     return extent
 
 
+def _wye_split_crosses_curve(api, main, branch_a, branch_b):
+    """
+    Whether the line splitting the main section between the branches crosses
+    a curved side: always on a round duct, on an oval when the cut falls in
+    one of its rounded ends, never on a rectangle.
+
+    Where it does, the walls of the two halves overlap past the cut and meet
+    at a grazing angle, which OpenCascade's booleans cannot fuse reliably.
+    """
+    profile = api.port_profile(main)
+    if profile == "Circular":
+        return True
+    if profile != "Oval":
+        return False
+    width, height = float(api.port_width(main)), float(api.port_height(main))
+    extent_a, extent_b = _wye_horizontal_extent(api, branch_a), _wye_horizontal_extent(api, branch_b)
+    cut_from_centre = abs(width * (0.5 - extent_a / (extent_a + extent_b)))
+    return cut_from_centre >= max(width - height, 0.0) / 2.0 - api.EPS
+
+
 def _wye_main_split_faces(api, main_center, branch_a, branch_b, offset=0.0):
     """
     Split the main profile horizontally in proportion to the branches.
@@ -348,11 +336,8 @@ def _wye_elbow_route(api, branch, split_port, requested_radius, wall=0.0):
     return route
 
 
-def _wye_split_route_layout(context, radius_scale=1.0):
-    """
-    Calculate shared port roles, split profiles, and feasible elbow paths.
-    `radius_scale` grows the bend radius (requested or minimum) for a retry.
-    """
+def _wye_split_route_layout(context):
+    """Calculate shared port roles, split profiles, and feasible elbow paths."""
     api = context["hvac_api"]
     raw_ports = list(api.connected_ports(context))
     if len(raw_ports) != 3:
@@ -364,9 +349,6 @@ def _wye_split_route_layout(context, radius_scale=1.0):
     branch_legs = [(1, branch_a), (2, branch_b)]
     wall = _wall_thickness(context)
     radius = float(_props(context).get("BranchRadius") or 0.0)
-    if radius_scale != 1.0:
-        smallest = max(_min_bend_radius(_size(api, branch), wall) for _, branch in branch_legs)
-        radius = max(radius, smallest) * float(radius_scale)
 
     # Step 1: Build provisional paths at the junction center.
     main_direction = api.unit(api.port_direction(main))
@@ -433,6 +415,12 @@ def _wye_branch_end_wire(api, route, start_wire, offset):
     return api.make_circular_wire_split_at(profile.center, end_dir, float(profile.params["Diameter"]), directions)
 
 
+# The order a radius wye's pieces are fused in. OCC booleans on swept solids
+# that share seams depend on the order; this one was chosen with the smoke run
+# (tools/geometry_smoke.py) as the one that builds the most cases.
+_WYE_RADIUS_FUSE_ORDER = ("main", "split_a", "split_b", "bend_a", "bend_b", "trim_a", "trim_b")
+
+
 def _wye_radius_layout(context):
     """Calculate the split profiles, branch paths, and trims for a wye."""
     api = context["hvac_api"]
@@ -462,17 +450,16 @@ def build_wye_radius(context):
     """Build a radiused wye from a horizontally divided main profile."""
     api = context["hvac_api"]
     ports, main_center, routes, trims = _wye_radius_layout(context)
-    built = {}
-
-    def air_envelope():
-        return envelope(0.0)
+    walls_unsupported = _wye_split_crosses_curve(api, ports[0], ports[1], ports[2])
 
     def envelope(offset):
-        if offset in built:
-            return built[offset]
+        if offset > api.EPS and walls_unsupported:
+            raise ValueError(
+                "A radius wye cannot have a wall where its split crosses a curved side of the main duct "
+                "(a round duct, or the rounded ends of an oval): use the mitered wye"
+            )
         # Sweep each split half of the main profile into its branch tangent.
         split_sweeps = []
-        split_touch_sweeps = []
         branch_sweeps = []
         grown_faces = _wye_main_split_faces(api, main_center, ports[1], ports[2], offset)
         for branch, _branch_index, split_face, route in routes:
@@ -490,12 +477,9 @@ def build_wye_radius(context):
                 )
                 tangent_wire = tangent_face.OuterWire
                 split_sweeps.append(probe)
-                split_touch_sweeps.append(section_probe)
             else:
                 split_sweeps.append(None)
-                split_touch_sweeps.append(None)
 
-            branch_tangent = route["ports"][0]
             try:
                 branch_sweeps.append(
                     api.sweep(
@@ -540,66 +524,28 @@ def build_wye_radius(context):
                     "Wye trim sweep failed for port '{}' at {:.6f} mm: {}".format(edge_key, trim_reach.Length, exc)
                 ) from exc
 
-        main_trim = trim_sweeps[0]
-        fuse_orders = []
-        for connector_sweeps in (split_sweeps, split_touch_sweeps):
-            leg_a = (connector_sweeps[0], branch_sweeps[0], trim_sweeps[1])
-            leg_b = (connector_sweeps[1], branch_sweeps[1], trim_sweeps[2])
-            fuse_orders.extend(
-                (
-                    (main_trim, *leg_a, *leg_b),
-                    (main_trim, leg_a[0], leg_a[1], leg_b[0], leg_b[1], leg_a[2], leg_b[2]),
-                    (*leg_a, main_trim, *leg_b),
-                    (main_trim, *leg_b, *leg_a),
-                    (*connector_sweeps, *branch_sweeps, *trim_sweeps),
-                )
+        # One fuse, in one fixed order (see _WYE_RADIUS_FUSE_ORDER).
+        named = {"main": trim_sweeps[0]}
+        for leg, side in enumerate("ab"):
+            named.update(
+                {
+                    "split_" + side: split_sweeps[leg],
+                    "bend_" + side: branch_sweeps[leg],
+                    "trim_" + side: trim_sweeps[leg + 1],
+                }
             )
-
-        shape = _wye_pick_fuse(api, fuse_orders, None if offset <= 0.0 else air_envelope())
-        if shape is None:
+        pieces = [named[name] for name in _WYE_RADIUS_FUSE_ORDER if named[name] is not None]
+        try:
+            shape = api.fuse(*pieces)
+        except Exception:
+            shape = None
+        if not _is_union_of(api, shape, pieces):
             requested_radius = float(_props(context).get("BranchRadius") or 0.0)
             effective_radii = ", ".join("{:.3f}".format(route["radius"]) for _, _, _, route in routes)
             raise RuntimeError(
                 "Wye geometry could not be fused into one valid solid "
                 "(requested radius {:.3f} mm; effective branch radii {} mm)".format(requested_radius, effective_radii)
             )
-        built[offset] = shape
         return shape
 
     return _finish(context, envelope, api.build_trim_rec_from_port_lengths(list(zip(ports, trims))))
-
-
-def _wye_pick_fuse(api, fuse_orders, air=None):
-    """
-    Fuse a radius wye's pieces into one solid, trying each order in turn.
-
-    OCC booleans are order-sensitive when several swept solids share seams,
-    and some orders give one valid solid that has silently dropped a leg or
-    is subtly wrong where a wall envelope's two halves overlap past the split
-    at a grazing angle. So plain fuses are tried first, then fuzzy ones
-    (faces closer than each `_WYE_FUSE_FUZZ` count as touching). Among the valid
-    single solids, the air space (`air` None) is the largest one (a union can
-    only lose volume by losing material); a wall envelope is the largest one
-    the air space cuts cleanly out of, the check its wall layer must pass.
-    """
-    for fuzzy in (0.0,) + _WYE_FUSE_FUZZ:
-        candidates = {}
-        for fuse_order in fuse_orders:
-            try:
-                candidate = api.fuse(*fuse_order, fuzzy=fuzzy)
-            except Exception:
-                continue
-            validation = api.validate(candidate, require_solid=True)
-            if validation["valid"] and validation["solid_count"] == 1:
-                candidates.setdefault(round(float(candidate.Volume)), candidate)
-        for volume in sorted(candidates, reverse=True):
-            if air is None:
-                return candidates[volume]
-            if volume <= float(air.Volume):
-                break
-            try:
-                api.envelopes_to_layers([air, candidates[volume]])
-            except Exception:
-                continue
-            return candidates[volume]
-    return None

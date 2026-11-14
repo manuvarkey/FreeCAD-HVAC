@@ -86,6 +86,30 @@ def _min_bend_radius(size, wall=0.0):
     return 0.5 * size + max(float(wall or 0.0), 0.0) + max(1.0, 0.01 * size)
 
 
+# The pieces a fitting is fused from overlap only by small modelling
+# clearances (and, in a wall envelope, by about a wall thickness where two
+# halves meet), so their union keeps nearly all of their summed volume. A fuse
+# that silently dropped or mangled a piece keeps much less.
+_UNION_MIN_SHARE = 0.9
+
+
+def _is_union_of(api, shape, pieces):
+    """
+    Cheap check of a fuse result: one valid solid, no larger than the pieces
+    together, no smaller than the largest piece, and keeping at least
+    `_UNION_MIN_SHARE` of the pieces' summed volume.
+    """
+    if shape is None or shape.isNull():
+        return False
+    validation = api.validate(shape, require_solid=True)
+    if not validation["valid"] or validation["solid_count"] != 1:
+        return False
+    volumes = [float(piece.Volume) for piece in pieces]
+    total = float(shape.Volume)
+    slack = 1.0e-6 * max(sum(volumes), 1.0)
+    return max(volumes) - slack <= total <= sum(volumes) + slack and total >= _UNION_MIN_SHARE * sum(volumes)
+
+
 def _finish(context, envelope, connection_lengths, port_suffixes=None):
     """
     Turn a fitting's envelope builder into the result dict a generator returns.

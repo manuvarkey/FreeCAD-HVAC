@@ -41,8 +41,9 @@ API versions: geometry 3, loss 1, PartScript 3.
   port: its open ends are Discharge terminals.
 - Lateral tees can be face-mounted (`Attachment`); wyes on a bullhead tee use the bullhead loss.
 - Plenum sizes left at 0 grow so every duct fits on its face.
-- Radius wyes build hollow on round ducts (wyes and bullhead tees; radii tried 150 to 900 mm); `api.fuse(fuzzy=...)` and
-  `api.make_circular_wire_split_at` added.
+- Fittings are built once, with no retries or fuse-order searches; failures are found by layout and volume checks and
+  reported. The radius wye refuses a wall where its split crosses a curved side (round, tall oval: use the mitered
+  wye) and builds on the oval at its default radius; `api.make_circular_wire_split_at` added.
 - "Layer Visibility" toolbar dropdown.
 - Sizing changes duct size only at straight-through junctions by default (`SizeChangePolicy`
   `AtStraightJunctions`, `AtInlineNodesOnly`, `EverySegment`); pluggable friction models.

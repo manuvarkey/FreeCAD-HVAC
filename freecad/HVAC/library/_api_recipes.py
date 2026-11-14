@@ -344,57 +344,25 @@ class _RecipesMixin:
     @classmethod
     def _layer_between(cls, inner, outer):
         """
-        One wall layer: the outer envelope with the inner envelope cut out.
+        One wall layer: the outer envelope with the inner envelope cut out,
+        in one cut.
 
-        OCC booleans on fused swept bodies are sensitive to whether the
-        inputs had their faces merged first, and neither way is always
-        right. So this tries the cut a few ways and keeps the first result
-        that passes a strict check: the inner envelope lies inside the
-        outer one, so the layer's volume must equal outer minus inner.
-        If no attempt has the right volume, it raises: a wrong-volume result
-        is a fragment, not the fitting. A right-volume result OCC still calls
-        invalid is returned as the best available.
+        The inner envelope lies inside the outer one, so the layer's volume
+        must equal outer minus inner. A result off by more than 1 % is a
+        wrong shape (typically a fragment of the wall) and raises; within
+        1 % it is the expected wall, kept even if OCC calls it invalid.
         """
         expected = float(outer.Volume) - float(inner.Volume)
-        tolerance = 1.0e-3 * max(abs(expected), 1.0)
-
-        def attempts():
-            # Step 1: exactly as built.
-            yield lambda: cls.cut(outer, inner)
-            # Step 2: faces merged first.
-            yield lambda: cls.cut(cls.refine(outer), cls.refine(inner))
-            # Step 3: a fuzzy cut, which tolerates nearly-touching faces.
-            yield lambda: outer.cut([inner], 1.0e-3)
-
-        best, best_score = None, None
-        for attempt in attempts():
-            try:
-                layer = cls.refine(attempt())
-                if layer is None or layer.isNull():
-                    continue
-                miss = abs(float(layer.Volume) - expected)
-                volume_ok = miss <= tolerance
-                valid = bool(layer.isValid())
-            except Exception:
-                continue
-            if volume_ok and valid:
-                return layer
-            # Otherwise keep the closest one in volume, a valid one first.
-            score = (volume_ok, valid, -miss)
-            if best_score is None or score > best_score:
-                best, best_score = layer, score
-        # A layer with the wrong volume is a wrong shape (typically a
-        # fragment of the wall); refuse it rather than hand it on as if it
-        # were the fitting. Within 1 % it is the expected wall with a small
-        # boolean defect (OCC may also call it invalid): kept as the best available.
-        if best is not None and not best_score[0]:
-            near = -best_score[2] <= 0.01 * max(abs(expected), 1.0)
-            best_score = (near,) + best_score[1:]
-        if best is None or not best_score[0]:
+        layer = None
+        try:
+            layer = cls.refine(cls.cut(outer, inner))
+        except Exception:
+            layer = None
+        if layer is None or layer.isNull() or abs(float(layer.Volume) - expected) > 0.01 * max(abs(expected), 1.0):
             raise ValueError(
                 "Could not cut a wall layer out of its envelopes (wall volume should be {:.0f} mm3)".format(expected)
             )
-        return best
+        return layer
 
     @staticmethod
     def single_layer(context, shape, **extra):

@@ -92,8 +92,8 @@ asked, done the same day:
    stay in the Change Type list. Every swept or mitered bend clamps its
    radius to `_common._min_bend_radius` (half the duct size plus the whole
    wall, plus 1 % or 1 mm), so a wall layer can no longer fold inside the
-   bend; the mitered wye retries with a 3 % larger radius (up to 5 times,
-   in its layout so trims stay equal) when OpenCascade cannot fuse it.
+   bend. (The mitered wye's retry with a 3 % larger radius was removed on
+   14 November 2026, see "Geometry is built once" below; no build needed it.)
    Static checks: `NumberOfCuts` at least 1, segment sizes above 0. Smoke
    run 525 valid of 605 (was 517; 8 fixed, none lost).
 2. *Warnings link to elements.* Calculate Airflow and Size Ducts warnings
@@ -170,35 +170,45 @@ on its face (`boxes._grow_to_fit`; a size the user set still reports the
 overhang). Not done: saving a custom fitting as a library type (owner: not
 now).
 
-**Radius wye, fixed for round wyes (14 November 2026).** Built in FreeCAD
-1.1.4 (flatpak), `builtin_basic/branch_wye_radius` failed the wall cut on
-round wyes at every radius, on the oval wye at the default radius and on the
-round bullhead. Three causes, three changes in `fittings/wyes.py`:
-(1) each half of the split main section (a D shape, two corners) was swept
-into a one-edge circle, so the sweep twisted; the branch end circle is now
-cut where the D's corners arrive after turning through the bend
-(`_wye_branch_end_wire`, `api.make_circular_wire_split_at`); (2) a wall
-envelope's half was `offset_wire` of the air half, which can add a corner
-where the arc meets the cut; it is now cut from the grown main profile,
-reaching the wall thickness past the cut so the crotch keeps its wall
-(`_wye_main_split_faces(offset=...)`, same shape, two corners);
-(3) the two wall halves overlap past the cut and their faces cross at a
-grazing angle, where a plain fuse can return a valid solid that is subtly
-wrong, and the largest valid solid is not always the right one;
-`_wye_pick_fuse` now tries plain fuses, then fuzzy ones at 0.01, 0.05 and
-0.2 mm (`api.fuse(fuzzy=...)`), and takes the largest wall envelope that the
-air space cuts cleanly out of. Round wyes build at 150 (default), 300, 450
-(it hung in the earlier attempt), 600 and 900 mm, and the round bullhead at
-the default radius and 300 mm; rectangular and oval builds are unchanged.
-Still failing: the oval wye at the default radius (300 mm builds). A round
-wye or bullhead takes about 15 to 35 s to build (up to three fuzzy rounds of
-ten fuse orders). Still not in `smacna`: not retried with the SMACNA wall.
+**Geometry is built once (owner, 14 November 2026):** "do not use slower
+geometry options and do not iterate geometry; use mathematical checks for
+failure for fast generation." A fitting builds each shape once, in one fixed
+order, with plain booleans: no retries, no search over fuse orders, no fuzzy
+booleans. Failure is found by cheap checks: on the layout before building
+(radius against `_min_bend_radius`, tangent clearances, the split rule
+below) and on the result after (`_common._is_union_of`: one valid solid,
+between the largest piece and the pieces' sum, keeping at least 90 % of the
+sum; a wall layer must have the volume outer minus inner, within 1 %), and
+each raises a clear error. Removed: the radius wye's search over ten fuse
+orders, the mitered wye's radius retries, and the second and third cut
+attempts in `_layer_between`. Only radius wye builds changed; the whole smoke
+run takes 104 s.
+
+**Radius wye (14 November 2026).** `builtin_basic/branch_wye_radius` splits
+the main section between the branches and sweeps each half into its branch.
+Made exact: the branch end circle is cut where the half's corners arrive
+after the bend, so the sweep does not twist (`_wye_branch_end_wire`,
+`api.make_circular_wire_split_at`), and a wall half is cut from the grown
+main profile, reaching the wall thickness past the cut, instead of
+`offset_wire` (`_wye_main_split_faces(offset=...)`). Rule found with the
+smoke run: where the split line crosses a curved side of the main section
+(always on a round duct; on an oval when the cut falls in a rounded end),
+the two wall halves overlap past the cut and meet at a grazing angle that a
+plain fuse cannot handle; only a fuzzy fuse did, which is now ruled out. Such
+a wye with a wall is refused before any geometry is built
+(`_wye_split_crosses_curve`), pointing to the mitered wye; without a wall it
+builds. Builds: rectangular and oval (wide) wyes and bullheads; the oval
+wye at its default radius is new (fuse order `_WYE_RADIUS_FUSE_ORDER`, chosen
+with the smoke run). Fails: round (refused), and the tall oval wye and
+bullhead, whose air space itself does not fuse in any fixed order (before,
+one of the ten orders tried happened to work). A radius wye now builds in
+about a second. Not in `smacna`.
 
 **Next task:** the owner's GUI check of the reworked labels and port panel
 (including drawing ducts onto equipment and custom fitting ports), the
 layer visibility dropdown and the other corrections; then tag the freeze
-(Stage 11). Known open defect: the radius wye on an oval wye at its default
-radius (above).
+(Stage 11). Known open defect: the radius wye has no wall on round and tall
+oval ducts (above); the mitered wye is the automatic choice there anyway.
 
 **Branch:** all roadmap work is on `roadmap-stage-0`. Work done in a
 worktree is committed there and `roadmap-stage-0` is then fast-forwarded to
@@ -220,7 +230,7 @@ it. Nothing has been pushed since Stage 5.
 - Geometry smoke run: `"<FreeCAD>/bin/python.exe" tools/geometry_smoke.py`
   (add `--all` to list every build, a `.json` path to save the report).
   `freecadcmd tools/geometry_smoke.py` does not execute the script with
-  FreeCAD 1.1. Earlier result: 322 valid of 347 builds; latest (14 November 2026, FreeCAD 1.1.4 flatpak on Linux: 590 valid, 7 errors, of 629; the errors are the radius wye on an oval wye and the six too-steep radiussed offsets; run it with `flatpak run --env=FREECAD_BIN=/app/freecad/bin --command=sh org.freecad.FreeCAD -c "python3 tools/geometry_smoke.py"`); the 25 others are the
+  FreeCAD 1.1. Earlier result: 322 valid of 347 builds; latest (14 November 2026, FreeCAD 1.1.4 flatpak on Linux: 587 valid, 10 errors, of 629, in 104 s; the errors are four radius wyes (round refused, tall oval) and the six too-steep radiussed offsets; run it with `flatpak run --env=FREECAD_BIN=/app/freecad/bin --command=sh org.freecad.FreeCAD -c "python3 tools/geometry_smoke.py"`); the 25 others are the
   known cases listed above. A shape that builds valid is not necessarily
   right: new geometry also needs a look in the FreeCAD GUI, which no stage
   so far has had.
@@ -253,6 +263,9 @@ it. Nothing has been pushed since Stage 5.
 - *PartScript types.* A property added to a type whose geometry is a
   PartScript must also be added to the list in
   `tests/test_library_discovery.py`.
+- *Build once.* No geometry retries, fuse-order searches or fuzzy booleans;
+  check the layout and the result mathematically and raise a clear error
+  (see "Geometry is built once" above).
 - *Measure equals build.* A fitting's `measure_*` and `build_*` must come
   from one layout function; the smoke run reports a mismatch.
 - *Envelope builders.* `envelope(offset)` returns the air space grown by
