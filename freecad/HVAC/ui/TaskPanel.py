@@ -334,6 +334,79 @@ def _layer_label(layer_id):
     return layer_id.replace("_", " ").capitalize()
 
 
+def layer_visibility_entries(net):
+    """
+    [(property name, label), ...] for the display switches a network has:
+    one ShowLayer_<Role> per construction layer role, then ShowFeatures.
+    Shared by the Layer Visibility panel and its toolbar dropdown.
+    """
+    entries = []
+    for role in ALL_LAYER_ROLES:
+        prop_name = "ShowLayer_" + role_property_suffix(role)
+        if prop_name in net.PropertiesList:
+            entries.append((prop_name, _layer_label(role)))
+    if "ShowFeatures" in net.PropertiesList:
+        entries.append(("ShowFeatures", translate("HVAC_LayerVisibility", "Construction features (flanges, ...)")))
+    return entries
+
+
+def set_layer_visibility(net, prop_name, value):
+    """Set one display switch; only writes on a change (each write re-renders the network)."""
+    if bool(getattr(net, prop_name, True)) != bool(value):
+        setattr(net, prop_name, bool(value))
+
+
+class TaskPanelLayerVisibility:
+    """
+    Task panel with the active network's display switches: one checkbox per
+    construction layer role and one for construction features. Display only,
+    applied at once (no recompute), so the panel only has a Close button.
+    """
+
+    def __init__(self, network_obj):
+        self.network_obj = network_obj
+
+        self.form = QtWidgets.QWidget()
+        self.form.setWindowTitle(translate("HVAC_LayerVisibility", "Layer Visibility"))
+        layout = QtWidgets.QVBoxLayout(self.form)
+
+        layout.addWidget(QtWidgets.QLabel(
+            translate("HVAC_LayerVisibility", "Network: {}").format(network_obj.Label)
+        ))
+        note = QtWidgets.QLabel(
+            translate("HVAC_LayerVisibility", "Show layers and features (display only, applied at once):")
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        self.checks = {}
+        for prop_name, label in layer_visibility_entries(network_obj):
+            check = QtWidgets.QCheckBox(label)
+            check.setChecked(bool(getattr(network_obj, prop_name, True)))
+            check.toggled.connect(
+                lambda checked, prop_name=prop_name: set_layer_visibility(self.network_obj, prop_name, checked)
+            )
+            layout.addWidget(check)
+            self.checks[prop_name] = check
+
+        buttons = QtWidgets.QHBoxLayout()
+        show_all = QtWidgets.QPushButton(translate("HVAC_LayerVisibility", "Show All"))
+        show_all.clicked.connect(lambda: [check.setChecked(True) for check in self.checks.values()])
+        buttons.addWidget(show_all)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+        layout.addStretch(1)
+
+    def getStandardButtons(self):
+        return QtWidgets.QDialogButtonBox.Close
+
+    def accept(self):
+        return True
+
+    def reject(self):
+        return True
+
+
 class TaskPanelEditMaterial:
     """
     Task panel to assign native FreeCAD materials to selected duct
@@ -463,39 +536,10 @@ class TaskPanelNetworkTypeDefaults:
             layout.addWidget(row)
             self.role_material_rows[role] = row
 
-        # Display only, applied at once (no recompute): which construction
-        # layers (by role) and features this network draws.
-        layout.addWidget(self._makeSeparator())
-        layout.addWidget(QtWidgets.QLabel(
-            translate("HVAC_NetworkTypeDefaults", "Show layers (display only, applied at once):")
-        ))
-        self.visibility_checks = {}
-        for role in ALL_LAYER_ROLES:
-            prop_name = "ShowLayer_" + role_property_suffix(role)
-            self._addVisibilityCheck(layout, prop_name, _layer_label(role))
-        self._addVisibilityCheck(
-            layout, "ShowFeatures", translate("HVAC_NetworkTypeDefaults", "Construction features (flanges, ...)")
-        )
-
         self._populateLibraries()
         self._loadFromNetwork()
 
         self.library_combo.currentIndexChanged.connect(self._refreshProfiles)
-
-    def _addVisibilityCheck(self, layout, prop_name, label):
-        if prop_name not in self.network_obj.PropertiesList:
-            return
-        check = QtWidgets.QCheckBox(label)
-        check.setChecked(bool(getattr(self.network_obj, prop_name, True)))
-
-        def toggled(_state, prop_name=prop_name, check=check):
-            value = check.isChecked()
-            if bool(getattr(self.network_obj, prop_name, True)) != value:
-                setattr(self.network_obj, prop_name, value)
-
-        check.stateChanged.connect(toggled)
-        layout.addWidget(check)
-        self.visibility_checks[prop_name] = check
 
     def _makeSeparator(self):
         line = QtWidgets.QFrame()
@@ -2430,21 +2474,34 @@ class TaskPanelPortContainer:
     (kind "equipment", grouped by what each port does) or a custom fitting's
     (kind "fitting"). The same panel opens again later to edit them.
 
-    - The tree lists the ports; picking one selects its marker in the 3D
-      view and loads it into "Selected port" for renaming, moving (X/Y from
-      the face centre), changing its function, or removing it.
-    - "Add port" makes a port on the face picked in the 3D view, at the
-      given X/Y offset from the centre of the opening; for equipment, of
-      the kind picked in the tree or in the Function list.
-    - Equipment: its internal pressure drop. Custom fitting: optionally
-      put it on an existing junction (that junction's fitting then takes
-      this geometry, moved onto the node).
+    - The tree lists the ports. Picking one selects its marker in the 3D
+      view, and picking a marker in the 3D view picks it in the tree.
+    - One "Port" box follows the 3D selection: a port marker selected ->
+      edit it (name, function, X/Y from the face centre; Apply / Remove);
+      a planar face of the model selected -> a new port on that face (Add
+      Port); nothing usable selected -> a hint. For equipment, picking a
+      group header in the tree picks the function of the next new port.
+    - Equipment: its internal pressure drop. Custom fitting: the junctions
+      it fits (same number of ducts as ports, and the ports line up with the
+      ducts; an end node counts for a one-port fitting), listed and drawn in
+      orange in the 3D view like a selection; picking one in the list
+      selects its fittings in the 3D view and the other way round (the
+      selected one shows the normal selection colour). "Use This Fitting
+      There" moves the fitting onto it.
 
     Ducts drawn to end on the ports attach without any further step: an
     equipment port is connected to its duct end, and the ends on a custom
     fitting's ports become one junction using the fitting where it is
     (DuctNetwork.autoAttach).
     """
+
+    MODE_NONE = "none"
+    MODE_ADD = "add"
+    MODE_EDIT = "edit"
+
+    # Candidate junction highlight; FreeCAD draws the selection in green and
+    # pre-selection in yellow, so neither is used here.
+    COLOR_CANDIDATE = (1.0, 0.5, 0.0)
 
     def __init__(self, container, kind="equipment"):
         from ..core import Equipment, _custom_fitting
@@ -2454,6 +2511,13 @@ class TaskPanelPortContainer:
         self.doc = container.Document
         self._custom_fitting = _custom_fitting
         self._equipment = Equipment
+        self._syncing = False
+        self._mode = self.MODE_NONE
+        self._marker = None
+        self._face = None
+        self._highlight_root = None
+        self._highlight_switches = {}
+        self.junction_list = None
 
         self.form = QtWidgets.QWidget()
         title = "Equipment" if kind == "equipment" else "Custom Fitting"
@@ -2469,50 +2533,38 @@ class TaskPanelPortContainer:
         self.tree.itemSelectionChanged.connect(self._onTreeSelection)
         layout.addWidget(self.tree)
 
-        # Step 2: adding a port on the face picked in the 3D view.
-        add_box = QtWidgets.QGroupBox(translate("HVAC_PortContainer", "Add port"))
-        add_form = QtWidgets.QFormLayout(add_box)
-        self.face_label = QtWidgets.QLabel()
-        self.face_label.setWordWrap(True)
-        add_form.addRow(self.face_label)
-        self.add_function = self._functionCombo()
-        if self.add_function is not None:
-            add_form.addRow(translate("HVAC_PortContainer", "Function:"), self.add_function)
-        self.add_name = QtWidgets.QLineEdit()
-        add_form.addRow(translate("HVAC_PortContainer", "Name (optional):"), self.add_name)
-        self.add_x = _length_spin_box()
-        self.add_y = _length_spin_box()
-        add_form.addRow(translate("HVAC_PortContainer", "Offset X from face centre:"), self.add_x)
-        add_form.addRow(translate("HVAC_PortContainer", "Offset Y from face centre:"), self.add_y)
+        # Step 2: one box for the port in hand, a new one or an existing one.
+        self.port_box = QtWidgets.QGroupBox(translate("HVAC_PortContainer", "Port"))
+        port_form = QtWidgets.QFormLayout(self.port_box)
+        self.state_label = QtWidgets.QLabel()
+        self.state_label.setWordWrap(True)
+        port_form.addRow(self.state_label)
+        self.function_combo = self._functionCombo()
+        if self.function_combo is not None:
+            port_form.addRow(translate("HVAC_PortContainer", "Function:"), self.function_combo)
+        self.name_edit = QtWidgets.QLineEdit()
+        self.name_label = QtWidgets.QLabel(translate("HVAC_PortContainer", "Name:"))
+        port_form.addRow(self.name_label, self.name_edit)
+        self.x_spin = _length_spin_box()
+        self.y_spin = _length_spin_box()
+        port_form.addRow(translate("HVAC_PortContainer", "Offset X from face centre:"), self.x_spin)
+        port_form.addRow(translate("HVAC_PortContainer", "Offset Y from face centre:"), self.y_spin)
+        buttons = QtWidgets.QHBoxLayout()
         self.add_button = QtWidgets.QPushButton(translate("HVAC_PortContainer", "Add Port"))
         self.add_button.clicked.connect(self._addPort)
-        add_form.addRow(self.add_button)
-        layout.addWidget(add_box)
-
-        # Step 3: editing the port picked in the tree.
-        edit_box = QtWidgets.QGroupBox(translate("HVAC_PortContainer", "Selected port"))
-        edit_form = QtWidgets.QFormLayout(edit_box)
-        self.edit_name = QtWidgets.QLineEdit()
-        edit_form.addRow(translate("HVAC_PortContainer", "Name:"), self.edit_name)
-        self.edit_function = self._functionCombo()
-        if self.edit_function is not None:
-            edit_form.addRow(translate("HVAC_PortContainer", "Function:"), self.edit_function)
-        self.edit_x = _length_spin_box()
-        self.edit_y = _length_spin_box()
-        edit_form.addRow(translate("HVAC_PortContainer", "Offset X from face centre:"), self.edit_x)
-        edit_form.addRow(translate("HVAC_PortContainer", "Offset Y from face centre:"), self.edit_y)
-        buttons = QtWidgets.QHBoxLayout()
         self.apply_button = QtWidgets.QPushButton(translate("HVAC_PortContainer", "Apply"))
         self.apply_button.clicked.connect(self._applyEdit)
         self.remove_button = QtWidgets.QPushButton(translate("HVAC_PortContainer", "Remove"))
         self.remove_button.clicked.connect(self._removePort)
-        buttons.addWidget(self.apply_button)
-        buttons.addWidget(self.remove_button)
-        edit_form.addRow(buttons)
-        self.edit_box = edit_box
-        layout.addWidget(edit_box)
+        for button in (self.add_button, self.apply_button, self.remove_button):
+            buttons.addWidget(button)
+        port_form.addRow(buttons)
+        self._port_inputs = [self.name_edit, self.x_spin, self.y_spin] + (
+            [self.function_combo] if self.function_combo is not None else []
+        )
+        layout.addWidget(self.port_box)
 
-        # Step 4: the container's own options.
+        # Step 3: the container's own options.
         if kind == "equipment":
             options = QtWidgets.QGroupBox(translate("HVAC_PortContainer", "Equipment"))
             options_form = QtWidgets.QFormLayout(options)
@@ -2538,25 +2590,28 @@ class TaskPanelPortContainer:
             layout.addWidget(options)
         else:
             options = QtWidgets.QGroupBox(translate("HVAC_PortContainer", "Use in a network"))
-            options_form = QtWidgets.QFormLayout(options)
+            options_layout = QtWidgets.QVBoxLayout(options)
             hint = QtWidgets.QLabel(
                 translate(
                     "HVAC_PortContainer",
                     "Draw the duct base geometry so the ducts end on the ports: their ends become one junction "
-                    "that uses this fitting where it is. Or move it onto an existing junction:",
+                    "that uses this fitting where it is. Or move it onto an existing junction it fits (shown in "
+                    "orange in the 3D view):",
                 )
             )
             hint.setWordWrap(True)
-            options_form.addRow(hint)
-            self.junction_combo = QtWidgets.QComboBox()
-            options_form.addRow(translate("HVAC_PortContainer", "Junction:"), self.junction_combo)
+            options_layout.addWidget(hint)
+            self.junction_list = QtWidgets.QListWidget()
+            self.junction_list.setMinimumHeight(90)
+            self.junction_list.itemSelectionChanged.connect(self._onJunctionListSelection)
+            options_layout.addWidget(self.junction_list)
             self.use_button = QtWidgets.QPushButton(translate("HVAC_PortContainer", "Use This Fitting There"))
             self.use_button.clicked.connect(self._useAtJunction)
-            options_form.addRow(self.use_button)
+            options_layout.addWidget(self.use_button)
             layout.addWidget(options)
 
         self._refresh()
-        self._refreshFace()
+        self._syncFromSelection()
         Gui.Selection.addObserver(self)
 
     # -- helpers ------------------------------------------------------------
@@ -2585,12 +2640,48 @@ class TaskPanelPortContainer:
     def _ports(self):
         return self._custom_fitting.container_ports(self.container)
 
-    def _selectedMarker(self):
+    def _treeMarker(self):
         items = self.tree.selectedItems()
         if not items:
             return None
         name = items[0].data(0, QtCore.Qt.UserRole)
         return self.doc.getObject(name) if name else None
+
+    def _selectedObjects(self):
+        """Every object picked in the 3D view or the tree, resolved through App::Parts / links to the picked one."""
+        objects = []
+        for sel in Gui.Selection.getSelectionEx("", 0) or []:
+            owner = sel.Object
+            for sub in sel.SubElementNames or [""]:
+                obj = owner.getSubObject(sub, retType=1) if sub else owner
+                objects.append(obj if obj is not None else owner)
+        return objects
+
+    def _selectedPortMarker(self):
+        """The port marker of this container picked in the 3D view (an axis or plane of the marker counts)."""
+        ports = {marker.Name: marker for marker in self._ports()}
+        for obj in self._selectedObjects():
+            if obj.Name in ports:
+                return ports[obj.Name]
+            # A marker's own axis, plane or origin: the marker lists it in OriginFeatures. (Not any InList
+            # entry: the body a marker is attached to has the marker in its InList too.)
+            for candidate in getattr(obj, "InList", []) or []:
+                if candidate.Name in ports and obj in (getattr(candidate, "OriginFeatures", []) or []):
+                    return ports[candidate.Name]
+        return None
+
+    def _selectedJunction(self):
+        """The junction picked in the 3D view: the junction itself, or one of its fittings."""
+        from ..utils import hvaclib
+
+        for obj in self._selectedObjects():
+            if hvaclib.isDuctJunction(obj):
+                return obj
+            if hvaclib.isDuctComponent(obj):
+                junction = self.doc.getObject(getattr(obj, "ParentJunctionName", "") or "")
+                if junction is not None:
+                    return junction
+        return None
 
     def _refresh(self, select_name=None):
         """Rebuild the tree from the container's markers (grouped by function for equipment)."""
@@ -2629,74 +2720,300 @@ class TaskPanelPortContainer:
         if selected is not None:
             selected.setSelected(True)
         self.tree.blockSignals(False)
-        self._loadSelected()
         if self.kind == "fitting":
             self._refreshJunctions()
 
-    def _loadSelected(self):
-        marker = self._selectedMarker()
-        self.edit_box.setEnabled(marker is not None)
-        if marker is None:
+    def _selectTreeMarker(self, marker):
+        """Pick `marker`'s row in the tree (None: no port row), without acting on it."""
+        self.tree.blockSignals(True)
+        try:
+            iterator = QtWidgets.QTreeWidgetItemIterator(self.tree)
+            while iterator.value():
+                item = iterator.value()
+                name = item.data(0, QtCore.Qt.UserRole)
+                if name:
+                    item.setSelected(marker is not None and name == marker.Name)
+                elif marker is not None:
+                    item.setSelected(False)
+                iterator += 1
+        finally:
+            self.tree.blockSignals(False)
+
+    # -- the Port box -------------------------------------------------------
+
+    def _syncFromSelection(self):
+        """Put the Port box (and the tree and junction list) in step with the 3D selection."""
+        if self._syncing:
             return
-        self.edit_name.setText(str(getattr(marker, "PortName", "") or ""))
-        self.edit_x.setValue(float(getattr(marker, "PortOffsetX", 0.0) or 0.0))
-        self.edit_y.setValue(float(getattr(marker, "PortOffsetY", 0.0) or 0.0))
-        if self.edit_function is not None:
-            index = self.edit_function.findData(str(getattr(marker, "EquipmentPortFunction", "SupplyOutlet")))
-            self.edit_function.setCurrentIndex(max(index, 0))
+        self._syncing = True
+        try:
+            marker = self._selectedPortMarker()
+            faces = [] if marker is not None else selected_planar_faces()
+            if marker is not None:
+                self._selectTreeMarker(marker)
+                if self._mode != self.MODE_EDIT or self._marker is None or self._marker.Name != marker.Name:
+                    self._setMode(self.MODE_EDIT, marker=marker)
+            elif faces:
+                self._selectTreeMarker(None)
+                face = (faces[0][0].Name, faces[0][1])
+                if self._mode != self.MODE_ADD or self._face != face:
+                    self._setMode(self.MODE_ADD, face=face, body=faces[0][0])
+            else:
+                self._selectTreeMarker(None)
+                self._setMode(self.MODE_NONE)
+            if self.junction_list is not None:
+                self._selectJunctionRow(self._selectedJunction())
+        finally:
+            self._syncing = False
 
-    def _refreshFace(self):
-        faces = selected_planar_faces()
-        if faces:
-            body, face_name = faces[0]
-            self.face_label.setText(translate("HVAC_PortContainer", "Face: {}").format(body.Label + "." + face_name))
-        else:
-            self.face_label.setText(
-                translate("HVAC_PortContainer", "Pick a planar end face of the model in the 3D view.")
+    def _setMode(self, mode, marker=None, face=None, body=None):
+        self._mode = mode
+        self._marker = marker if mode == self.MODE_EDIT else None
+        self._face = face if mode == self.MODE_ADD else None
+        for widget in self._port_inputs:
+            widget.setEnabled(mode != self.MODE_NONE)
+        self.add_button.setVisible(mode == self.MODE_ADD)
+        self.apply_button.setVisible(mode == self.MODE_EDIT)
+        self.remove_button.setVisible(mode == self.MODE_EDIT)
+        if mode == self.MODE_EDIT:
+            label = str(getattr(marker, "PortName", "") or marker.Label)
+            self.state_label.setText(
+                translate("HVAC_PortContainer", "Port {} ({} {})").format(
+                    label, getattr(marker, "PortProfile", ""), self._custom_fitting.port_size_text(marker)
+                )
             )
-        self.add_button.setEnabled(bool(faces))
+            self.name_label.setText(translate("HVAC_PortContainer", "Name:"))
+            self.name_edit.setText(str(getattr(marker, "PortName", "") or ""))
+            self.x_spin.setValue(float(getattr(marker, "PortOffsetX", 0.0) or 0.0))
+            self.y_spin.setValue(float(getattr(marker, "PortOffsetY", 0.0) or 0.0))
+            if self.function_combo is not None:
+                index = self.function_combo.findData(str(getattr(marker, "EquipmentPortFunction", "SupplyOutlet")))
+                self.function_combo.setCurrentIndex(max(index, 0))
+        elif mode == self.MODE_ADD:
+            self.state_label.setText(
+                translate("HVAC_PortContainer", "New port on face {}").format(body.Label + "." + face[1])
+            )
+            self.name_label.setText(translate("HVAC_PortContainer", "Name (optional):"))
+            self.name_edit.clear()
+            self.x_spin.setValue(0.0)
+            self.y_spin.setValue(0.0)
+        else:
+            self.state_label.setText(
+                translate(
+                    "HVAC_PortContainer",
+                    "Pick a planar end face of the model in the 3D view to add a port, or a port in the list "
+                    "(or its marker in the 3D view) to edit it.",
+                )
+            )
 
-    def _refreshJunctions(self):
-        """Every junction of every network in the document, with how many ports it has."""
+    # -- the junction list (custom fitting) ----------------------------------
+
+    def _candidateJunctions(self):
+        """Every junction in the document this fitting can be put on (see _custom_fitting.fit_problem)."""
         from ..utils import hvaclib
 
-        count = len(self._ports())
-        self.junction_combo.clear()
+        found = []
         for obj in self.doc.Objects:
-            if not hvaclib.isDuctJunction(obj) or getattr(obj, "Topology", "") in ("", "end"):
+            if not hvaclib.isDuctJunction(obj):
                 continue
-            degree = int(getattr(obj, "Degree", 0) or 0)
-            mark = "" if degree == count else "  ({} ports, fitting has {})".format(degree, count)
-            self.junction_combo.addItem("{} {}{}".format(getattr(obj, "Number", "") or "", obj.Label, mark), obj.Name)
+            try:
+                primary = obj.Proxy.getPrimaryComponent()
+            except Exception:
+                primary = None
+            if primary is None or "GeometrySource" not in primary.PropertiesList:
+                continue
+            if not self._custom_fitting.fit_problem(self.container, primary):
+                found.append(obj)
+        return found
+
+    def _refreshJunctions(self):
+        """List the junctions this fitting fits and highlight them in the 3D view."""
+        candidates = self._candidateJunctions()
+        self.junction_list.blockSignals(True)
+        self.junction_list.clear()
+        for junction in candidates:
+            number = getattr(junction, "Number", "") or ""
+            item = QtWidgets.QListWidgetItem(" ".join(filter(None, (str(number), junction.Label))))
+            item.setData(QtCore.Qt.UserRole, junction.Name)
+            self.junction_list.addItem(item)
+        if not candidates:
+            item = QtWidgets.QListWidgetItem(translate("HVAC_PortContainer", "No junction in the document fits"))
+            item.setFlags(QtCore.Qt.NoItemFlags)
+            self.junction_list.addItem(item)
+        self.junction_list.blockSignals(False)
+        self.use_button.setEnabled(False)
+        self._drawHighlights(candidates)
+
+    def _selectJunctionRow(self, junction):
+        self.junction_list.blockSignals(True)
+        try:
+            for row in range(self.junction_list.count()):
+                item = self.junction_list.item(row)
+                item.setSelected(junction is not None and item.data(QtCore.Qt.UserRole) == junction.Name)
+        finally:
+            self.junction_list.blockSignals(False)
+        self.use_button.setEnabled(bool(self.junction_list.selectedItems()))
+        self._showHighlights(junction)
+
+    def _listedJunction(self):
+        items = self.junction_list.selectedItems() if self.junction_list is not None else []
+        return self.doc.getObject(items[0].data(QtCore.Qt.UserRole) or "") if items else None
+
+    def _onJunctionListSelection(self):
+        """Select the listed junction's fittings in the 3D view."""
+        junction = self._listedJunction()
+        self.use_button.setEnabled(junction is not None)
+        if junction is None or self._syncing:
+            return
+        self._syncing = True
+        try:
+            Gui.Selection.clearSelection()
+            components = []
+            try:
+                components = list(junction.Proxy.getComponents() or [])
+            except Exception:
+                components = []
+            for obj in components or [junction]:
+                Gui.Selection.addSelection(self.doc.Name, obj.Name)
+            self._selectTreeMarker(None)
+            self._setMode(self.MODE_NONE)
+            self._showHighlights(junction)
+        finally:
+            self._syncing = False
+
+    def _drawHighlights(self, candidates):
+        """
+        Draw every candidate junction's fittings in orange over the model, the
+        way FreeCAD draws a selection: a copy of their shapes with one
+        overriding colour, pulled in front of the originals, not pickable (a
+        click still reaches the real fitting). One switch per junction, so the
+        selected one can show the normal selection colour instead.
+        """
+        self._clearHighlights()
+        try:
+            from pivy import coin
+
+            view = Gui.ActiveDocument.ActiveView if Gui.ActiveDocument else None
+            if view is None or not hasattr(view, "getSceneGraph") or not candidates:
+                return
+            root = coin.SoSeparator()
+            pick = coin.SoPickStyle()
+            pick.style = coin.SoPickStyle.UNPICKABLE
+            root.addChild(pick)
+            offset = coin.SoPolygonOffset()
+            offset.factor = -1.0
+            offset.units = -1.0
+            root.addChild(offset)
+            material = coin.SoMaterial()
+            material.diffuseColor = self.COLOR_CANDIDATE
+            material.emissiveColor = tuple(0.35 * c for c in self.COLOR_CANDIDATE)
+            material.setOverride(True)
+            root.addChild(material)
+            binding = coin.SoMaterialBinding()
+            binding.value = coin.SoMaterialBinding.OVERALL
+            binding.setOverride(True)
+            root.addChild(binding)
+            for junction in candidates:
+                node = self._shapeNode(junction)
+                if node is None:
+                    continue
+                switch = coin.SoSwitch()
+                switch.addChild(node)
+                switch.whichChild = 0
+                root.addChild(switch)
+                self._highlight_switches[junction.Name] = switch
+            view.getSceneGraph().addChild(root)
+            self._highlight_root = (view, root)
+        except Exception as e:
+            FreeCAD.Console.PrintWarning("HVAC - junction highlights not drawn: {}\n".format(e))
+
+    def _shapeNode(self, junction):
+        """A Coin node with the faces of a junction's fittings (a custom fitting's link included), or None."""
+        import Part
+        from pivy import coin
+
+        shapes = []
+        try:
+            components = list(junction.Proxy.getComponents() or [])
+        except Exception:
+            components = []
+        for obj in components:
+            shape = getattr(obj, "Shape", None)
+            if shape is None or shape.isNull():
+                link = self._custom_fitting.owned_link(obj)
+                shape = Part.getShape(link) if link is not None else None
+            if shape is not None and not shape.isNull() and shape.Faces:
+                shapes.append(shape)
+        if not shapes:
+            return self._portPlanesNode(junction)
+        text = Part.makeCompound(shapes).writeInventor()
+        source = coin.SoInput()
+        source.setBuffer(text)
+        return coin.SoDB.readAll(source)
+
+    def _portPlanesNode(self, junction):
+        """For a junction whose fittings draw nothing (an end marker): its duct openings as port planes, or None."""
+        from pivy import coin
+
+        try:
+            primary = junction.Proxy.getPrimaryComponent()
+            ports = json.loads(getattr(primary, "LocalPortsJson", "") or "[]") if primary is not None else []
+        except Exception:
+            ports = []
+        if not ports:
+            return None
+        node = coin.SoSeparator()
+        for port in ports:
+            node.addChild(buildPortHighlightCoinNode(port, color=self.COLOR_CANDIDATE, transparency=0.0, scale=1.0))
+        return node
+
+    def _showHighlights(self, selected_junction):
+        """Hide the highlight of the selected junction, so FreeCAD's own selection colour shows on it."""
+        name = selected_junction.Name if selected_junction is not None else None
+        for junction_name, switch in self._highlight_switches.items():
+            switch.whichChild = -1 if junction_name == name else 0
+
+    def _clearHighlights(self):
+        if self._highlight_root is None:
+            return
+        view, root = self._highlight_root
+        self._highlight_root = None
+        self._highlight_switches = {}
+        try:
+            view.getSceneGraph().removeChild(root)
+        except Exception:
+            pass
 
     # -- selection observer (FreeCAD calls these) ------------------------------
 
     def addSelection(self, doc, obj, sub, pnt):
-        self._refreshFace()
+        self._syncFromSelection()
 
     def removeSelection(self, doc, obj, sub):
-        self._refreshFace()
+        self._syncFromSelection()
 
     def setSelection(self, doc):
-        self._refreshFace()
+        self._syncFromSelection()
 
     def clearSelection(self, doc):
-        self._refreshFace()
+        self._syncFromSelection()
 
     # -- actions ------------------------------------------------------------
 
     def _onTreeSelection(self):
         items = self.tree.selectedItems()
         # Picking a group header for equipment picks the kind of port the next "Add Port" makes.
-        if items and self.add_function is not None and items[0].parent() is None:
-            index = self.add_function.findData(items[0].data(1, QtCore.Qt.UserRole))
-            if index >= 0:
-                self.add_function.setCurrentIndex(index)
-        marker = self._selectedMarker()
+        if items and items[0].parent() is None:
+            if self.function_combo is not None and self._mode != self.MODE_EDIT:
+                index = self.function_combo.findData(items[0].data(1, QtCore.Qt.UserRole))
+                if index >= 0:
+                    self.function_combo.setCurrentIndex(index)
+            return
+        marker = self._treeMarker()
         if marker is not None:
+            # The selection observer then switches the Port box to this port.
             Gui.Selection.clearSelection()
             Gui.Selection.addSelection(self.doc.Name, marker.Name)
-        self._loadSelected()
 
     def _addPort(self):
         faces = selected_planar_faces()
@@ -2709,40 +3026,43 @@ class TaskPanelPortContainer:
                 body,
                 face_name,
                 container=self.container,
-                name=self.add_name.text().strip(),
-                offset_x=self.add_x.value(),
-                offset_y=self.add_y.value(),
+                name=self.name_edit.text().strip(),
+                offset_x=self.x_spin.value(),
+                offset_y=self.y_spin.value(),
             )
             if self.kind == "equipment":
-                self._equipment.ensure_equipment_port(marker, self.add_function.currentData())
+                self._equipment.ensure_equipment_port(marker, self.function_combo.currentData())
         except Exception as e:
             self.doc.abortTransaction()
             FreeCAD.Console.PrintWarning("HVAC - Add port on {}.{}: {}\n".format(body.Label, face_name, e))
             return
         self.doc.commitTransaction()
         self.doc.recompute()
-        self.add_name.clear()
         self._refresh(select_name=marker.Name)
+        Gui.Selection.clearSelection()
+        Gui.Selection.addSelection(self.doc.Name, marker.Name)
 
     def _applyEdit(self):
-        marker = self._selectedMarker()
+        marker = self._marker
         if marker is None:
             return
         self.doc.openTransaction("Edit HVAC Port")
         try:
-            marker.PortName = self.edit_name.text().strip()
-            if self.edit_function is not None:
-                self._equipment.ensure_equipment_port(marker, self.edit_function.currentData())
-            self._custom_fitting.set_port_offset(marker, self.edit_x.value(), self.edit_y.value())
+            marker.PortName = self.name_edit.text().strip()
+            if self.function_combo is not None:
+                self._equipment.ensure_equipment_port(marker, self.function_combo.currentData())
+            self._custom_fitting.set_port_offset(marker, self.x_spin.value(), self.y_spin.value())
         finally:
             self.doc.commitTransaction()
         self.doc.recompute()
         self._refresh(select_name=marker.Name)
+        self._setMode(self.MODE_EDIT, marker=marker)
 
     def _removePort(self):
-        marker = self._selectedMarker()
+        marker = self._marker
         if marker is None:
             return
+        Gui.Selection.clearSelection()
         self.doc.openTransaction("Remove HVAC Port")
         try:
             self._custom_fitting.remove_port(marker)
@@ -2750,6 +3070,7 @@ class TaskPanelPortContainer:
             self.doc.commitTransaction()
         self.doc.recompute()
         self._refresh()
+        self._setMode(self.MODE_NONE)
 
     def _setPressureDrop(self, value):
         if "InternalPressureDrop" in self.container.PropertiesList:
@@ -2757,7 +3078,7 @@ class TaskPanelPortContainer:
 
     def _useAtJunction(self):
         """Make the picked junction's Primary fitting take this container's geometry."""
-        junction = self.doc.getObject(self.junction_combo.currentData() or "")
+        junction = self._listedJunction()
         if junction is None:
             return
         primary = junction.Proxy.getPrimaryComponent()
@@ -2773,6 +3094,7 @@ class TaskPanelPortContainer:
         finally:
             self.doc.commitTransaction()
         self.doc.recompute()
+        self._refreshJunctions()
         FreeCAD.Console.PrintMessage(
             "HVAC - '{}' now uses custom fitting '{}'\n".format(junction.Label, self.container.Label)
         )
@@ -2787,6 +3109,7 @@ class TaskPanelPortContainer:
             Gui.Selection.removeObserver(self)
         except Exception:
             pass
+        self._clearHighlights()
 
     def accept(self):
         self._stop()

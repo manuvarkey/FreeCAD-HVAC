@@ -362,6 +362,30 @@ def fit_component(comp_obj, local_ports):
     return container, ports, result
 
 
+def fit_problem(container, primary):
+    """
+    Why `container` cannot be fitted onto the junction of Primary component
+    `primary` ("Fit to node"), or "" when it can: the same fit the component
+    would run, on the ports the junction has now. Works for any number of
+    ports, an end node (one duct) included.
+    """
+    try:
+        local_ports = json.loads(getattr(primary, "LocalPortsJson", "") or "[]")
+    except ValueError:
+        local_ports = []
+    if not local_ports:
+        return "the junction has no ports yet"
+    ports = read_ports(container)
+    if len(ports) != len(local_ports):
+        return "{} duct(s), the fitting has {} port(s)".format(len(local_ports), len(ports))
+    try:
+        node = HVACLibraryAPI.xyz(HVACLibraryAPI.vec(local_ports[0]["position"]))
+        fit_math.fit(ports, _duct_ends(local_ports), node)
+    except (fit_math.CustomFitError, KeyError, TypeError, ValueError) as e:
+        return str(e)
+    return ""
+
+
 def trim_records(local_ports, result):
     """connection_lengths records (edge_key, segment_end, length) from a fit."""
     return HVACLibraryAPI.build_trim_rec_from_port_lengths(

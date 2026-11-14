@@ -57,98 +57,41 @@ class HVAC(Gui.Workbench):
         
         self.watchers = []
 
-        self.toolbar_commands = ['HVAC_CreateDuctNetwork',
-                                'HVAC_ActivateDuctNetwork',
-                                'HVAC_ModifyDuctNetwork',
-                                'HVAC_EditNetworkTypeDefaults',
-                                'HVAC_LayerVisibility',
-                                'HVAC_CalculateAirflow',
-                                'HVAC_SizeDucts',
-                                "Separator",
-                                'HVAC_CreateSketch',
-                                'HVAC_CreateLine',
-                                'HVAC_CreateSpline',
-                                'HVAC_CreateVirtualJunction',
-                                "Separator",
-                                'HVAC_EditBaseObject',
-                                'HVAC_EditDuctDirections',
-                                # 'HVAC_ReverseGeometryDirection',
-                                "Separator",
-                                'HVAC_EditType',
-                                'HVAC_EditPlacement',
-                                'HVAC_EditInlineComponents',
-                                'HVAC_EditMaterial',
-                                'HVAC_ResetTypesToDefaults',
-                                'HVAC_CreateCustomFitting',
-                                'HVAC_CreateEquipment',
-                                'HVAC_ConnectEquipment',
-                                "Separator",
-                                'HVAC_RenumberNetwork',
-                                'HVAC_SelectAllSegments',
-                                'HVAC_SelectAllComponents'
-                                ]
-
-        self.submenu_commands = ['HVAC_CreateDuctNetwork',
-                                'HVAC_ActivateDuctNetwork',
-                                'HVAC_ModifyDuctNetwork',
-                                'HVAC_EditNetworkTypeDefaults',
-                                'HVAC_LayerVisibility',
-                                'HVAC_CalculateAirflow',
-                                'HVAC_SizeDucts',
-                                "Separator",
-                                'HVAC_CreateSketch',
-                                'HVAC_CreateLine',
-                                'HVAC_CreateSpline',
-                                'HVAC_CreateVirtualJunction',
-                                "Separator",
-                                'HVAC_EditBaseObject',
-                                'HVAC_EditDuctDirections',
-                                # 'HVAC_ReverseGeometryDirection',
-                                "Separator",
-                                'HVAC_EditType',
-                                'HVAC_EditPlacement',
-                                'HVAC_EditInlineComponents',
-                                'HVAC_EditMaterial',
-                                'HVAC_ResetTypesToDefaults',
-                                'HVAC_CreateCustomFitting',
-                                'HVAC_CreateEquipment',
-                                'HVAC_ConnectEquipment',
-                                "Separator",
-                                'HVAC_RenumberNetwork',
-                                'HVAC_SelectAllSegments',
-                                'HVAC_SelectAllComponents'
-                                ]
-
-        self.contextmenu_commands = ['HVAC_CreateDuctNetwork',
-                                'HVAC_ActivateDuctNetwork',
-                                'HVAC_ModifyDuctNetwork',
-                                'HVAC_EditNetworkTypeDefaults',
-                                'HVAC_LayerVisibility',
-                                'HVAC_CalculateAirflow',
-                                'HVAC_SizeDucts',
-                                "Separator",
-                                'HVAC_CreateSketch',
-                                'HVAC_CreateLine',
-                                'HVAC_CreateSpline',
-                                'HVAC_CreateVirtualJunction',
-                                "Separator",
-                                'HVAC_EditBaseObject',
-                                'HVAC_EditDuctDirections',
-                                # 'HVAC_ReverseGeometryDirection',
-                                "Separator",
-                                'HVAC_EditType',
-                                'HVAC_EditPlacement',
-                                'HVAC_EditInlineComponents',
-                                'HVAC_EditMaterial',
-                                'HVAC_ResetTypesToDefaults',
-                                'HVAC_CreateCustomFitting',
-                                'HVAC_CreateEquipment',
-                                'HVAC_ConnectEquipment',
-                                "Separator",
-                                'HVAC_RenumberNetwork',
-                                'HVAC_SelectAllSegments',
-                                'HVAC_SelectAllComponents'
-                                ]
+        # Groups: network (create, edit, defaults, renumber, analysis);
+        # routing; base geometry; component editing; display and selection.
+        commands = ['HVAC_CreateDuctNetwork',
+                    'HVAC_ActivateDuctNetwork',
+                    'HVAC_ModifyDuctNetwork',
+                    'HVAC_EditNetworkTypeDefaults',
+                    'HVAC_RenumberNetwork',
+                    'HVAC_CalculateAirflow',
+                    'HVAC_SizeDucts',
+                    "Separator",
+                    'HVAC_CreateSketch',
+                    'HVAC_CreateLine',
+                    'HVAC_CreateSpline',
+                    'HVAC_CreateVirtualJunction',
+                    "Separator",
+                    'HVAC_EditBaseObject',
+                    'HVAC_EditDuctDirections',
+                    # 'HVAC_ReverseGeometryDirection',
+                    "Separator",
+                    'HVAC_EditType',
+                    'HVAC_EditPlacement',
+                    'HVAC_EditInlineComponents',
+                    'HVAC_EditMaterial',
+                    'HVAC_ResetTypesToDefaults',
+                    'HVAC_CreateCustomFitting',
+                    'HVAC_CreateEquipment',
+                    'HVAC_ConnectEquipment',
+                    "Separator",
+                    'HVAC_LayerVisibility',
+                    'HVAC_SelectAllSegments',
+                    'HVAC_SelectAllComponents'
+                    ]
+        self.toolbar_commands = list(commands)
+        self.submenu_commands = list(commands)
+        self.contextmenu_commands = list(commands)
 
         self.appendMenu(QT_TRANSLATE_NOOP("Workbench", "HVAC"), self.submenu_commands)
         self.appendToolbar(QT_TRANSLATE_NOOP("Workbench", "HVAC"), self.toolbar_commands)
@@ -169,7 +112,19 @@ class HVAC(Gui.Workbench):
         FreeCAD.Console.PrintMessage(translate("InitGui","HVAC - Workbench loaded") + "\n")
         self.refreshWatchers()
         FreeCAD.Console.PrintMessage(translate("InitGui","HVAC - Workbench - Watchers set") + "\n")
+        # The Layer Visibility toolbar button drops down its switches; FreeCAD
+        # builds the toolbar buttons during activation, so attach afterwards.
+        from PySide import QtCore
+        QtCore.QTimer.singleShot(0, self.attachToolbarDropdowns)
         return
+
+    def attachToolbarDropdowns(self):
+        from .ui import Toolbar
+        from .ui.Command import populate_layer_visibility_menu
+        try:
+            Toolbar.attach_dropdown('HVAC_LayerVisibility', populate_layer_visibility_menu)
+        except Exception as e:
+            FreeCAD.Console.PrintWarning("HVAC - toolbar drop-down not attached: {}\n".format(e))
 
     def Deactivated(self):
         """This function is executed whenever the workbench is deactivated"""
@@ -240,10 +195,10 @@ class HVAC(Gui.Workbench):
                 super().__init__()
                 self.commands = ["HVAC_ModifyDuctNetwork",
                                 "HVAC_EditNetworkTypeDefaults",
-                                "HVAC_LayerVisibility",
+                                "HVAC_RenumberNetwork",
                                 "HVAC_CalculateAirflow",
                                 "HVAC_SizeDucts",
-                                "HVAC_RenumberNetwork",
+                                "HVAC_LayerVisibility",
                                 "HVAC_SelectAllSegments",
                                 "HVAC_SelectAllComponents"]
                 self.title = translate("HVAC", "Network")
@@ -286,12 +241,26 @@ class HVAC(Gui.Workbench):
                 return is_network_active() and is_object_selected()
                 
 
+        class HVACModelWatcher:
+            """Shows the equipment / custom fitting commands when a modelled part or solid is selected."""
+
+            def __init__(self):
+                self.commands = ['HVAC_CreateCustomFitting',
+                                 'HVAC_CreateEquipment',
+                                 'HVAC_ConnectEquipment']
+                self.title = translate("HVAC", "Equipment and Custom Fittings")
+
+            def shouldShow(self):
+                from .ui.Command import _selected_part
+                return FreeCAD.ActiveDocument is not None and _selected_part() is not None
+
         self.watchers = [
             HVACCreateWatcher(),
             HVACActivateWatcher(),
             HVACEditWatcher(),
             HVACRoutingWatcher(),
             HVACEditObjectWatcher(),
+            HVACModelWatcher(),
         ]
         Gui.Control.addTaskWatcher(self.watchers)
         

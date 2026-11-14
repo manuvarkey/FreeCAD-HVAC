@@ -1409,8 +1409,37 @@ class CommandReloadHVACLibraries:
         hvaclib.debug_print_loaded_libraries()
         
         
+def _is_hvac_object(obj):
+    """A network object or base geometry: never a model to turn into equipment or a custom fitting."""
+    checks = (
+        hvaclib.isDuctNetwork,
+        hvaclib.isDuctSegment,
+        hvaclib.isDuctJunction,
+        hvaclib.isDuctComponent,
+        hvaclib.isDuctJunctionVirtual,
+        hvaclib.isDuctManagedFolder,
+        hvaclib.isSketch,
+        hvaclib.isWire,
+    )
+    return any(check(obj) for check in checks)
+
+
+def _has_solid(obj):
+    shape = getattr(obj, "Shape", None)
+    try:
+        return shape is not None and not shape.isNull() and len(shape.Solids) > 0
+    except Exception:
+        return False
+
+
 def _selected_part():
-    """The first App::Part in the selection (picking a face inside it counts too)."""
+    """
+    The model the selection points at: the first App::Part in the selection
+    (picking a face or a body inside it counts too), else a selected solid
+    (a Part cube, a PartDesign body, ...) that sits in no App::Part, which
+    _container_for() wraps in a new App::Part on use. None when nothing
+    usable is selected.
+    """
     for sel in Gui.Selection.getSelectionEx("", 0) or []:
         obj = sel.Object
         if obj.TypeId == "App::Part":
@@ -1418,7 +1447,19 @@ def _selected_part():
         parent = obj.getParentGeoFeatureGroup() if hasattr(obj, "getParentGeoFeatureGroup") else None
         if parent is not None and parent.TypeId == "App::Part":
             return parent
+        if parent is None and not _is_hvac_object(obj) and _has_solid(obj):
+            return obj
     return None
+
+
+def _container_for(obj, name):
+    """`obj` itself when it is an App::Part, else a new App::Part (named `name`) that `obj` is moved into."""
+    if obj.TypeId == "App::Part":
+        return obj
+    part = obj.Document.addObject("App::Part", name)
+    part.Label = obj.Label + " " + name
+    part.addObject(obj)
+    return part
 
 
 class CommandCreateEquipment:
@@ -1430,7 +1471,7 @@ class CommandCreateEquipment:
             'MenuText': QT_TRANSLATE_NOOP('HVAC_CreateEquipment', 'Create / Edit Equipment'),
             'ToolTip': QT_TRANSLATE_NOOP(
                 'HVAC_CreateEquipment',
-                'Make the selected App::Part (a modelled AHU, fan, ...) an HVAC equipment, or edit one: a panel '
+                'Make the selected App::Part or solid (a modelled AHU, fan, ...) an HVAC equipment, or edit one: a panel '
                 'lists its ports by kind (supply, return, outdoor air, exhaust) and adds new ones on a picked face '
                 'at an X/Y offset from its centre. A duct drawn to end on a port is connected to it automatically',
             ),
@@ -1444,11 +1485,13 @@ class CommandCreateEquipment:
         from ..core import Equipment
         from ..ui.TaskPanel import TaskPanelPortContainer
 
-        part = _selected_part()
-        doc = part.Document
-        if not Equipment.is_equipment(part):
+        selected = _selected_part()
+        doc = selected.Document
+        part = selected
+        if selected.TypeId != "App::Part" or not Equipment.is_equipment(selected):
             doc.openTransaction("Create Equipment")
             try:
+                part = _container_for(selected, "Equipment")
                 Equipment.make_equipment(part)
             finally:
                 doc.commitTransaction()
@@ -1466,7 +1509,7 @@ class CommandCreateCustomFitting:
             'MenuText': QT_TRANSLATE_NOOP('HVAC_CreateCustomFitting', 'Create / Edit Custom Fitting'),
             'ToolTip': QT_TRANSLATE_NOOP(
                 'HVAC_CreateCustomFitting',
-                'Use the selected App::Part (a modelled fitting) as a custom junction fitting: a panel lists its '
+                'Use the selected App::Part or solid (a modelled fitting) as a custom junction fitting: a panel lists its '
                 'ports and adds new ones on a picked face at an X/Y offset from its centre. Ducts drawn to end on '
                 'its ports become one junction that uses the fitting where it is modelled',
             ),
@@ -1488,12 +1531,14 @@ class CommandCreateCustomFitting:
         from ..core import _custom_fitting
         from ..ui.TaskPanel import TaskPanelPortContainer
 
-        part = _selected_part()
-        doc = part.Document
-        # Mark the part, so ducts drawn to its ports attach to it.
-        if not _custom_fitting.is_custom_fitting(part):
+        selected = _selected_part()
+        doc = selected.Document
+        part = selected
+        # Mark the part, so ducts drawn to its ports attach to it (a bare solid is first put in an App::Part).
+        if selected.TypeId != "App::Part" or not _custom_fitting.is_custom_fitting(selected):
             doc.openTransaction("Create Custom Fitting")
             try:
+                part = _container_for(selected, "CustomFitting")
                 _custom_fitting.make_custom_fitting(part)
             finally:
                 doc.commitTransaction()
@@ -1567,12 +1612,16 @@ class CommandConnectEquipment:
 
 class CommandLayerVisibility:
     """
-    Toolbar dropdown for the active network's layer visibility (Stage 9):
-    one checkable entry per construction layer role and one for the
-    construction features, bound to the network's ShowLayer_<Role> /
-    ShowFeatures properties (display only, applied at once, no recompute --
-    the same switches as in the Network Type Defaults panel).
+    Layer visibility of the active network (Stage 9): the network's
+    ShowLayer_<Role> / ShowFeatures switches (display only, applied at once,
+    no recompute). Run from the menu, the context menu or the Tasks pane it
+    opens the Layer Visibility panel; its toolbar button is a drop-down with
+    the same switches (populate_layer_visibility_menu, attached by the
+    workbench through Toolbar.attach_dropdown).
     """
+
+    def __init__(self):
+        self.task_panel = None
 
     def GetResources(self):
         return {
@@ -1590,59 +1639,45 @@ class CommandLayerVisibility:
         net = hvaclib.activeHVACNetwork()
         return net is not None and net.Document == FreeCAD.ActiveDocument
 
-    @staticmethod
-    def _entries(net):
-        """[(property name, label), ...] for the visibility switches this network has."""
-        from ..library.construction import ALL_LAYER_ROLES, role_property_suffix
-
-        entries = []
-        for role in ALL_LAYER_ROLES:
-            prop_name = "ShowLayer_" + role_property_suffix(role)
-            if prop_name in net.PropertiesList:
-                entries.append((prop_name, role.replace("_", " ").capitalize()))
-        if "ShowFeatures" in net.PropertiesList:
-            entries.append(("ShowFeatures", translate("HVAC_LayerVisibility", "Construction features (flanges, ...)")))
-        return entries
-
     def Activated(self):
+        from ..ui.TaskPanel import TaskPanelLayerVisibility
+
         net = hvaclib.activeHVACNetwork()
         if net is None:
             return
-        entries = self._entries(net)
-        if not entries:
-            FreeCAD.Console.PrintWarning("HVAC - Layer Visibility: '{}' has no visibility switches\n".format(net.Label))
-            return
+        self.task_panel = TaskPanelLayerVisibility(net)
+        Gui.Control.showDialog(self.task_panel)
 
-        # Step 1: one checkbox per switch, ticked as the network has it now.
-        # Checkboxes inside the menu (QWidgetAction) keep it open, so several
-        # layers can be switched in one go.
-        menu = QtWidgets.QMenu(Gui.getMainWindow())
-        checks = {}
-        for prop_name, label in entries:
-            check = QtWidgets.QCheckBox(label)
-            check.setChecked(bool(getattr(net, prop_name, True)))
-            check.toggled.connect(lambda checked, prop_name=prop_name: self._set(net, prop_name, checked))
-            holder = QtWidgets.QWidget()
-            row = QtWidgets.QHBoxLayout(holder)
-            row.setContentsMargins(8, 3, 8, 3)
-            row.addWidget(check)
-            action = QtWidgets.QWidgetAction(menu)
-            action.setDefaultWidget(holder)
-            menu.addAction(action)
-            checks[prop_name] = check
 
-        # Step 2: show everything again in one click (ticking each box sets its property).
-        menu.addSeparator()
-        show_all = menu.addAction(translate("HVAC_LayerVisibility", "Show All"))
-        show_all.triggered.connect(lambda: [check.setChecked(True) for check in checks.values()])
+def populate_layer_visibility_menu(menu):
+    """
+    Fill the Layer Visibility toolbar drop-down for the active network: one
+    checkbox per switch, then "Show All". Checkboxes inside the menu
+    (QWidgetAction) keep it open, so several layers can be switched in one go.
+    """
+    from ..ui.TaskPanel import layer_visibility_entries, set_layer_visibility
 
-        # Step 3: drop the menu down under the cursor (the toolbar button).
-        menu.exec_(QtGui.QCursor.pos())
-
-    @staticmethod
-    def _set(net, prop_name, value):
-        if bool(getattr(net, prop_name, True)) != bool(value):
-            setattr(net, prop_name, bool(value))
+    net = hvaclib.activeHVACNetwork()
+    entries = layer_visibility_entries(net) if net is not None else []
+    if not entries:
+        menu.addAction(translate("HVAC_LayerVisibility", "No active network")).setEnabled(False)
+        return
+    checks = []
+    for prop_name, label in entries:
+        check = QtWidgets.QCheckBox(label)
+        check.setChecked(bool(getattr(net, prop_name, True)))
+        check.toggled.connect(lambda checked, prop_name=prop_name: set_layer_visibility(net, prop_name, checked))
+        holder = QtWidgets.QWidget()
+        row = QtWidgets.QHBoxLayout(holder)
+        row.setContentsMargins(8, 3, 8, 3)
+        row.addWidget(check)
+        action = QtWidgets.QWidgetAction(menu)
+        action.setDefaultWidget(holder)
+        menu.addAction(action)
+        checks.append(check)
+    menu.addSeparator()
+    show_all = menu.addAction(translate("HVAC_LayerVisibility", "Show All"))
+    show_all.triggered.connect(lambda: [check.setChecked(True) for check in checks])
 
 
 #=================================================
